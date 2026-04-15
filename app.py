@@ -315,7 +315,7 @@ def get_team_hitters(team_id: int):
         return hitters
     except Exception:
         return []
-
+    
 
 @st.cache_data(ttl=1800)
 def fetch_people_stats(person_ids_tuple: tuple, group: str):
@@ -633,6 +633,12 @@ def build_hitter_metrics(
     elif ground_ball >= 45:
         gb_status = "HEAVY DOWNGRADE"
 
+    elite_override = (
+        barrel >= 14 or
+        hard_hit >= 48 or
+        fly_ball >= 38
+    )
+
     weak_recent_profile = (
         recent_hr == 0 and
         recent_xbh <= 1 and
@@ -647,80 +653,120 @@ def build_hitter_metrics(
         (barrel < 5 and hard_hit < 28 and recent_hr == 0)
     )
 
-    compensator_count = sum([
-        barrel >= 12,
-        hard_hit >= 45,
-        fly_ball >= 35,
-        line_drive >= 24,
-        pitch_hr9 >= 1.5,
-        recent_hr >= 2,
-        park_factor >= 1.05
-    ])
+    pitcher_attackable = (
+        pitch_hr9 >= 1.3 or
+        pitch_barrel_allowed >= 8 or
+        pitch_hard_hit_allowed >= 40
+    )
+
+    hr_contact_pass = (
+        (
+            barrel >= 10 and hard_hit >= 40 and fly_ball >= 30
+        ) or (
+            barrel >= 12 and fly_ball >= 28
+        ) or (
+            hard_hit >= 45 and fly_ball >= 35
+        ) or elite_override
+    )
+
+    recent_form_pass = (
+        recent_hr >= 1 or
+        recent_xbh >= 2 or
+        recent_iso >= 0.180
+    )
+
+    lineup_pass = (
+        lineup_source == "CONFIRMED" or
+        (lineup_source == "PROJECTED" and recent_hr >= 1 and recent_xbh >= 3)
+    )
 
     hr_eligible = True
-    if ground_ball >= 50:
-        hr_eligible = False
-    elif ground_ball >= 45 and compensator_count == 0:
+
+    if lineup_source == "PROJECTED" and lineup_spot is None and not (recent_hr >= 1 and recent_xbh >= 3):
         hr_eligible = False
     elif recent_pa < 8:
+        hr_eligible = False
+    elif ground_ball >= 50 and not elite_override:
+        hr_eligible = False
+    elif ground_ball >= 45 and not elite_override and not pitcher_attackable:
         hr_eligible = False
     elif weak_recent_profile:
         hr_eligible = False
     elif awful_hr_shape:
         hr_eligible = False
-    elif lineup_source == "PROJECTED" and lineup_spot is None and recent_hr == 0 and recent_xbh < 3:
+    elif not hr_contact_pass:
+        hr_eligible = False
+    elif not recent_form_pass and not elite_override:
+        hr_eligible = False
+    elif not lineup_pass:
         hr_eligible = False
 
     base_score = (
-        (ev - 87) * 1.9 +
-        (hard_hit - 28) * 1.6 +
-        (fly_ball - 22) * 1.5 +
-        (line_drive - 14) * 0.8 +
-        (barrel - 4) * 2.4 +
-        (pitch_hr9 - 0.7) * 17 +
-        (pitch_barrel_allowed - 4) * 0.9 +
-        (pitch_hard_hit_allowed - 30) * 0.5 +
+        (ev - 87) * 1.8 +
+        (hard_hit - 28) * 1.9 +
+        (fly_ball - 22) * 1.8 +
+        (line_drive - 14) * 0.6 +
+        (barrel - 4) * 3.0 +
+        (pitch_hr9 - 0.7) * 14 +
+        (pitch_barrel_allowed - 4) * 0.8 +
+        (pitch_hard_hit_allowed - 30) * 0.4 +
         pullside_boost +
         park_boost +
-        (recent_hr * 2.5) +
-        (recent_xbh * 0.8) +
-        (recent_iso * 25)
+        (recent_hr * 2.8) +
+        (recent_xbh * 1.1) +
+        (recent_iso * 28)
     )
 
     if lineup_spot is not None:
         if lineup_spot <= 4:
-            base_score += 3
+            base_score += 3.5
         elif lineup_spot <= 6:
             base_score += 1.5
+        elif lineup_spot >= 7:
+            base_score -= 1.0
 
     if ground_ball < 40:
-        base_score += 6
+        base_score += 5
     elif 45 <= ground_ball < 50:
-        base_score -= 8
+        base_score -= 10
     elif ground_ball >= 50:
-        base_score -= 22
+        base_score -= 24
 
-    if fly_ball >= 30:
-        base_score += 4
+    if fly_ball >= 35:
+        base_score += 5
+    elif fly_ball >= 30:
+        base_score += 2
     elif fly_ball < 25:
-        base_score -= 4
+        base_score -= 6
+
+    if barrel >= 14:
+        base_score += 5
+    elif barrel < 8:
+        base_score -= 5
+
+    if hard_hit >= 45:
+        base_score += 4
+    elif hard_hit < 35:
+        base_score -= 5
 
     if weak_recent_profile:
-        base_score -= 10
-    if awful_hr_shape:
         base_score -= 12
+    if awful_hr_shape:
+        base_score -= 14
+    if not pitcher_attackable:
+        base_score -= 4
     if lineup_source == "PROJECTED" and lineup_spot is None:
-        base_score -= 5
+        base_score -= 6
 
     if not hr_eligible:
         hr_prob = 0.0
     else:
-        hr_prob = max(3.0, min(28.0, base_score / 5.0))
+        hr_prob = max(3.0, min(28.0, base_score / 5.4))
 
     hrr_score = (
         (ev - 87) * 1.2 +
         (hard_hit - 28) * 1.0 +
-        (line_drive - 14) * 0.9 +
+        (line_drive - 14) * 1.0 +
         (pitch_hard_hit_allowed - 30) * 0.4 +
         park_boost +
         (recent_runs * 0.7) +
@@ -747,8 +793,6 @@ def build_hitter_metrics(
         reasons.append("Fly-ball target")
     elif fly_ball < 25:
         reasons.append("Low fly-ball downgrade")
-    if line_drive >= 24:
-        reasons.append("Strong line-drive rate")
     if barrel >= 12:
         reasons.append("Strong barrel proxy")
     if pitch_hr9 >= 1.5:
@@ -781,9 +825,13 @@ def build_hitter_metrics(
         "Barrel%": round(barrel, 1),
         "Pitcher": opp_pitcher,
         "Pitcher_HR9_Last7": round(pitch_hr9, 2),
+        "Pitcher_Barrel_Allowed": round(pitch_barrel_allowed, 1),
+        "Pitcher_HardHit_Allowed": round(pitch_hard_hit_allowed, 1),
         "Pitch_Isolation_Valid": "No",
         "GB Rule": gb_status,
         "HR Eligible": hr_eligible,
+        "HR Contact Pass": "Yes" if hr_contact_pass else "No",
+        "Pitcher Attackable": "Yes" if pitcher_attackable else "No",
         "HR Probability %": round(hr_prob, 1),
         "HRR Score": round(hrr_score, 1),
         "Why": " | ".join(reasons[:6])
@@ -791,11 +839,11 @@ def build_hitter_metrics(
 
 
 def classify_hr_tier(prob: float) -> str:
-    if prob >= 18:
+    if prob >= 20:
         return "CORE TARGET"
-    if prob >= 13:
+    if prob >= 14:
         return "STRONG LOOK"
-    if prob >= 8:
+    if prob >= 9:
         return "SLEEPER"
     return "DEEP"
 
@@ -926,7 +974,7 @@ def get_team_game_view(df: pd.DataFrame, game_key: str, team: str):
     hr_pool = team_df[team_df["HR Eligible"]].copy()
     hr_pool = sort_for_hr(hr_pool)
 
-    selected = hr_pool.head(5)
+    selected = hr_pool.head(4)
 
     hrr = team_df.sort_values(
         by=["HRR Score", "LineDrive%", "HardHit%", "GroundBall%"],
@@ -937,13 +985,6 @@ def get_team_game_view(df: pd.DataFrame, game_key: str, team: str):
 
 
 def build_visible_tracker_pool(df: pd.DataFrame, schedule: list[dict]) -> pd.DataFrame:
-    """
-    Only track hitters BF Data actually surfaced to the user:
-    1) HR Probability Board
-    2) Top 12
-    3) Per-game Best HR hitters
-    This prevents hidden internal candidates from counting as 'correct HR'.
-    """
     visible_frames = []
 
     hr_board = sort_for_hr(df[df["HR Eligible"]].copy())
@@ -1127,8 +1168,9 @@ with tabs[0]:
     st.dataframe(
         hr_df[[
             "Rank", "Player", "Team", "Game", "Pitcher", "Lineup Spot",
-            "Lineup Source", "HR Probability %", "HR Tier", "GroundBall%",
-            "HardHit%", "FlyBall%", "LineDrive%", "Barrel%", "Why"
+            "Lineup Source", "HR Contact Pass", "Pitcher Attackable",
+            "HR Probability %", "HR Tier", "GroundBall%", "HardHit%",
+            "FlyBall%", "LineDrive%", "Barrel%", "Why"
         ]],
         use_container_width=True,
         hide_index=True
@@ -1140,9 +1182,10 @@ with tabs[1]:
     top12.insert(0, "Rank", range(1, len(top12) + 1))
     st.dataframe(
         top12[[
-            "Rank", "Player", "Team", "Game", "Pitcher",
-            "Lineup Spot", "Lineup Source", "HR Probability %", "HR Tier",
-            "GroundBall%", "HardHit%", "FlyBall%", "LineDrive%", "Barrel%", "Why"
+            "Rank", "Player", "Team", "Game", "Pitcher", "Lineup Spot",
+            "Lineup Source", "HR Contact Pass", "Pitcher Attackable",
+            "HR Probability %", "HR Tier", "GroundBall%",
+            "HardHit%", "FlyBall%", "LineDrive%", "Barrel%", "Why"
         ]],
         use_container_width=True,
         hide_index=True
@@ -1172,8 +1215,9 @@ with tabs[3]:
         breakdown[[
             "Player", "Team", "Game", "Pitcher", "Lineup Spot", "Lineup Source",
             "EV", "HardHit%", "FlyBall%", "LineDrive%", "GroundBall%", "Barrel%",
-            "Pitcher_HR9_Last7", "Pitch_Isolation_Valid", "GB Rule", "HR Eligible",
-            "HR Probability %", "HRR Score", "Why"
+            "Pitcher_HR9_Last7", "Pitcher_Barrel_Allowed", "Pitcher_HardHit_Allowed",
+            "Pitch_Isolation_Valid", "GB Rule", "HR Contact Pass", "Pitcher Attackable",
+            "HR Eligible", "HR Probability %", "HRR Score", "Why"
         ]],
         use_container_width=True,
         hide_index=True
@@ -1247,8 +1291,9 @@ for idx, game in enumerate(schedule, start=5):
                 st.markdown("**Best HR hitters**")
                 st.dataframe(
                     team_hr[[
-                        "Player", "Lineup Spot", "Lineup Source", "HR Probability %",
-                        "HR Tier", "GroundBall%", "HardHit%", "FlyBall%",
+                        "Player", "Lineup Spot", "Lineup Source", "HR Contact Pass",
+                        "Pitcher Attackable", "HR Probability %", "HR Tier",
+                        "GroundBall%", "HardHit%", "FlyBall%",
                         "LineDrive%", "Barrel%", "Why"
                     ]],
                     use_container_width=True,
@@ -1273,8 +1318,9 @@ for idx, game in enumerate(schedule, start=5):
                 st.markdown("**Best HR hitters**")
                 st.dataframe(
                     team_hr[[
-                        "Player", "Lineup Spot", "Lineup Source", "HR Probability %",
-                        "HR Tier", "GroundBall%", "HardHit%", "FlyBall%",
+                        "Player", "Lineup Spot", "Lineup Source", "HR Contact Pass",
+                        "Pitcher Attackable", "HR Probability %", "HR Tier",
+                        "GroundBall%", "HardHit%", "FlyBall%",
                         "LineDrive%", "Barrel%", "Why"
                     ]],
                     use_container_width=True,
