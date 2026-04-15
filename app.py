@@ -1541,4 +1541,9 @@ for idx, game in enumerate(schedule, start=5):
             st.markdown("**Best Hits + Runs + RBIs**")
             st.dataframe(
                 team_hrr[[
-                    "Player", "Lineup Spot", "Lineup Source", "HRR 
+                    "Player", "Lineup Spot", "Lineup Source", "HRR Score",
+                    "GroundBall%", "LineDrive%", "Why"
+                ]].head(5),
+                use_container_width=True,
+                hide_index=True
+            )
