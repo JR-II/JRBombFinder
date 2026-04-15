@@ -56,28 +56,6 @@ PARK_FACTORS = {
 }
 
 
-def load_tracker():
-    if os.path.exists(TRACKER_FILE):
-        try:
-            return pd.read_csv(TRACKER_FILE)
-        except Exception:
-            pass
-    return pd.DataFrame(columns=["date", "player", "team", "game", "result"])
-
-
-def save_tracker(df: pd.DataFrame):
-    df.to_csv(TRACKER_FILE, index=False)
-
-
-def tracker_summary(df: pd.DataFrame):
-    if df.empty:
-        return 0, 0, 0.0
-    total = len(df)
-    hits = int(df["result"].fillna(0).astype(int).sum())
-    pct = round((hits / total) * 100, 2) if total else 0.0
-    return total, hits, pct
-
-
 def stable_float(key: str, low: float, high: float) -> float:
     digest = hashlib.md5(key.encode("utf-8")).hexdigest()
     value = int(digest[:8], 16) / 0xFFFFFFFF
@@ -86,6 +64,65 @@ def stable_float(key: str, low: float, high: float) -> float:
 
 def team_abbr(name: str) -> str:
     return TEAM_ABBR.get(name, name[:3].upper())
+
+
+def today_str() -> str:
+    return datetime.now().strftime("%Y-%m-%d")
+
+
+def load_tracker() -> pd.DataFrame:
+    columns = [
+        "date", "player", "team", "game", "game_pk",
+        "hr_probability", "hr_tier", "hr_eligible",
+        "result", "result_state", "game_state", "updated_at"
+    ]
+    if os.path.exists(TRACKER_FILE):
+        try:
+            df = pd.read_csv(TRACKER_FILE)
+            for col in columns:
+                if col not in df.columns:
+                    df[col] = pd.NA
+            return df[columns]
+        except Exception:
+            pass
+    return pd.DataFrame(columns=columns)
+
+
+def save_tracker(df: pd.DataFrame):
+    df.to_csv(TRACKER_FILE, index=False)
+
+
+def summarize_tracker(df: pd.DataFrame):
+    if df.empty:
+        return {
+            "today_total": 0,
+            "today_hits": 0,
+            "today_pct": 0.0,
+            "all_total": 0,
+            "all_hits": 0,
+            "all_pct": 0.0,
+        }
+
+    df = df.copy()
+    df["result_num"] = pd.to_numeric(df["result"], errors="coerce").fillna(0).astype(int)
+
+    today_df = df[df["date"].astype(str) == today_str()]
+    today_total = len(today_df)
+    today_hits = int(today_df["result_num"].sum())
+    today_pct = round((today_hits / today_total) * 100, 2) if today_total else 0.0
+
+    all_total = len(df)
+    all_hits = int(df["result_num"].sum())
+    all_pct = round((all_hits / all_total) * 100, 2) if all_total else 0.0
+
+    return {
+        "today_total": today_total,
+        "today_hits": today_hits,
+        "today_pct": today_pct,
+        "all_total": all_total,
+        "all_hits": all_hits,
+        "all_pct": all_pct,
+    }
 
 
 def get_lineup_mode(schedule_rows: list[dict]) -> str:
@@ -111,10 +148,9 @@ def get_lineup_mode(schedule_rows: list[dict]) -> str:
 
 @st.cache_data(ttl=300)
 def fetch_schedule_payload():
-    today = datetime.now().strftime("%Y-%m-%d")
     url = (
         "https://statsapi.mlb.com/api/v1/schedule"
-        f"?sportId=1&date={today}&hydrate=probablePitcher"
+        f"?sportId=1&date={today_str()}&hydrate=probablePitcher"
     )
     resp = requests.get(url, timeout=20)
     resp.raise_for_status()
@@ -123,10 +159,6 @@ def fetch_schedule_payload():
 
 @st.cache_data(ttl=300)
 def get_team_probable_pitcher(team_id: int):
-    """
-    Fallback lookup. Sometimes schedule omits probablePitcher early,
-    so this checks the team hydrate endpoint.
-    """
     url = f"https://statsapi.mlb.com/api/v1/teams/{team_id}?hydrate=probablePitcher"
     try:
         resp = requests.get(url, timeout=20)
@@ -178,6 +210,10 @@ def get_today_schedule():
             away_confirmed = 9 if offense.get("battingOrder") else int(stable_float(f"{away_id}-confirm", 0, 5))
             home_confirmed = 9 if offense.get("battingOrder") else int(stable_float(f"{home_id}-confirm", 0, 5))
 
+            status = game.get("status", {})
+            game_state = status.get("abstractGameState", "Preview")
+            detailed_state = status.get("detailedState", "Scheduled")
+
             games.append({
                 "game_pk": game["gamePk"],
                 "game_key": f"{team_abbr(away)} @ {team_abbr(home)}",
@@ -193,6 +229,8 @@ def get_today_schedule():
                 "game_time": game.get("gameDate", ""),
                 "away_confirmed_count": away_confirmed,
                 "home_confirmed_count": home_confirmed,
+                "game_state": game_state,
+                "detailed_state": detailed_state,
             })
 
     return games
@@ -410,6 +448,10 @@ def build_daily_dataset():
 
         for hitter in away_hitters:
             rows.append({
+                "date": today_str(),
+                "game_pk": game["game_pk"],
+                "game_state": game["game_state"],
+                "detailed_state": game["detailed_state"],
                 "Game": game["game_key"],
                 "Side": "Away",
                 **build_hitter_metrics(
@@ -423,6 +465,10 @@ def build_daily_dataset():
 
         for hitter in home_hitters:
             rows.append({
+                "date": today_str(),
+                "game_pk": game["game_pk"],
+                "game_state": game["game_state"],
+                "detailed_state": game["detailed_state"],
                 "Game": game["game_key"],
                 "Side": "Home",
                 **build_hitter_metrics(
@@ -466,6 +512,113 @@ def get_team_game_view(df: pd.DataFrame, game_key: str, team: str):
     return selected, hrr
 
 
+@st.cache_data(ttl=120)
+def get_boxscore_homers(game_pk: int):
+    url = f"https://statsapi.mlb.com/api/v1/game/{game_pk}/boxscore"
+    try:
+        resp = requests.get(url, timeout=20)
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception:
+        return {}
+
+    homer_map = {}
+
+    for side in ["away", "home"]:
+        team_data = data.get("teams", {}).get(side, {})
+        players = team_data.get("players", {})
+        for _, player_data in players.items():
+            person = player_data.get("person", {})
+            full_name = person.get("fullName")
+            batting = player_data.get("stats", {}).get("batting", {})
+            hr_count = batting.get("homeRuns", 0)
+            if full_name:
+                homer_map[full_name] = int(hr_count)
+
+    return homer_map
+
+
+def sync_tracker_with_board(df: pd.DataFrame):
+    tracker = load_tracker()
+    date_key = today_str()
+
+    existing_today = tracker[tracker["date"].astype(str) == date_key].copy()
+    existing_map = {
+        (row["player"], row["team"], row["game"]): row
+        for _, row in existing_today.iterrows()
+    }
+
+    snapshot_rows = []
+    for _, row in df.iterrows():
+        key = (row["Player"], row["Team"], row["Game"])
+        existing = existing_map.get(key, {})
+
+        snapshot_rows.append({
+            "date": date_key,
+            "player": row["Player"],
+            "team": row["Team"],
+            "game": row["Game"],
+            "game_pk": row["game_pk"],
+            "hr_probability": row["HR Probability %"],
+            "hr_tier": row["HR Tier"],
+            "hr_eligible": int(bool(row["HR Eligible"])),
+            "result": existing.get("result", pd.NA),
+            "result_state": existing.get("result_state", "PENDING"),
+            "game_state": row["game_state"],
+            "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        })
+
+    keep_old = tracker[tracker["date"].astype(str) != date_key].copy()
+    merged = pd.concat([keep_old, pd.DataFrame(snapshot_rows)], ignore_index=True)
+    save_tracker(merged)
+    return merged
+
+
+def auto_update_tracker_results(tracker: pd.DataFrame, schedule: list[dict]):
+    if tracker.empty:
+        return tracker
+
+    tracker = tracker.copy()
+    date_key = today_str()
+    today_mask = tracker["date"].astype(str) == date_key
+
+    for game in schedule:
+        game_pk = game["game_pk"]
+        game_state = game.get("game_state", "Preview")
+        detailed_state = game.get("detailed_state", "Scheduled")
+
+        rows_mask = today_mask & (tracker["game_pk"] == game_pk)
+        if not rows_mask.any():
+            continue
+
+        if game_state == "Preview":
+            tracker.loc[rows_mask, "result_state"] = "PREGAME"
+            tracker.loc[rows_mask, "game_state"] = detailed_state
+            continue
+
+        homer_map = get_boxscore_homers(game_pk)
+
+        for idx in tracker.index[rows_mask]:
+            player = tracker.at[idx, "player"]
+            hr_count = int(homer_map.get(player, 0))
+
+            if hr_count > 0:
+                tracker.at[idx, "result"] = 1
+                tracker.at[idx, "result_state"] = "HOMERED"
+            else:
+                if game_state == "Final":
+                    tracker.at[idx, "result"] = 0
+                    tracker.at[idx, "result_state"] = "FINAL_NO_HR"
+                else:
+                    tracker.at[idx, "result_state"] = "LIVE"
+
+            tracker.at[idx, "game_state"] = detailed_state
+            tracker.at[idx, "updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    save_tracker(tracker)
+    return tracker
+
+
 c1, c2, c3, c4 = st.columns([1, 1, 1, 2])
 with c1:
     if st.button("Update Board", use_container_width=True):
@@ -474,6 +627,11 @@ with c1:
 
 df, schedule = build_daily_dataset()
 lineup_mode = get_lineup_mode(schedule) if schedule else "PROJECTED"
+
+# Auto-sync tracker to everything on the app/software, then auto-update HR results
+tracker = sync_tracker_with_board(df)
+tracker = auto_update_tracker_results(tracker, schedule)
+summary = summarize_tracker(tracker)
 
 with c2:
     st.metric("Games On Slate", len(schedule))
@@ -551,70 +709,46 @@ with tabs[3]:
 
 with tabs[4]:
     st.subheader("Accuracy Tracker")
-
-    tracker = load_tracker()
-    total, hits, pct = tracker_summary(tracker)
+    st.caption("This now auto-tracks every hitter on the app/software and updates homer results automatically as games progress/finalize.")
 
     a1, a2, a3 = st.columns(3)
-    a1.metric("Tracked Picks", total)
-    a2.metric("Correct HR", hits)
-    a3.metric("Hit Rate %", pct)
+    a1.metric("Today's Listed Hitters", summary["today_total"])
+    a2.metric("Today's Correct HR", summary["today_hits"])
+    a3.metric("Today's Hit Rate %", summary["today_pct"])
+
+    b1, b2, b3 = st.columns(3)
+    b1.metric("All-Time Listed Hitters", summary["all_total"])
+    b2.metric("All-Time Correct HR", summary["all_hits"])
+    b3.metric("All-Time Hit Rate %", summary["all_pct"])
 
     st.divider()
-    st.caption("Check which Top 12 HR picks actually homered after the slate is over.")
 
-    today_top12 = sort_for_hr(df[df["HR Eligible"]].copy()).head(12)
+    today_tracker = tracker[tracker["date"].astype(str) == today_str()].copy()
+    if not today_tracker.empty:
+        st.caption("Today's tracked hitters")
+        st.dataframe(
+            today_tracker.sort_values(
+                by=["hr_probability", "player"],
+                ascending=[False, True]
+            )[[
+                "player", "team", "game", "hr_probability", "hr_tier",
+                "hr_eligible", "result", "result_state", "game_state", "updated_at"
+            ]],
+            use_container_width=True,
+            hide_index=True
+        )
 
-    if today_top12.empty:
-        st.info("No Top 12 picks available yet.")
-    else:
-        saved_today = set()
-        if not tracker.empty:
-            today_str = str(datetime.today().date())
-            saved_today = set(
-                tracker.loc[tracker["date"].astype(str) == today_str, "player"].tolist()
-            )
-
-        results = []
-
-        for _, row in today_top12.iterrows():
-            checked_default = row["Player"] in saved_today
-            result = st.checkbox(
-                f"{row['Player']} ({row['Team']}) — {row['Game']}",
-                value=checked_default,
-                key=f"tracker_{row['Player']}_{row['Team']}"
-            )
-
-            results.append({
-                "date": str(datetime.today().date()),
-                "player": row["Player"],
-                "team": row["Team"],
-                "game": row["Game"],
-                "result": int(result),
-            })
-
-        if st.button("Save HR Results", key="save_hr_results_button"):
-            tracker_no_today = tracker.copy()
-            if not tracker_no_today.empty:
-                tracker_no_today = tracker_no_today[
-                    tracker_no_today["date"].astype(str) != str(datetime.today().date())
-                ]
-
-            new_rows = pd.DataFrame(results)
-            updated_tracker = pd.concat([tracker_no_today, new_rows], ignore_index=True)
-
-            save_tracker(updated_tracker)
-            st.success("HR tracker updated successfully ✅")
-            st.rerun()
-
-        if not tracker.empty:
-            st.divider()
-            st.caption("Saved tracker history")
-            st.dataframe(
-                tracker.sort_values(["date", "player"], ascending=[False, True]),
-                use_container_width=True,
-                hide_index=True
-            )
+    if not tracker.empty:
+        st.divider()
+        st.caption("Full tracker history")
+        st.dataframe(
+            tracker.sort_values(
+                by=["date", "hr_probability", "player"],
+                ascending=[False, False, True]
+            ),
+            use_container_width=True,
+            hide_index=True
+        )
 
 for idx, game in enumerate(schedule, start=5):
     with tabs[idx]:
