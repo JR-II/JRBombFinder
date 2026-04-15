@@ -510,12 +510,6 @@ def extract_boxscore_team_hitters(game_pk: int, side: str):
 
 
 def get_team_candidate_hitters(game_pk: int, team_id: int, side: str):
-    """
-    V2 logic:
-    1) confirmed lineup if available
-    2) otherwise strict projected pool only
-    3) no fake projected lineup spots assigned for display
-    """
     boxscore_hitters = extract_boxscore_team_hitters(game_pk, side)
 
     confirmed = [h for h in boxscore_hitters if h["confirmed"]]
@@ -544,7 +538,6 @@ def get_team_candidate_hitters(game_pk: int, team_id: int, side: str):
         if metrics is None:
             continue
 
-        # strict projected gate so fake names stop floating up
         strong_projected_candidate = (
             metrics["recent_pa"] >= 12 and
             metrics["season_games"] >= 3 and
@@ -579,7 +572,6 @@ def get_team_candidate_hitters(game_pk: int, team_id: int, side: str):
 
     scored = sorted(scored, key=lambda x: x["lineup_likelihood"], reverse=True)[:7]
 
-    # do NOT assign fake lineup spots in projected mode
     for hitter in scored:
         hitter["lineup_spot"] = None
 
@@ -630,7 +622,6 @@ def build_hitter_metrics(
         pitch_barrel_allowed = live_pitcher["Pitcher_Barrel_Allowed"]
         pitch_hard_hit_allowed = live_pitcher["Pitcher_HardHit_Allowed"]
 
-    # until true pitch-mix source is integrated, never fake isolate boost
     isolate = False
     weather_boost = 0.0
     pullside_boost = stable_float(f"{player_id}-pull", -1, 3)
@@ -844,7 +835,6 @@ def build_daily_dataset():
         candidate_map[(game["game_pk"], "away")] = (away_candidates, away_source)
         candidate_map[(game["game_pk"], "home")] = (home_candidates, home_source)
 
-        # update confirmed count from confirmed candidates if applicable
         if away_source == "CONFIRMED":
             game["away_confirmed_count"] = min(9, len(away_candidates))
         if home_source == "CONFIRMED":
@@ -936,7 +926,6 @@ def get_team_game_view(df: pd.DataFrame, game_key: str, team: str):
     hr_pool = team_df[team_df["HR Eligible"]].copy()
     hr_pool = sort_for_hr(hr_pool)
 
-    # stricter per-team output
     selected = hr_pool.head(5)
 
     hrr = team_df.sort_values(
@@ -945,6 +934,54 @@ def get_team_game_view(df: pd.DataFrame, game_key: str, team: str):
     ).head(5)
 
     return selected, hrr
+
+
+def build_visible_tracker_pool(df: pd.DataFrame, schedule: list[dict]) -> pd.DataFrame:
+    """
+    Only track hitters BF Data actually surfaced to the user:
+    1) HR Probability Board
+    2) Top 12
+    3) Per-game Best HR hitters
+    This prevents hidden internal candidates from counting as 'correct HR'.
+    """
+    visible_frames = []
+
+    hr_board = sort_for_hr(df[df["HR Eligible"]].copy())
+    if not hr_board.empty:
+        hr_board["Tracker Source"] = "HR_BOARD"
+        visible_frames.append(hr_board)
+
+    top12 = hr_board.head(12).copy()
+    if not top12.empty:
+        top12["Tracker Source"] = "TOP12"
+        visible_frames.append(top12)
+
+    for game in schedule:
+        gdf = df[df["Game"] == game["game_key"]].copy()
+        if gdf.empty:
+            continue
+
+        away_team = team_abbr(game["away_team"])
+        home_team = team_abbr(game["home_team"])
+
+        away_hr, _ = get_team_game_view(gdf, game["game_key"], away_team)
+        if not away_hr.empty:
+            away_hr = away_hr.copy()
+            away_hr["Tracker Source"] = "GAME_HR"
+            visible_frames.append(away_hr)
+
+        home_hr, _ = get_team_game_view(gdf, game["game_key"], home_team)
+        if not home_hr.empty:
+            home_hr = home_hr.copy()
+            home_hr["Tracker Source"] = "GAME_HR"
+            visible_frames.append(home_hr)
+
+    if not visible_frames:
+        return pd.DataFrame(columns=df.columns.tolist() + ["Tracker Source"])
+
+    visible_df = pd.concat(visible_frames, ignore_index=True)
+    visible_df = visible_df.drop_duplicates(subset=["Player", "Team", "Game"]).reset_index(drop=True)
+    return visible_df
 
 
 @st.cache_data(ttl=120)
@@ -973,7 +1010,7 @@ def get_boxscore_homers(game_pk: int):
     return homer_map
 
 
-def sync_tracker_with_board(df: pd.DataFrame):
+def sync_tracker_with_board(tracked_df: pd.DataFrame):
     tracker = load_tracker()
     date_key = today_str()
 
@@ -984,7 +1021,7 @@ def sync_tracker_with_board(df: pd.DataFrame):
     }
 
     snapshot_rows = []
-    for _, row in df.iterrows():
+    for _, row in tracked_df.iterrows():
         key = (row["Player"], row["Team"], row["Game"])
         existing = existing_map.get(key, {})
 
@@ -1063,7 +1100,8 @@ with c1:
 df, schedule = build_daily_dataset()
 lineup_mode = get_lineup_mode(schedule) if schedule else "PROJECTED"
 
-tracker = sync_tracker_with_board(df)
+tracked_df = build_visible_tracker_pool(df, schedule)
+tracker = sync_tracker_with_board(tracked_df)
 tracker = auto_update_tracker_results(tracker, schedule)
 summary = summarize_tracker(tracker)
 
@@ -1102,9 +1140,9 @@ with tabs[1]:
     top12.insert(0, "Rank", range(1, len(top12) + 1))
     st.dataframe(
         top12[[
-            "Rank", "Player", "Team", "Game", "Pitcher", "Lineup Spot",
-            "Lineup Source", "HR Probability %", "HR Tier", "GroundBall%",
-            "HardHit%", "FlyBall%", "LineDrive%", "Barrel%", "Why"
+            "Rank", "Player", "Team", "Game", "Pitcher",
+            "Lineup Spot", "Lineup Source", "HR Probability %", "HR Tier",
+            "GroundBall%", "HardHit%", "FlyBall%", "LineDrive%", "Barrel%", "Why"
         ]],
         use_container_width=True,
         hide_index=True
@@ -1143,15 +1181,15 @@ with tabs[3]:
 
 with tabs[4]:
     st.subheader("Accuracy Tracker")
-    st.caption("Auto-tracks every hitter listed by BF Data and updates HR results as games progress/finalize.")
+    st.caption("Only tracks hitters BF Data actually surfaced on the visible HR boards.")
 
     a1, a2, a3 = st.columns(3)
-    a1.metric("Today's Listed Hitters", summary["today_total"])
+    a1.metric("Today's Surfaced HR Picks", summary["today_total"])
     a2.metric("Today's Correct HR", summary["today_hits"])
     a3.metric("Today's Hit Rate %", summary["today_pct"])
 
     b1, b2, b3 = st.columns(3)
-    b1.metric("All-Time Listed Hitters", summary["all_total"])
+    b1.metric("All-Time Surfaced HR Picks", summary["all_total"])
     b2.metric("All-Time Correct HR", summary["all_hits"])
     b3.metric("All-Time Hit Rate %", summary["all_pct"])
 
@@ -1159,7 +1197,7 @@ with tabs[4]:
 
     today_tracker = tracker[tracker["date"].astype(str) == today_str()].copy()
     if not today_tracker.empty:
-        st.caption("Today's tracked hitters")
+        st.caption("Today's tracked surfaced picks")
         st.dataframe(
             today_tracker.sort_values(
                 by=["hr_probability", "player"],
