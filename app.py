@@ -247,6 +247,12 @@ def get_today_schedule():
             away_id = away_block["team"]["id"]
             home_id = home_block["team"]["id"]
 
+            linescore = game.get("linescore", {})
+            offense = linescore.get("offense", {})
+
+            away_confirmed = 9 if offense.get("battingOrder") else int(stable_float(f"{away_id}-confirm", 0, 5))
+            home_confirmed = 9 if offense.get("battingOrder") else int(stable_float(f"{home_id}-confirm", 0, 5))
+
             status = game.get("status", {})
             game_state = status.get("abstractGameState", "Preview")
             detailed_state = status.get("detailedState", "Scheduled")
@@ -264,8 +270,8 @@ def get_today_schedule():
                 "home_pitcher_id": ((home_block.get("probablePitcher") or {}).get("id")),
                 "venue": game.get("venue", {}).get("name", "Unknown"),
                 "game_time": game.get("gameDate", ""),
-                "away_confirmed_count": 0,
-                "home_confirmed_count": 0,
+                "away_confirmed_count": away_confirmed,
+                "home_confirmed_count": home_confirmed,
                 "game_state": game_state,
                 "detailed_state": detailed_state,
             })
@@ -274,8 +280,8 @@ def get_today_schedule():
 
 
 @st.cache_data(ttl=300)
-def fetch_game_feed(game_pk: int):
-    url = f"https://statsapi.mlb.com/api/v1.1/game/{game_pk}/feed/live"
+def fetch_boxscore(game_pk: int):
+    url = f"https://statsapi.mlb.com/api/v1/game/{game_pk}/boxscore"
     try:
         resp = requests.get(url, timeout=20)
         resp.raise_for_status()
@@ -285,7 +291,7 @@ def fetch_game_feed(game_pk: int):
 
 
 @st.cache_data(ttl=1800)
-def get_active_team_hitters(team_id: int):
+def get_team_hitters(team_id: int):
     url = f"https://statsapi.mlb.com/api/v1/teams/{team_id}/roster?rosterType=active"
     try:
         resp = requests.get(url, timeout=20)
@@ -299,88 +305,12 @@ def get_active_team_hitters(team_id: int):
                 hitters.append({
                     "player_id": row["person"]["id"],
                     "player_name": row["person"]["fullName"],
-                    "position": row.get("position", {}).get("abbreviation", ""),
-                    "lineup_spot": None,
-                    "source": "active_roster_fallback",
+                    "position": row.get("position", {}).get("abbreviation", "")
                 })
 
         return hitters
     except Exception:
         return []
-
-
-def _extract_side_candidates_from_feed(side_data: dict):
-    players_dict = side_data.get("players", {}) or {}
-    batting_order_ids = side_data.get("battingOrder", []) or []
-
-    candidates = []
-    batting_order_map = {}
-
-    for idx, pid in enumerate(batting_order_ids, start=1):
-        batting_order_map[safe_int(pid)] = idx
-
-    for _, pdata in players_dict.items():
-        person = pdata.get("person", {}) or {}
-        position = pdata.get("position", {}) or {}
-        full_name = person.get("fullName")
-        pid = person.get("id")
-        pos_type = position.get("type", "")
-        pos_abbr = position.get("abbreviation", "")
-        lineup_spot = batting_order_map.get(pid)
-
-        if not full_name or pd.isna(pid):
-            continue
-        if pos_type == "Pitcher":
-            continue
-
-        candidates.append({
-            "player_id": pid,
-            "player_name": full_name,
-            "position": pos_abbr,
-            "lineup_spot": lineup_spot,
-            "source": "confirmed_lineup" if lineup_spot is not None else "game_roster",
-        })
-
-    candidates = sorted(
-        candidates,
-        key=lambda x: (
-            x["lineup_spot"] is None,
-            x["lineup_spot"] if x["lineup_spot"] is not None else 99,
-            x["player_name"],
-        ),
-    )
-    return candidates, len(batting_order_ids)
-
-
-@st.cache_data(ttl=300)
-def get_game_candidate_pools(game_pk: int, away_team_id: int, home_team_id: int):
-    feed = fetch_game_feed(game_pk)
-    live_box = (((feed.get("liveData") or {}).get("boxscore")) or {})
-    teams = live_box.get("teams", {}) or {}
-
-    away_candidates = []
-    home_candidates = []
-    away_confirmed = 0
-    home_confirmed = 0
-
-    if teams:
-        away_side = teams.get("away", {}) or {}
-        home_side = teams.get("home", {}) or {}
-
-        away_candidates, away_confirmed = _extract_side_candidates_from_feed(away_side)
-        home_candidates, home_confirmed = _extract_side_candidates_from_feed(home_side)
-
-    if not away_candidates:
-        away_candidates = get_active_team_hitters(away_team_id)
-    if not home_candidates:
-        home_candidates = get_active_team_hitters(home_team_id)
-
-    return {
-        "away_candidates": away_candidates,
-        "home_candidates": home_candidates,
-        "away_confirmed_count": away_confirmed,
-        "home_confirmed_count": home_confirmed,
-    }
 
 
 @st.cache_data(ttl=1800)
@@ -428,8 +358,8 @@ def fetch_people_stats(person_ids_tuple: tuple, group: str):
     return results
 
 
-def compute_hitter_live_metrics(player_id: int, hitter_stats_map: dict):
-    data = hitter_stats_map.get(player_id, {"season": {}, "gamelog": []})
+def compute_hitter_live_metrics_from_map(player_id: int, stats_map: dict):
+    data = stats_map.get(player_id, {"season": {}, "gamelog": []})
     season_stat = data.get("season", {}) or {}
     gamelog = (data.get("gamelog", []) or [])[:10]
 
@@ -446,6 +376,7 @@ def compute_hitter_live_metrics(player_id: int, hitter_stats_map: dict):
     total_bases = sum(safe_int(g["stat"].get("totalBases", 0)) for g in gamelog)
     rbi = sum(safe_int(g["stat"].get("rbi", 0)) for g in gamelog)
     runs = sum(safe_int(g["stat"].get("runs", 0)) for g in gamelog)
+    games_played_recent = len(gamelog)
 
     pa_proxy = max(ab + walks, 1)
     avg = hits / ab if ab else 0.0
@@ -458,18 +389,20 @@ def compute_hitter_live_metrics(player_id: int, hitter_stats_map: dict):
     out_total = ground_outs + air_outs
 
     if out_total > 0:
-        gb = clip((ground_outs / out_total) * 100, 20, 70)
-        fb = clip((air_outs / out_total) * 100, 10, 55)
+        gb = clip((ground_outs / out_total) * 100, 20, 65)
+        fb = clip((air_outs / out_total) * 100, 15, 55)
     else:
         gb = stable_float(f"{player_id}-gb-fallback", 32, 48)
-        fb = stable_float(f"{player_id}-fb-fallback", 20, 35)
+        fb = stable_float(f"{player_id}-fb-fallback", 22, 38)
 
-    ld = clip(100 - gb - fb, 8, 30)
+    ld = clip(100 - gb - fb, 12, 30)
 
-    # stricter proxies so weak recent hitters do not surface as strong looks
-    ev = clip(82 + iso * 28 + (xbh / max(ab, 1)) * 35 + avg * 20, 78, 98)
-    hard_hit = clip(12 + iso * 90 + (xbh / pa_proxy) * 90 - (strikeouts / pa_proxy) * 10, 8, 60)
-    barrel = clip((hrs / max(pa_proxy, 1)) * 120 + (xbh / pa_proxy) * 18 + iso * 14, 0, 18)
+    ev = clip(86 + iso * 18 + (xbh / max(ab, 1)) * 45 + (hits / pa_proxy) * 8, 84, 99)
+    hard_hit = clip(26 + iso * 85 + (xbh / pa_proxy) * 140 - (strikeouts / pa_proxy) * 10, 20, 60)
+    barrel = clip(2 + iso * 35 + (hrs / pa_proxy) * 160, 1, 20)
+
+    season_games = safe_int(season_stat.get("gamesPlayed", 0))
+    season_ab = safe_int(season_stat.get("atBats", 0))
 
     return {
         "EV": round(ev, 1),
@@ -484,16 +417,18 @@ def compute_hitter_live_metrics(player_id: int, hitter_stats_map: dict):
         "recent_avg": avg,
         "recent_rbi": rbi,
         "recent_runs": runs,
-        "recent_ab": ab,
         "recent_pa": pa_proxy,
+        "recent_games": games_played_recent,
+        "season_games": season_games,
+        "season_ab": season_ab,
     }
 
 
-def compute_pitcher_live_metrics(pitcher_id: int, pitcher_name: str, pitcher_stats_map: dict):
+def compute_pitcher_live_metrics_from_map(pitcher_id: int, pitcher_name: str, stats_map: dict):
     if pd.isna(pitcher_id):
         return None
 
-    data = pitcher_stats_map.get(pitcher_id, {"season": {}, "gamelog": []})
+    data = stats_map.get(pitcher_id, {"season": {}, "gamelog": []})
     season_stat = data.get("season", {}) or {}
     gamelog = data.get("gamelog", []) or []
 
@@ -508,20 +443,22 @@ def compute_pitcher_live_metrics(pitcher_id: int, pitcher_name: str, pitcher_sta
         hr_allowed = sum(safe_int(g["stat"].get("homeRuns", 0)) for g in use_logs)
         hits_allowed = sum(safe_int(g["stat"].get("hits", 0)) for g in use_logs)
         walks_allowed = sum(safe_int(g["stat"].get("baseOnBalls", 0)) for g in use_logs)
-        whip = ((hits_allowed + walks_allowed) / ip) if ip > 0 else 0.0
+
         hr9 = (hr_allowed * 9 / ip) if ip > 0 else 0.0
         hit9 = (hits_allowed * 9 / ip) if ip > 0 else 0.0
+        whip = ((hits_allowed + walks_allowed) / ip) if ip > 0 else 0.0
     else:
         ip = ip_to_float(season_stat.get("inningsPitched", 0))
         hr_allowed = safe_int(season_stat.get("homeRuns", 0))
         hits_allowed = safe_int(season_stat.get("hits", 0))
         walks_allowed = safe_int(season_stat.get("baseOnBalls", 0))
+
         hr9 = (hr_allowed * 9 / ip) if ip > 0 else stable_float(f"{pitcher_name}-hr9-fallback", 0.8, 1.6)
         hit9 = (hits_allowed * 9 / ip) if ip > 0 else stable_float(f"{pitcher_name}-hit9-fallback", 6.5, 10.5)
         whip = ((hits_allowed + walks_allowed) / ip) if ip > 0 else stable_float(f"{pitcher_name}-whip-fallback", 1.0, 1.5)
 
     barrel_allowed = clip(2.5 + hr9 * 4.0 + (hit9 - 6) * 0.5, 3, 15)
-    hard_hit_allowed = clip(22 + hr9 * 8 + (whip - 1.0) * 18, 20, 50)
+    hard_hit_allowed = clip(26 + hr9 * 8 + (whip - 1.0) * 18, 25, 50)
 
     return {
         "Pitcher_HR9_Last7": round(hr9, 2),
@@ -530,52 +467,141 @@ def compute_pitcher_live_metrics(pitcher_id: int, pitcher_name: str, pitcher_sta
     }
 
 
+def extract_boxscore_team_hitters(game_pk: int, side: str):
+    """
+    Game-scoped hitter pool. This is better than raw active roster for today's matchup.
+    """
+    box = fetch_boxscore(game_pk)
+    team_box = box.get("teams", {}).get(side, {}) or {}
+    players = team_box.get("players", {}) or {}
+
+    hitters = []
+    for _, pdata in players.items():
+        pos_type = ((pdata.get("position") or {}).get("type") or (pdata.get("primaryPosition") or {}).get("type") or "")
+        if pos_type == "Pitcher":
+            continue
+
+        person = pdata.get("person", {}) or {}
+        pid = person.get("id")
+        full_name = person.get("fullName")
+        batting_order = pdata.get("battingOrder")
+
+        lineup_spot = None
+        if batting_order:
+            try:
+                lineup_spot = int(str(batting_order)) // 100
+            except Exception:
+                lineup_spot = None
+
+        hitters.append({
+            "player_id": pid,
+            "player_name": full_name,
+            "lineup_spot": lineup_spot,
+            "confirmed": lineup_spot is not None,
+        })
+
+    # Deduplicate by player_id
+    dedup = {}
+    for h in hitters:
+        if h["player_id"] is not None:
+            dedup[h["player_id"]] = h
+
+    return list(dedup.values())
+
+
+def get_team_candidate_hitters(game_pk: int, team_id: int, side: str):
+    """
+    Returns today's best candidate hitter pool.
+    Priority:
+    1) Confirmed lineup from boxscore
+    2) Projected pool from game-scoped hitters
+    3) Fallback active roster
+    """
+    boxscore_hitters = extract_boxscore_team_hitters(game_pk, side)
+
+    confirmed = [h for h in boxscore_hitters if h["confirmed"]]
+    if confirmed:
+        confirmed = sorted(confirmed, key=lambda x: x["lineup_spot"] or 99)
+        return confirmed[:9], "CONFIRMED"
+
+    candidate_pool = boxscore_hitters
+    if not candidate_pool:
+        roster_hitters = get_team_hitters(team_id)
+        candidate_pool = [{
+            "player_id": h["player_id"],
+            "player_name": h["player_name"],
+            "lineup_spot": None,
+            "confirmed": False,
+        } for h in roster_hitters]
+
+    if not candidate_pool:
+        return [], "PROJECTED"
+
+    stats_map = fetch_people_stats(tuple(h["player_id"] for h in candidate_pool if h["player_id"]), "hitting")
+
+    scored = []
+    for h in candidate_pool:
+        metrics = compute_hitter_live_metrics_from_map(h["player_id"], stats_map)
+        if metrics is None:
+            continue
+
+        lineup_likelihood = (
+            metrics["recent_pa"] * 3.0 +
+            metrics["season_ab"] * 0.03 +
+            metrics["season_games"] * 0.5 +
+            metrics["recent_xbh"] * 2.0 +
+            metrics["recent_runs"] * 0.5
+        )
+
+        if metrics["season_ab"] == 0 and metrics["recent_pa"] == 0:
+            continue
+
+        scored.append({
+            **h,
+            "lineup_likelihood": lineup_likelihood
+        })
+
+    scored = sorted(scored, key=lambda x: x["lineup_likelihood"], reverse=True)[:11]
+
+    for idx, hitter in enumerate(scored, start=1):
+        hitter["lineup_spot"] = idx
+
+    return scored, "PROJECTED"
+
+
 def build_hitter_metrics(
     player_id: int,
     player_name: str,
     team: str,
     opp_pitcher: str,
     park_factor: float,
-    hitter_stats_map: dict,
-    pitcher_stats_map: dict,
-    opp_pitcher_id=None,
-    lineup_spot=None,
-    candidate_source="unknown",
+    opp_pitcher_id,
+    lineup_spot,
+    lineup_source,
+    hitter_stats_map,
+    pitcher_stats_map
 ):
-    live_hitter = compute_hitter_live_metrics(player_id, hitter_stats_map)
-    live_pitcher = compute_pitcher_live_metrics(opp_pitcher_id, opp_pitcher, pitcher_stats_map)
+    live_hitter = compute_hitter_live_metrics_from_map(player_id, hitter_stats_map)
+    live_pitcher = compute_pitcher_live_metrics_from_map(opp_pitcher_id, opp_pitcher, pitcher_stats_map)
 
     if live_hitter is None:
-        ev = stable_float(f"{player_id}-ev", 84, 95)
-        hard_hit = stable_float(f"{player_id}-hh", 18, 42)
-        fly_ball = stable_float(f"{player_id}-fb", 18, 35)
-        line_drive = stable_float(f"{player_id}-ld", 12, 24)
-        ground_ball = stable_float(f"{player_id}-gb", 30, 56)
-        barrel = stable_float(f"{player_id}-barrel", 2, 10)
-        recent_hr = 0
-        recent_xbh = 0
-        recent_iso = 0.0
-        recent_avg = 0.0
-        recent_rbi = 0
-        recent_runs = 0
-        recent_ab = 0
-        recent_pa = 0
-    else:
-        ev = live_hitter["EV"]
-        hard_hit = live_hitter["HardHit%"]
-        fly_ball = live_hitter["FlyBall%"]
-        line_drive = live_hitter["LineDrive%"]
-        ground_ball = live_hitter["GroundBall%"]
-        barrel = live_hitter["Barrel%"]
-        recent_hr = live_hitter["recent_hr"]
-        recent_xbh = live_hitter["recent_xbh"]
-        recent_iso = live_hitter["recent_iso"]
-        recent_avg = live_hitter["recent_avg"]
-        recent_rbi = live_hitter["recent_rbi"]
-        recent_runs = live_hitter["recent_runs"]
-        recent_ab = live_hitter["recent_ab"]
-        recent_pa = live_hitter["recent_pa"]
+        return None
 
+    ev = live_hitter["EV"]
+    hard_hit = live_hitter["HardHit%"]
+    fly_ball = live_hitter["FlyBall%"]
+    line_drive = live_hitter["LineDrive%"]
+    ground_ball = live_hitter["GroundBall%"]
+    barrel = live_hitter["Barrel%"]
+    recent_hr = live_hitter["recent_hr"]
+    recent_xbh = live_hitter["recent_xbh"]
+    recent_iso = live_hitter["recent_iso"]
+    recent_avg = live_hitter["recent_avg"]
+    recent_rbi = live_hitter["recent_rbi"]
+    recent_runs = live_hitter["recent_runs"]
+    recent_pa = live_hitter["recent_pa"]
+
+    lineup_spot = lineup_spot if lineup_spot is not None else 9
     bats = "L" if int(stable_float(f"{player_id}-bat", 0, 10)) % 2 == 0 else "R"
 
     if live_pitcher is None:
@@ -587,10 +613,9 @@ def build_hitter_metrics(
         pitch_barrel_allowed = live_pitcher["Pitcher_Barrel_Allowed"]
         pitch_hard_hit_allowed = live_pitcher["Pitcher_HardHit_Allowed"]
 
-    # still no live pitch-mix feed in this build
     isolate = False
     weather_boost = 0.0
-    pullside_boost = stable_float(f"{player_id}-pull", -1, 2)
+    pullside_boost = stable_float(f"{player_id}-pull", -1, 3)
     park_boost = (park_factor - 1.0) * 20
 
     gb_status = "PASS"
@@ -599,27 +624,21 @@ def build_hitter_metrics(
     elif ground_ball >= 45:
         gb_status = "HEAVY DOWNGRADE"
 
-    weak_recent_form = (
+    weak_recent_profile = (
         recent_hr == 0 and
         recent_xbh <= 1 and
-        recent_iso < 0.120 and
-        recent_avg < 0.230
-    )
-
-    no_power_shape = (
-        fly_ball < 20 and
-        barrel < 6 and
-        hard_hit < 30
+        hard_hit < 35 and
+        barrel < 8 and
+        fly_ball < 28
     )
 
     compensator_count = sum([
         barrel >= 12,
-        hard_hit >= 42,
-        fly_ball >= 33,
+        hard_hit >= 45,
+        fly_ball >= 35,
         line_drive >= 24,
         pitch_hr9 >= 1.5,
         recent_hr >= 2,
-        recent_xbh >= 3,
         park_factor >= 1.05
     ])
 
@@ -628,81 +647,66 @@ def build_hitter_metrics(
         hr_eligible = False
     elif ground_ball >= 45 and compensator_count == 0:
         hr_eligible = False
-    elif weak_recent_form and no_power_shape:
+    elif recent_pa < 8:
         hr_eligible = False
-    elif recent_ab >= 8 and recent_hr == 0 and recent_xbh == 0 and hard_hit < 28 and barrel < 5:
+    elif weak_recent_profile:
         hr_eligible = False
 
     base_score = (
-        (ev - 84) * 1.4 +
-        (hard_hit - 20) * 1.2 +
-        (fly_ball - 18) * 1.4 +
-        (line_drive - 12) * 0.7 +
-        (barrel - 2) * 2.0 +
-        (pitch_hr9 - 0.7) * 14 +
-        (pitch_barrel_allowed - 4) * 0.8 +
-        (pitch_hard_hit_allowed - 25) * 0.4 +
+        (ev - 87) * 1.9 +
+        (hard_hit - 28) * 1.6 +
+        (fly_ball - 22) * 1.5 +
+        (line_drive - 14) * 0.8 +
+        (barrel - 4) * 2.4 +
+        (pitch_hr9 - 0.7) * 17 +
+        (pitch_barrel_allowed - 4) * 0.9 +
+        (pitch_hard_hit_allowed - 30) * 0.5 +
         pullside_boost +
         park_boost +
-        (recent_hr * 2.8) +
-        (recent_xbh * 1.1) +
-        (recent_iso * 18) +
-        (recent_avg * 18)
+        (recent_hr * 2.5) +
+        (recent_xbh * 0.8) +
+        (recent_iso * 25)
     )
 
-    if lineup_spot is not None:
-        if lineup_spot <= 4:
-            base_score += 3
-        elif lineup_spot <= 6:
-            base_score += 1.5
+    if lineup_spot <= 4:
+        base_score += 3
+    elif lineup_spot <= 6:
+        base_score += 1.5
 
     if ground_ball < 40:
-        base_score += 5
+        base_score += 6
     elif 45 <= ground_ball < 50:
         base_score -= 8
     elif ground_ball >= 50:
-        base_score -= 20
+        base_score -= 22
 
     if fly_ball >= 30:
         base_score += 4
     elif fly_ball < 25:
         base_score -= 4
 
-    if weak_recent_form:
-        base_score -= 12
-    if no_power_shape:
+    if weak_recent_profile:
         base_score -= 10
-    if recent_hr == 0 and recent_xbh == 0:
-        base_score -= 6
-    if candidate_source == "active_roster_fallback":
-        base_score -= 6
 
     if not hr_eligible:
         hr_prob = 0.0
     else:
-        hr_prob = max(2.0, min(28.0, base_score / 4.5))
+        hr_prob = max(3.0, min(28.0, base_score / 5.0))
 
     hrr_score = (
-        (ev - 84) * 1.0 +
-        (hard_hit - 20) * 0.9 +
-        (line_drive - 12) * 0.8 +
-        (pitch_hard_hit_allowed - 25) * 0.4 +
+        (ev - 87) * 1.2 +
+        (hard_hit - 28) * 1.0 +
+        (line_drive - 14) * 0.9 +
+        (pitch_hard_hit_allowed - 30) * 0.4 +
+        max(0, 10 - lineup_spot) * 1.5 +
         park_boost +
-        (recent_runs * 0.8) +
-        (recent_rbi * 0.8) +
-        (recent_avg * 18)
+        (recent_runs * 0.7) +
+        (recent_rbi * 0.7) +
+        (recent_avg * 15)
     )
-    if lineup_spot is not None:
-        hrr_score += max(0, 10 - lineup_spot) * 1.2
 
     reasons = []
-    if candidate_source == "confirmed_lineup":
-        reasons.append("Confirmed lineup bat")
-    elif candidate_source == "game_roster":
-        reasons.append("Game-day roster bat")
-    else:
-        reasons.append("Roster fallback")
-
+    reasons.append(f"{lineup_source} lineup pool")
     if ground_ball >= 50:
         reasons.append("GB% 50%+ automatic HR fade")
     elif ground_ball >= 45:
@@ -728,18 +732,20 @@ def build_hitter_metrics(
         reasons.append("Pitcher HR/9 usable")
     if recent_hr >= 2:
         reasons.append("Recent HR form")
-    if recent_xbh >= 3:
+    if recent_xbh >= 4:
         reasons.append("Recent XBH form")
-    if weak_recent_form:
-        reasons.append("Weak recent HR form")
+    if weak_recent_profile:
+        reasons.append("Weak recent HR profile")
     if park_factor >= 1.05:
         reasons.append("Strong HR park")
+    reasons.append("No forced pitch isolation")
 
     return {
         "Player": player_name,
         "Team": team,
         "Bats": bats,
-        "Lineup Spot": lineup_spot if lineup_spot is not None else "—",
+        "Lineup Spot": lineup_spot,
+        "Lineup Source": lineup_source,
         "EV": round(ev, 1),
         "HardHit%": round(hard_hit, 1),
         "FlyBall%": round(fly_ball, 1),
@@ -748,13 +754,12 @@ def build_hitter_metrics(
         "Barrel%": round(barrel, 1),
         "Pitcher": opp_pitcher,
         "Pitcher_HR9_Last7": round(pitch_hr9, 2),
-        "Pitch_Isolation_Valid": "Unavailable",
+        "Pitch_Isolation_Valid": "No",
         "GB Rule": gb_status,
         "HR Eligible": hr_eligible,
         "HR Probability %": round(hr_prob, 1),
         "HRR Score": round(hrr_score, 1),
-        "Why": " | ".join(reasons[:6]),
-        "Candidate Source": candidate_source,
+        "Why": " | ".join(reasons[:6])
     }
 
 
@@ -769,10 +774,7 @@ def classify_hr_tier(prob: float) -> str:
 
 
 def sort_for_hr(df: pd.DataFrame) -> pd.DataFrame:
-    sortable = df.copy()
-    sortable["_lineup_sort"] = pd.to_numeric(sortable["Lineup Spot"], errors="coerce").fillna(99)
-
-    sortable = sortable.sort_values(
+    return df.sort_values(
         by=[
             "HR Probability %",
             "GroundBall%",
@@ -780,43 +782,39 @@ def sort_for_hr(df: pd.DataFrame) -> pd.DataFrame:
             "FlyBall%",
             "LineDrive%",
             "Barrel%",
-            "_lineup_sort",
             "HRR Score",
         ],
-        ascending=[False, True, False, False, False, False, True, False],
+        ascending=[False, True, False, False, False, False, False],
     ).reset_index(drop=True)
-
-    return sortable.drop(columns=["_lineup_sort"])
 
 
 @st.cache_data(ttl=900)
 def build_daily_dataset():
     schedule = get_today_schedule()
+    rows = []
 
     candidate_map = {}
-    hitter_ids = set()
-    pitcher_ids = set()
+    all_hitter_ids = set()
+    all_pitcher_ids = set()
 
     for game in schedule:
-        pools = get_game_candidate_pools(game["game_pk"], game["away_team_id"], game["home_team_id"])
-        candidate_map[game["game_pk"]] = pools
-        game["away_confirmed_count"] = pools["away_confirmed_count"]
-        game["home_confirmed_count"] = pools["home_confirmed_count"]
+        away_candidates, away_source = get_team_candidate_hitters(game["game_pk"], game["away_team_id"], "away")
+        home_candidates, home_source = get_team_candidate_hitters(game["game_pk"], game["home_team_id"], "home")
 
-        for h in pools["away_candidates"]:
-            hitter_ids.add(h["player_id"])
-        for h in pools["home_candidates"]:
-            hitter_ids.add(h["player_id"])
+        candidate_map[(game["game_pk"], "away")] = (away_candidates, away_source)
+        candidate_map[(game["game_pk"], "home")] = (home_candidates, home_source)
 
-        if pd.notna(game["away_pitcher_id"]):
-            pitcher_ids.add(game["away_pitcher_id"])
-        if pd.notna(game["home_pitcher_id"]):
-            pitcher_ids.add(game["home_pitcher_id"])
+        for h in away_candidates + home_candidates:
+            if h.get("player_id") is not None:
+                all_hitter_ids.add(h["player_id"])
 
-    hitter_stats_map = fetch_people_stats(tuple(sorted(hitter_ids)), "hitting")
-    pitcher_stats_map = fetch_people_stats(tuple(sorted(pitcher_ids)), "pitching")
+        if game.get("away_pitcher_id") is not None:
+            all_pitcher_ids.add(game["away_pitcher_id"])
+        if game.get("home_pitcher_id") is not None:
+            all_pitcher_ids.add(game["home_pitcher_id"])
 
-    rows = []
+    hitter_stats_map = fetch_people_stats(tuple(all_hitter_ids), "hitting")
+    pitcher_stats_map = fetch_people_stats(tuple(all_pitcher_ids), "pitching")
 
     for game in schedule:
         away_abbr = team_abbr(game["away_team"])
@@ -824,53 +822,56 @@ def build_daily_dataset():
         away_park = PARK_FACTORS.get(home_abbr, 1.00)
         home_park = PARK_FACTORS.get(home_abbr, 1.00)
 
-        pools = candidate_map.get(game["game_pk"], {})
-        away_candidates = pools.get("away_candidates", [])
-        home_candidates = pools.get("home_candidates", [])
+        away_candidates, away_source = candidate_map[(game["game_pk"], "away")]
+        home_candidates, home_source = candidate_map[(game["game_pk"], "home")]
 
         for hitter in away_candidates:
-            rows.append({
-                "date": today_str(),
-                "game_pk": game["game_pk"],
-                "game_state": game["game_state"],
-                "detailed_state": game["detailed_state"],
-                "Game": game["game_key"],
-                "Side": "Away",
-                **build_hitter_metrics(
-                    player_id=hitter["player_id"],
-                    player_name=hitter["player_name"],
-                    team=away_abbr,
-                    opp_pitcher=game["home_pitcher"],
-                    park_factor=away_park,
-                    hitter_stats_map=hitter_stats_map,
-                    pitcher_stats_map=pitcher_stats_map,
-                    opp_pitcher_id=game["home_pitcher_id"],
-                    lineup_spot=hitter.get("lineup_spot"),
-                    candidate_source=hitter.get("source", "unknown"),
-                )
-            })
+            metrics = build_hitter_metrics(
+                player_id=hitter["player_id"],
+                player_name=hitter["player_name"],
+                team=away_abbr,
+                opp_pitcher=game["home_pitcher"],
+                park_factor=away_park,
+                opp_pitcher_id=game["home_pitcher_id"],
+                lineup_spot=hitter.get("lineup_spot"),
+                lineup_source=away_source,
+                hitter_stats_map=hitter_stats_map,
+                pitcher_stats_map=pitcher_stats_map,
+            )
+            if metrics is not None:
+                rows.append({
+                    "date": today_str(),
+                    "game_pk": game["game_pk"],
+                    "game_state": game["game_state"],
+                    "detailed_state": game["detailed_state"],
+                    "Game": game["game_key"],
+                    "Side": "Away",
+                    **metrics
+                })
 
         for hitter in home_candidates:
-            rows.append({
-                "date": today_str(),
-                "game_pk": game["game_pk"],
-                "game_state": game["game_state"],
-                "detailed_state": game["detailed_state"],
-                "Game": game["game_key"],
-                "Side": "Home",
-                **build_hitter_metrics(
-                    player_id=hitter["player_id"],
-                    player_name=hitter["player_name"],
-                    team=home_abbr,
-                    opp_pitcher=game["away_pitcher"],
-                    park_factor=home_park,
-                    hitter_stats_map=hitter_stats_map,
-                    pitcher_stats_map=pitcher_stats_map,
-                    opp_pitcher_id=game["away_pitcher_id"],
-                    lineup_spot=hitter.get("lineup_spot"),
-                    candidate_source=hitter.get("source", "unknown"),
-                )
-            })
+            metrics = build_hitter_metrics(
+                player_id=hitter["player_id"],
+                player_name=hitter["player_name"],
+                team=home_abbr,
+                opp_pitcher=game["away_pitcher"],
+                park_factor=home_park,
+                opp_pitcher_id=game["away_pitcher_id"],
+                lineup_spot=hitter.get("lineup_spot"),
+                lineup_source=home_source,
+                hitter_stats_map=hitter_stats_map,
+                pitcher_stats_map=pitcher_stats_map,
+            )
+            if metrics is not None:
+                rows.append({
+                    "date": today_str(),
+                    "game_pk": game["game_pk"],
+                    "game_state": game["game_state"],
+                    "detailed_state": game["detailed_state"],
+                    "Game": game["game_key"],
+                    "Side": "Home",
+                    **metrics
+                })
 
     df = pd.DataFrame(rows)
     if df.empty:
@@ -889,8 +890,12 @@ def get_team_game_view(df: pd.DataFrame, game_key: str, team: str):
     hr_pool = team_df[team_df["HR Eligible"]].copy()
     hr_pool = sort_for_hr(hr_pool)
 
-    # confirmed lineup: usually show best 2-5, projected fallback still capped
-    selected = hr_pool.head(5)
+    core = hr_pool[hr_pool["HR Tier"] == "CORE TARGET"].head(2)
+    strong = hr_pool[hr_pool["HR Tier"] == "STRONG LOOK"].head(3)
+    sleepers = hr_pool[hr_pool["HR Tier"] == "SLEEPER"].head(2)
+
+    selected = pd.concat([core, strong, sleepers]).drop_duplicates(subset=["Player"]).head(7)
+    selected = sort_for_hr(selected)
 
     hrr = team_df.sort_values(
         by=["HRR Score", "LineDrive%", "HardHit%", "GroundBall%"],
@@ -1055,7 +1060,7 @@ with tabs[1]:
     top12.insert(0, "Rank", range(1, len(top12) + 1))
     st.dataframe(
         top12[[
-            "Rank", "Player", "Team", "Game", "Pitcher", "Lineup Spot",
+            "Rank", "Player", "Team", "Game", "Pitcher",
             "HR Probability %", "HR Tier", "GroundBall%",
             "HardHit%", "FlyBall%", "LineDrive%", "Barrel%", "Why"
         ]],
@@ -1081,14 +1086,13 @@ with tabs[2]:
 
 with tabs[3]:
     st.subheader("Engine Breakdown")
-    st.caption("GB 50%+ = automatic HR no | GB 45–49.9% = heavy downgrade | lineup spots only shown when real.")
+    st.caption("GB 50%+ = automatic HR no | GB 45–49.9% = heavy downgrade | lineup pool now uses confirmed lineups first.")
     breakdown = sort_for_hr(df.copy())
     st.dataframe(
         breakdown[[
-            "Player", "Team", "Game", "Pitcher", "Lineup Spot",
-            "Candidate Source", "EV", "HardHit%", "FlyBall%",
-            "LineDrive%", "GroundBall%", "Barrel%", "Pitcher_HR9_Last7",
-            "Pitch_Isolation_Valid", "GB Rule", "HR Eligible",
+            "Player", "Team", "Game", "Pitcher", "Lineup Spot", "Lineup Source",
+            "EV", "HardHit%", "FlyBall%", "LineDrive%", "GroundBall%", "Barrel%",
+            "Pitcher_HR9_Last7", "Pitch_Isolation_Valid", "GB Rule", "HR Eligible",
             "HR Probability %", "HRR Score", "Why"
         ]],
         use_container_width=True,
@@ -1156,14 +1160,16 @@ for idx, game in enumerate(schedule, start=5):
 
         with left:
             st.markdown(f"### {away_team}")
-            st.caption(f"Confirmed hitters: {game.get('away_confirmed_count', 0)}/9")
+            away_source = gdf[gdf["Team"] == away_team]["Lineup Source"].iloc[0] if not gdf[gdf["Team"] == away_team].empty else "N/A"
+            st.caption(f"Confirmed hitters: {game.get('away_confirmed_count', 0)}/9 | Pool: {away_source}")
             team_hr, team_hrr = get_team_game_view(gdf, game["game_key"], away_team)
             if not team_hr.empty:
                 st.markdown("**Best HR hitters**")
                 st.dataframe(
                     team_hr[[
-                        "Player", "HR Tier", "HR Probability %", "GroundBall%",
-                        "HardHit%", "FlyBall%", "LineDrive%", "Barrel%", "Lineup Spot", "Why"
+                        "Player", "Lineup Spot", "Lineup Source", "HR Probability %",
+                        "HR Tier", "GroundBall%", "HardHit%", "FlyBall%",
+                        "LineDrive%", "Barrel%", "Why"
                     ]],
                     use_container_width=True,
                     hide_index=True
@@ -1171,8 +1177,8 @@ for idx, game in enumerate(schedule, start=5):
             st.markdown("**Best Hits + Runs + RBIs**")
             st.dataframe(
                 team_hrr[[
-                    "Player", "HRR Score", "Lineup Spot", "GroundBall%",
-                    "LineDrive%", "Why"
+                    "Player", "Lineup Spot", "Lineup Source", "HRR Score",
+                    "GroundBall%", "LineDrive%", "Why"
                 ]].head(5),
                 use_container_width=True,
                 hide_index=True
@@ -1180,14 +1186,16 @@ for idx, game in enumerate(schedule, start=5):
 
         with right:
             st.markdown(f"### {home_team}")
-            st.caption(f"Confirmed hitters: {game.get('home_confirmed_count', 0)}/9")
+            home_source = gdf[gdf["Team"] == home_team]["Lineup Source"].iloc[0] if not gdf[gdf["Team"] == home_team].empty else "N/A"
+            st.caption(f"Confirmed hitters: {game.get('home_confirmed_count', 0)}/9 | Pool: {home_source}")
             team_hr, team_hrr = get_team_game_view(gdf, game["game_key"], home_team)
             if not team_hr.empty:
                 st.markdown("**Best HR hitters**")
                 st.dataframe(
                     team_hr[[
-                        "Player", "HR Tier", "HR Probability %", "GroundBall%",
-                        "HardHit%", "FlyBall%", "LineDrive%", "Barrel%", "Lineup Spot", "Why"
+                        "Player", "Lineup Spot", "Lineup Source", "HR Probability %",
+                        "HR Tier", "GroundBall%", "HardHit%", "FlyBall%",
+                        "LineDrive%", "Barrel%", "Why"
                     ]],
                     use_container_width=True,
                     hide_index=True
@@ -1195,8 +1203,8 @@ for idx, game in enumerate(schedule, start=5):
             st.markdown("**Best Hits + Runs + RBIs**")
             st.dataframe(
                 team_hrr[[
-                    "Player", "HRR Score", "Lineup Spot", "GroundBall%",
-                    "LineDrive%", "Why"
+                    "Player", "Lineup Spot", "Lineup Source", "HRR Score",
+                    "GroundBall%", "LineDrive%", "Why"
                 ]].head(5),
                 use_container_width=True,
                 hide_index=True
