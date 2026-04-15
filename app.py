@@ -85,50 +85,6 @@ def get_lineup_mode(schedule_rows: list[dict]) -> str:
 
 
 @st.cache_data(ttl=900)
-def get_today_schedule():
-    url = "https://statsapi.mlb.com/api/v1/schedule?sportId=1"
-    resp = requests.get(url, timeout=20)
-    resp.raise_for_status()
-    data = resp.json()
-
-    games = []
-    for date in data.get("dates", []):
-        for game in date.get("games", []):
-            away = game["teams"]["away"]["team"]["name"]
-            home = game["teams"]["home"]["team"]["name"]
-            away_id = game["teams"]["away"]["team"]["id"]
-            home_id = game["teams"]["home"]["team"]["id"]
-
-            prob_away = game["teams"]["away"].get("probablePitcher", {})
-            prob_home = game["teams"]["home"].get("probablePitcher", {})
-
-            linescore = game.get("linescore", {})
-            offense = linescore.get("offense", {})
-
-            away_confirmed = 9 if offense.get("battingOrder") else int(stable_float(f"{away_id}-confirm", 0, 5))
-            home_confirmed = 9 if offense.get("battingOrder") else int(stable_float(f"{home_id}-confirm", 0, 5))
-
-            games.append({
-                "game_pk": game["gamePk"],
-                "game_key": f"{team_abbr(away)} @ {team_abbr(home)}",
-                "away_team": away,
-                "home_team": home,
-                "away_team_id": away_id,
-                "home_team_id": home_id,
-                "away_pitcher": prob_away.get("fullName", "TBD"),
-                "home_pitcher": prob_home.get("fullName", "TBD"),
-                "away_pitcher_id": prob_away.get("id"),
-                "home_pitcher_id": prob_home.get("id"),
-                "venue": game.get("venue", {}).get("name", "Unknown"),
-                "game_time": game.get("gameDate", ""),
-                "away_confirmed_count": away_confirmed,
-                "home_confirmed_count": home_confirmed,
-            })
-
-    return games
-
-
-@st.cache_data(ttl=1800)
 def get_team_hitters(team_id: int):
     url = f"https://statsapi.mlb.com/api/v1/teams/{team_id}/roster?rosterType=active"
     try:
@@ -149,6 +105,113 @@ def get_team_hitters(team_id: int):
         return hitters[:13]
     except Exception:
         return []
+
+
+@st.cache_data(ttl=900)
+def get_probable_pitchers_from_schedule():
+    url = "https://statsapi.mlb.com/api/v1/schedule?sportId=1"
+    resp = requests.get(url, timeout=20)
+    resp.raise_for_status()
+    data = resp.json()
+
+    probable_map = {}
+
+    for date in data.get("dates", []):
+        for game in date.get("games", []):
+            away_team = game["teams"]["away"]["team"]["name"]
+            home_team = game["teams"]["home"]["team"]["name"]
+
+            away_prob = game["teams"]["away"].get("probablePitcher", {})
+            home_prob = game["teams"]["home"].get("probablePitcher", {})
+
+            probable_map[away_team] = away_prob.get("fullName")
+            probable_map[home_team] = home_prob.get("fullName")
+
+    return probable_map
+
+
+@st.cache_data(ttl=900)
+def get_fallback_probable_pitcher(team_id: int):
+    """
+    Team endpoint fallback for probable starter.
+    Returns best available probable starter name or None.
+    """
+    urls = [
+        f"https://statsapi.mlb.com/api/v1/teams/{team_id}?hydrate=probablePitcher",
+        f"https://statsapi.mlb.com/api/v1/teams/{team_id}/roster?rosterType=active",
+    ]
+
+    for url in urls[:1]:
+        try:
+            resp = requests.get(url, timeout=20)
+            resp.raise_for_status()
+            data = resp.json()
+            teams = data.get("teams", [])
+            if teams:
+                pp = teams[0].get("probablePitcher") or {}
+                name = pp.get("fullName")
+                if name:
+                    return name
+        except Exception:
+            pass
+
+    return None
+
+
+def resolve_starter(team_name: str, team_id: int, probable_map: dict) -> str:
+    starter = probable_map.get(team_name)
+    if starter and str(starter).strip():
+        return starter
+
+    fallback = get_fallback_probable_pitcher(team_id)
+    if fallback and str(fallback).strip():
+        return fallback
+
+    return "Starter Pending"
+
+
+@st.cache_data(ttl=900)
+def get_today_schedule():
+    url = "https://statsapi.mlb.com/api/v1/schedule?sportId=1"
+    resp = requests.get(url, timeout=20)
+    resp.raise_for_status()
+    data = resp.json()
+
+    probable_map = get_probable_pitchers_from_schedule()
+    games = []
+
+    for date in data.get("dates", []):
+        for game in date.get("games", []):
+            away = game["teams"]["away"]["team"]["name"]
+            home = game["teams"]["home"]["team"]["name"]
+            away_id = game["teams"]["away"]["team"]["id"]
+            home_id = game["teams"]["home"]["team"]["id"]
+
+            linescore = game.get("linescore", {})
+            offense = linescore.get("offense", {})
+
+            away_confirmed = 9 if offense.get("battingOrder") else int(stable_float(f"{away_id}-confirm", 0, 5))
+            home_confirmed = 9 if offense.get("battingOrder") else int(stable_float(f"{home_id}-confirm", 0, 5))
+
+            away_pitcher = resolve_starter(away, away_id, probable_map)
+            home_pitcher = resolve_starter(home, home_id, probable_map)
+
+            games.append({
+                "game_pk": game["gamePk"],
+                "game_key": f"{team_abbr(away)} @ {team_abbr(home)}",
+                "away_team": away,
+                "home_team": home,
+                "away_team_id": away_id,
+                "home_team_id": home_id,
+                "away_pitcher": away_pitcher,
+                "home_pitcher": home_pitcher,
+                "venue": game.get("venue", {}).get("name", "Unknown"),
+                "game_time": game.get("gameDate", ""),
+                "away_confirmed_count": away_confirmed,
+                "home_confirmed_count": home_confirmed,
+            })
+
+    return games
 
 
 def build_hitter_metrics(player_id: int, player_name: str, team: str, opp_pitcher: str, park_factor: float):
