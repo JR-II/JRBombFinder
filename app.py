@@ -113,6 +113,10 @@ def chunked(items, size):
         yield items[i:i + size]
 
 
+def display_lineup_spot(value):
+    return value if value is not None else "—"
+
+
 def load_tracker() -> pd.DataFrame:
     columns = [
         "date", "player", "team", "game", "game_pk",
@@ -250,8 +254,8 @@ def get_today_schedule():
             linescore = game.get("linescore", {})
             offense = linescore.get("offense", {})
 
-            away_confirmed = 9 if offense.get("battingOrder") else int(stable_float(f"{away_id}-confirm", 0, 5))
-            home_confirmed = 9 if offense.get("battingOrder") else int(stable_float(f"{home_id}-confirm", 0, 5))
+            away_confirmed = 9 if offense.get("battingOrder") else 0
+            home_confirmed = 9 if offense.get("battingOrder") else 0
 
             status = game.get("status", {})
             game_state = status.get("abstractGameState", "Preview")
@@ -468,9 +472,6 @@ def compute_pitcher_live_metrics_from_map(pitcher_id: int, pitcher_name: str, st
 
 
 def extract_boxscore_team_hitters(game_pk: int, side: str):
-    """
-    Game-scoped hitter pool. This is better than raw active roster for today's matchup.
-    """
     box = fetch_boxscore(game_pk)
     team_box = box.get("teams", {}).get(side, {}) or {}
     players = team_box.get("players", {}) or {}
@@ -500,7 +501,6 @@ def extract_boxscore_team_hitters(game_pk: int, side: str):
             "confirmed": lineup_spot is not None,
         })
 
-    # Deduplicate by player_id
     dedup = {}
     for h in hitters:
         if h["player_id"] is not None:
@@ -511,11 +511,10 @@ def extract_boxscore_team_hitters(game_pk: int, side: str):
 
 def get_team_candidate_hitters(game_pk: int, team_id: int, side: str):
     """
-    Returns today's best candidate hitter pool.
-    Priority:
-    1) Confirmed lineup from boxscore
-    2) Projected pool from game-scoped hitters
-    3) Fallback active roster
+    V2 logic:
+    1) confirmed lineup if available
+    2) otherwise strict projected pool only
+    3) no fake projected lineup spots assigned for display
     """
     boxscore_hitters = extract_boxscore_team_hitters(game_pk, side)
 
@@ -545,26 +544,44 @@ def get_team_candidate_hitters(game_pk: int, team_id: int, side: str):
         if metrics is None:
             continue
 
-        lineup_likelihood = (
-            metrics["recent_pa"] * 3.0 +
-            metrics["season_ab"] * 0.03 +
-            metrics["season_games"] * 0.5 +
-            metrics["recent_xbh"] * 2.0 +
-            metrics["recent_runs"] * 0.5
+        # strict projected gate so fake names stop floating up
+        strong_projected_candidate = (
+            metrics["recent_pa"] >= 12 and
+            metrics["season_games"] >= 3 and
+            metrics["season_ab"] >= 8 and
+            (
+                metrics["recent_hr"] >= 1 or
+                metrics["recent_xbh"] >= 2 or
+                (
+                    metrics["Barrel%"] >= 8 and
+                    metrics["HardHit%"] >= 35 and
+                    metrics["FlyBall%"] >= 28
+                )
+            )
         )
 
-        if metrics["season_ab"] == 0 and metrics["recent_pa"] == 0:
+        if not strong_projected_candidate:
             continue
+
+        lineup_likelihood = (
+            metrics["recent_pa"] * 2.0 +
+            metrics["season_ab"] * 0.03 +
+            metrics["season_games"] * 0.4 +
+            metrics["recent_xbh"] * 2.5 +
+            metrics["recent_runs"] * 0.7 +
+            metrics["recent_hr"] * 4.0
+        )
 
         scored.append({
             **h,
             "lineup_likelihood": lineup_likelihood
         })
 
-    scored = sorted(scored, key=lambda x: x["lineup_likelihood"], reverse=True)[:11]
+    scored = sorted(scored, key=lambda x: x["lineup_likelihood"], reverse=True)[:7]
 
-    for idx, hitter in enumerate(scored, start=1):
-        hitter["lineup_spot"] = idx
+    # do NOT assign fake lineup spots in projected mode
+    for hitter in scored:
+        hitter["lineup_spot"] = None
 
     return scored, "PROJECTED"
 
@@ -601,7 +618,7 @@ def build_hitter_metrics(
     recent_runs = live_hitter["recent_runs"]
     recent_pa = live_hitter["recent_pa"]
 
-    lineup_spot = lineup_spot if lineup_spot is not None else 9
+    display_spot = display_lineup_spot(lineup_spot)
     bats = "L" if int(stable_float(f"{player_id}-bat", 0, 10)) % 2 == 0 else "R"
 
     if live_pitcher is None:
@@ -613,6 +630,7 @@ def build_hitter_metrics(
         pitch_barrel_allowed = live_pitcher["Pitcher_Barrel_Allowed"]
         pitch_hard_hit_allowed = live_pitcher["Pitcher_HardHit_Allowed"]
 
+    # until true pitch-mix source is integrated, never fake isolate boost
     isolate = False
     weather_boost = 0.0
     pullside_boost = stable_float(f"{player_id}-pull", -1, 3)
@@ -630,6 +648,12 @@ def build_hitter_metrics(
         hard_hit < 35 and
         barrel < 8 and
         fly_ball < 28
+    )
+
+    awful_hr_shape = (
+        ground_ball >= 55 or
+        (ground_ball >= 50 and fly_ball <= 20) or
+        (barrel < 5 and hard_hit < 28 and recent_hr == 0)
     )
 
     compensator_count = sum([
@@ -651,6 +675,10 @@ def build_hitter_metrics(
         hr_eligible = False
     elif weak_recent_profile:
         hr_eligible = False
+    elif awful_hr_shape:
+        hr_eligible = False
+    elif lineup_source == "PROJECTED" and lineup_spot is None and recent_hr == 0 and recent_xbh < 3:
+        hr_eligible = False
 
     base_score = (
         (ev - 87) * 1.9 +
@@ -668,10 +696,11 @@ def build_hitter_metrics(
         (recent_iso * 25)
     )
 
-    if lineup_spot <= 4:
-        base_score += 3
-    elif lineup_spot <= 6:
-        base_score += 1.5
+    if lineup_spot is not None:
+        if lineup_spot <= 4:
+            base_score += 3
+        elif lineup_spot <= 6:
+            base_score += 1.5
 
     if ground_ball < 40:
         base_score += 6
@@ -687,6 +716,10 @@ def build_hitter_metrics(
 
     if weak_recent_profile:
         base_score -= 10
+    if awful_hr_shape:
+        base_score -= 12
+    if lineup_source == "PROJECTED" and lineup_spot is None:
+        base_score -= 5
 
     if not hr_eligible:
         hr_prob = 0.0
@@ -698,12 +731,13 @@ def build_hitter_metrics(
         (hard_hit - 28) * 1.0 +
         (line_drive - 14) * 0.9 +
         (pitch_hard_hit_allowed - 30) * 0.4 +
-        max(0, 10 - lineup_spot) * 1.5 +
         park_boost +
         (recent_runs * 0.7) +
         (recent_rbi * 0.7) +
         (recent_avg * 15)
     )
+    if lineup_spot is not None:
+        hrr_score += max(0, 10 - lineup_spot) * 1.5
 
     reasons = []
     reasons.append(f"{lineup_source} lineup pool")
@@ -736,6 +770,8 @@ def build_hitter_metrics(
         reasons.append("Recent XBH form")
     if weak_recent_profile:
         reasons.append("Weak recent HR profile")
+    if awful_hr_shape:
+        reasons.append("Bad HR shape")
     if park_factor >= 1.05:
         reasons.append("Strong HR park")
     reasons.append("No forced pitch isolation")
@@ -744,7 +780,7 @@ def build_hitter_metrics(
         "Player": player_name,
         "Team": team,
         "Bats": bats,
-        "Lineup Spot": lineup_spot,
+        "Lineup Spot": display_spot,
         "Lineup Source": lineup_source,
         "EV": round(ev, 1),
         "HardHit%": round(hard_hit, 1),
@@ -774,9 +810,12 @@ def classify_hr_tier(prob: float) -> str:
 
 
 def sort_for_hr(df: pd.DataFrame) -> pd.DataFrame:
-    return df.sort_values(
+    sortable = df.copy()
+    sortable["_lineup_sort"] = pd.to_numeric(sortable["Lineup Spot"], errors="coerce").fillna(99)
+    sortable = sortable.sort_values(
         by=[
             "HR Probability %",
+            "_lineup_sort",
             "GroundBall%",
             "HardHit%",
             "FlyBall%",
@@ -784,8 +823,9 @@ def sort_for_hr(df: pd.DataFrame) -> pd.DataFrame:
             "Barrel%",
             "HRR Score",
         ],
-        ascending=[False, True, False, False, False, False, False],
+        ascending=[False, True, True, False, False, False, False, False],
     ).reset_index(drop=True)
+    return sortable.drop(columns=["_lineup_sort"])
 
 
 @st.cache_data(ttl=900)
@@ -803,6 +843,12 @@ def build_daily_dataset():
 
         candidate_map[(game["game_pk"], "away")] = (away_candidates, away_source)
         candidate_map[(game["game_pk"], "home")] = (home_candidates, home_source)
+
+        # update confirmed count from confirmed candidates if applicable
+        if away_source == "CONFIRMED":
+            game["away_confirmed_count"] = min(9, len(away_candidates))
+        if home_source == "CONFIRMED":
+            game["home_confirmed_count"] = min(9, len(home_candidates))
 
         for h in away_candidates + home_candidates:
             if h.get("player_id") is not None:
@@ -890,12 +936,8 @@ def get_team_game_view(df: pd.DataFrame, game_key: str, team: str):
     hr_pool = team_df[team_df["HR Eligible"]].copy()
     hr_pool = sort_for_hr(hr_pool)
 
-    core = hr_pool[hr_pool["HR Tier"] == "CORE TARGET"].head(2)
-    strong = hr_pool[hr_pool["HR Tier"] == "STRONG LOOK"].head(3)
-    sleepers = hr_pool[hr_pool["HR Tier"] == "SLEEPER"].head(2)
-
-    selected = pd.concat([core, strong, sleepers]).drop_duplicates(subset=["Player"]).head(7)
-    selected = sort_for_hr(selected)
+    # stricter per-team output
+    selected = hr_pool.head(5)
 
     hrr = team_df.sort_values(
         by=["HRR Score", "LineDrive%", "HardHit%", "GroundBall%"],
@@ -1047,8 +1089,8 @@ with tabs[0]:
     st.dataframe(
         hr_df[[
             "Rank", "Player", "Team", "Game", "Pitcher", "Lineup Spot",
-            "HR Probability %", "HR Tier", "GroundBall%", "HardHit%",
-            "FlyBall%", "LineDrive%", "Barrel%", "Why"
+            "Lineup Source", "HR Probability %", "HR Tier", "GroundBall%",
+            "HardHit%", "FlyBall%", "LineDrive%", "Barrel%", "Why"
         ]],
         use_container_width=True,
         hide_index=True
@@ -1060,8 +1102,8 @@ with tabs[1]:
     top12.insert(0, "Rank", range(1, len(top12) + 1))
     st.dataframe(
         top12[[
-            "Rank", "Player", "Team", "Game", "Pitcher",
-            "HR Probability %", "HR Tier", "GroundBall%",
+            "Rank", "Player", "Team", "Game", "Pitcher", "Lineup Spot",
+            "Lineup Source", "HR Probability %", "HR Tier", "GroundBall%",
             "HardHit%", "FlyBall%", "LineDrive%", "Barrel%", "Why"
         ]],
         use_container_width=True,
@@ -1077,8 +1119,8 @@ with tabs[2]:
     hrr.insert(0, "Rank", range(1, len(hrr) + 1))
     st.dataframe(
         hrr[[
-            "Rank", "Player", "Team", "Game", "Lineup Spot", "HRR Score",
-            "GroundBall%", "LineDrive%", "EV", "HardHit%", "Why"
+            "Rank", "Player", "Team", "Game", "Lineup Spot", "Lineup Source",
+            "HRR Score", "GroundBall%", "LineDrive%", "EV", "HardHit%", "Why"
         ]],
         use_container_width=True,
         hide_index=True
@@ -1086,7 +1128,7 @@ with tabs[2]:
 
 with tabs[3]:
     st.subheader("Engine Breakdown")
-    st.caption("GB 50%+ = automatic HR no | GB 45–49.9% = heavy downgrade | lineup pool now uses confirmed lineups first.")
+    st.caption("GB 50%+ = automatic HR no | GB 45–49.9% = heavy downgrade | projected hitters no longer get fake lineup spots.")
     breakdown = sort_for_hr(df.copy())
     st.dataframe(
         breakdown[[
