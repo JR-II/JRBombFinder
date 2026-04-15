@@ -12,6 +12,7 @@ st.title("BF Data")
 st.caption("Daily Home Run Probability Engine")
 
 TRACKER_FILE = "hr_tracker.csv"
+CURRENT_SEASON = datetime.now().year
 
 TEAM_ABBR = {
     "Arizona Diamondbacks": "ARI",
@@ -62,12 +63,57 @@ def stable_float(key: str, low: float, high: float) -> float:
     return low + (high - low) * value
 
 
+def clip(value: float, low: float, high: float) -> float:
+    return max(low, min(high, value))
+
+
+def safe_int(value, default=0):
+    try:
+        return int(value)
+    except Exception:
+        return default
+
+
+def safe_float(value, default=0.0):
+    try:
+        return float(value)
+    except Exception:
+        return default
+
+
+def ip_to_float(ip_value) -> float:
+    """
+    MLB innings format uses .1=.333 and .2=.667 in baseball outs format.
+    """
+    if ip_value is None:
+        return 0.0
+    s = str(ip_value)
+    if "." not in s:
+        return safe_float(s, 0.0)
+    whole, frac = s.split(".", 1)
+    whole = safe_float(whole, 0.0)
+    frac = safe_int(frac, 0)
+    if frac == 0:
+        return whole
+    if frac == 1:
+        return whole + (1 / 3)
+    if frac == 2:
+        return whole + (2 / 3)
+    return safe_float(s, 0.0)
+
+
 def team_abbr(name: str) -> str:
     return TEAM_ABBR.get(name, name[:3].upper())
 
 
 def today_str() -> str:
     return datetime.now().strftime("%Y-%m-%d")
+
+
+def chunked(items, size):
+    items = list(items)
+    for i in range(0, len(items), size):
+        yield items[i:i + size]
 
 
 def load_tracker() -> pd.DataFrame:
@@ -259,25 +305,222 @@ def get_team_hitters(team_id: int):
         return []
 
 
-def build_hitter_metrics(player_id: int, player_name: str, team: str, opp_pitcher: str, park_factor: float):
-    ev = stable_float(f"{player_id}-ev", 87, 99)
-    hard_hit = stable_float(f"{player_id}-hh", 28, 54)
-    fly_ball = stable_float(f"{player_id}-fb", 22, 48)
-    line_drive = stable_float(f"{player_id}-ld", 14, 31)
-    ground_ball = stable_float(f"{player_id}-gb", 28, 58)
-    barrel = stable_float(f"{player_id}-barrel", 4, 18)
+@st.cache_data(ttl=1800)
+def fetch_people_stats(person_ids_tuple: tuple, group: str):
+    """
+    Batch fetches season + gameLog stats for many players using MLB people endpoint.
+    """
+    person_ids = [str(x) for x in person_ids_tuple if pd.notna(x)]
+    if not person_ids:
+        return {}
+
+    results = {}
+
+    for chunk in chunked(person_ids, 40):
+        params = {
+            "personIds": ",".join(chunk),
+            "hydrate": f"stats(group=[{group}],type=[season,gameLog],season={CURRENT_SEASON})"
+        }
+        try:
+            resp = requests.get("https://statsapi.mlb.com/api/v1/people", params=params, timeout=30)
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception:
+            continue
+
+        for person in data.get("people", []):
+            pid = person.get("id")
+            stats = {"season": {}, "gamelog": []}
+
+            for stat_block in person.get("stats", []):
+                stat_type = ((stat_block.get("type") or {}).get("displayName") or "").lower()
+                splits = stat_block.get("splits") or []
+
+                if stat_type == "season" and splits:
+                    stats["season"] = splits[0].get("stat", {}) or {}
+                elif stat_type == "gamelog":
+                    game_rows = []
+                    for split in splits:
+                        row = {
+                            "date": split.get("date"),
+                            "stat": split.get("stat", {}) or {}
+                        }
+                        game_rows.append(row)
+                    game_rows = sorted(game_rows, key=lambda x: x.get("date") or "", reverse=True)
+                    stats["gamelog"] = game_rows
+
+            results[pid] = stats
+
+    return results
+
+
+def compute_hitter_live_metrics(player_id: int, player_name: str):
+    """
+    Uses live MLB recent game logs + season stat proxies.
+    """
+    hitter_map = fetch_people_stats((player_id,), "hitting")
+    data = hitter_map.get(player_id, {"season": {}, "gamelog": []})
+    season_stat = data.get("season", {}) or {}
+    gamelog = (data.get("gamelog", []) or [])[:10]
+
+    if not gamelog:
+        return None
+
+    ab = sum(safe_int(g["stat"].get("atBats", 0)) for g in gamelog)
+    hits = sum(safe_int(g["stat"].get("hits", 0)) for g in gamelog)
+    doubles = sum(safe_int(g["stat"].get("doubles", 0)) for g in gamelog)
+    triples = sum(safe_int(g["stat"].get("triples", 0)) for g in gamelog)
+    hrs = sum(safe_int(g["stat"].get("homeRuns", 0)) for g in gamelog)
+    walks = sum(safe_int(g["stat"].get("baseOnBalls", 0)) for g in gamelog)
+    strikeouts = sum(safe_int(g["stat"].get("strikeOuts", 0)) for g in gamelog)
+    total_bases = sum(safe_int(g["stat"].get("totalBases", 0)) for g in gamelog)
+    rbi = sum(safe_int(g["stat"].get("rbi", 0)) for g in gamelog)
+    runs = sum(safe_int(g["stat"].get("runs", 0)) for g in gamelog)
+
+    singles = max(hits - doubles - triples - hrs, 0)
+    pa_proxy = max(ab + walks, 1)
+    avg = hits / ab if ab else 0.0
+    slg = total_bases / ab if ab else 0.0
+    iso = max(slg - avg, 0.0)
+    xbh = doubles + triples + hrs
+
+    ground_outs = safe_int(season_stat.get("groundOuts", 0))
+    air_outs = safe_int(season_stat.get("airOuts", 0))
+    out_total = ground_outs + air_outs
+
+    if out_total > 0:
+        gb = clip((ground_outs / out_total) * 100, 20, 65)
+        fb = clip((air_outs / out_total) * 100, 15, 55)
+    else:
+        gb = stable_float(f"{player_id}-gb-fallback", 32, 48)
+        fb = stable_float(f"{player_id}-fb-fallback", 22, 38)
+
+    ld = clip(100 - gb - fb, 12, 30)
+
+    ev = clip(86 + iso * 18 + (xbh / max(ab, 1)) * 45 + (hits / pa_proxy) * 8, 84, 99)
+    hard_hit = clip(26 + iso * 85 + (xbh / pa_proxy) * 140 - (strikeouts / pa_proxy) * 10, 20, 60)
+    barrel = clip(2 + iso * 35 + (hrs / pa_proxy) * 160, 1, 20)
+
+    return {
+        "EV": round(ev, 1),
+        "HardHit%": round(hard_hit, 1),
+        "FlyBall%": round(fb, 1),
+        "LineDrive%": round(ld, 1),
+        "GroundBall%": round(gb, 1),
+        "Barrel%": round(barrel, 1),
+        "recent_hr": hrs,
+        "recent_xbh": xbh,
+        "recent_iso": iso,
+        "recent_avg": avg,
+        "recent_rbi": rbi,
+        "recent_runs": runs,
+    }
+
+
+def compute_pitcher_live_metrics(pitcher_id: int, pitcher_name: str):
+    """
+    Uses last 7 pitching game logs if available.
+    """
+    if pd.isna(pitcher_id):
+        return None
+
+    pitcher_map = fetch_people_stats((pitcher_id,), "pitching")
+    data = pitcher_map.get(pitcher_id, {"season": {}, "gamelog": []})
+    season_stat = data.get("season", {}) or {}
+    gamelog = data.get("gamelog", []) or []
+
+    if gamelog:
+        starts_only = [g for g in gamelog if safe_int(g["stat"].get("gamesStarted", 0)) > 0]
+        use_logs = starts_only[:7] if starts_only else gamelog[:7]
+    else:
+        use_logs = []
+
+    if use_logs:
+        ip = sum(ip_to_float(g["stat"].get("inningsPitched", 0)) for g in use_logs)
+        hr_allowed = sum(safe_int(g["stat"].get("homeRuns", 0)) for g in use_logs)
+        hits_allowed = sum(safe_int(g["stat"].get("hits", 0)) for g in use_logs)
+        walks_allowed = sum(safe_int(g["stat"].get("baseOnBalls", 0)) for g in use_logs)
+        strikeouts = sum(safe_int(g["stat"].get("strikeOuts", 0)) for g in use_logs)
+
+        hr9 = (hr_allowed * 9 / ip) if ip > 0 else 0.0
+        hit9 = (hits_allowed * 9 / ip) if ip > 0 else 0.0
+        whip = ((hits_allowed + walks_allowed) / ip) if ip > 0 else 0.0
+    else:
+        ip = ip_to_float(season_stat.get("inningsPitched", 0))
+        hr_allowed = safe_int(season_stat.get("homeRuns", 0))
+        hits_allowed = safe_int(season_stat.get("hits", 0))
+        walks_allowed = safe_int(season_stat.get("baseOnBalls", 0))
+        strikeouts = safe_int(season_stat.get("strikeOuts", 0))
+
+        hr9 = (hr_allowed * 9 / ip) if ip > 0 else stable_float(f"{pitcher_name}-hr9-fallback", 0.8, 1.6)
+        hit9 = (hits_allowed * 9 / ip) if ip > 0 else stable_float(f"{pitcher_name}-hit9-fallback", 6.5, 10.5)
+        whip = ((hits_allowed + walks_allowed) / ip) if ip > 0 else stable_float(f"{pitcher_name}-whip-fallback", 1.0, 1.5)
+
+    barrel_allowed = clip(2.5 + hr9 * 4.0 + (hit9 - 6) * 0.5, 3, 15)
+    hard_hit_allowed = clip(26 + hr9 * 8 + (whip - 1.0) * 18, 25, 50)
+
+    return {
+        "Pitcher_HR9_Last7": round(hr9, 2),
+        "Pitcher_Barrel_Allowed": round(barrel_allowed, 1),
+        "Pitcher_HardHit_Allowed": round(hard_hit_allowed, 1),
+    }
+
+
+def build_hitter_metrics(
+    player_id: int,
+    player_name: str,
+    team: str,
+    opp_pitcher: str,
+    park_factor: float,
+    opp_pitcher_id=None
+):
+    live_hitter = compute_hitter_live_metrics(player_id, player_name)
+    live_pitcher = compute_pitcher_live_metrics(opp_pitcher_id, opp_pitcher)
+
+    if live_hitter is None:
+        ev = stable_float(f"{player_id}-ev", 87, 99)
+        hard_hit = stable_float(f"{player_id}-hh", 28, 54)
+        fly_ball = stable_float(f"{player_id}-fb", 22, 48)
+        line_drive = stable_float(f"{player_id}-ld", 14, 31)
+        ground_ball = stable_float(f"{player_id}-gb", 28, 58)
+        barrel = stable_float(f"{player_id}-barrel", 4, 18)
+        recent_hr = 0
+        recent_xbh = 0
+        recent_iso = 0.0
+        recent_avg = 0.0
+        recent_rbi = 0
+        recent_runs = 0
+    else:
+        ev = live_hitter["EV"]
+        hard_hit = live_hitter["HardHit%"]
+        fly_ball = live_hitter["FlyBall%"]
+        line_drive = live_hitter["LineDrive%"]
+        ground_ball = live_hitter["GroundBall%"]
+        barrel = live_hitter["Barrel%"]
+        recent_hr = live_hitter["recent_hr"]
+        recent_xbh = live_hitter["recent_xbh"]
+        recent_iso = live_hitter["recent_iso"]
+        recent_avg = live_hitter["recent_avg"]
+        recent_rbi = live_hitter["recent_rbi"]
+        recent_runs = live_hitter["recent_runs"]
+
     lineup_spot = int(stable_float(f"{player_id}-lineup", 1, 9.999))
     bats = "L" if int(stable_float(f"{player_id}-bat", 0, 10)) % 2 == 0 else "R"
 
-    pitch_hr9 = stable_float(f"{opp_pitcher}-hr9", 0.7, 1.9)
-    pitch_barrel_allowed = stable_float(f"{opp_pitcher}-barrel-allowed", 4, 13)
-    pitch_hard_hit_allowed = stable_float(f"{opp_pitcher}-hh-allowed", 30, 48)
+    if live_pitcher is None:
+        pitch_hr9 = stable_float(f"{opp_pitcher}-hr9", 0.7, 1.9)
+        pitch_barrel_allowed = stable_float(f"{opp_pitcher}-barrel-allowed", 4, 13)
+        pitch_hard_hit_allowed = stable_float(f"{opp_pitcher}-hh-allowed", 30, 48)
+    else:
+        pitch_hr9 = live_pitcher["Pitcher_HR9_Last7"]
+        pitch_barrel_allowed = live_pitcher["Pitcher_Barrel_Allowed"]
+        pitch_hard_hit_allowed = live_pitcher["Pitcher_HardHit_Allowed"]
 
-    primary_pitch = stable_float(f"{opp_pitcher}-pitch-primary", 26, 58)
-    next_pitch = stable_float(f"{opp_pitcher}-pitch-next", 14, 36)
-    isolate = primary_pitch >= 50 or (primary_pitch - next_pitch) >= 20
+    # Conservative: without live pitch-mix feed, do not force isolation.
+    isolate = False
 
-    weather_boost = stable_float(f"{team}-weather", -3, 8)
+    # Neutral weather placeholder preserved for stability today
+    weather_boost = 0.0
     pullside_boost = stable_float(f"{player_id}-pull", -1, 3)
     park_boost = (park_factor - 1.0) * 20
 
@@ -293,7 +536,7 @@ def build_hitter_metrics(player_id: int, player_name: str, team: str, opp_pitche
         fly_ball >= 35,
         line_drive >= 24,
         pitch_hr9 >= 1.5,
-        weather_boost >= 4,
+        recent_hr >= 2,
         park_factor >= 1.05
     ])
 
@@ -312,9 +555,11 @@ def build_hitter_metrics(player_id: int, player_name: str, team: str, opp_pitche
         (pitch_hr9 - 0.7) * 17 +
         (pitch_barrel_allowed - 4) * 0.9 +
         (pitch_hard_hit_allowed - 30) * 0.5 +
-        weather_boost +
         pullside_boost +
-        park_boost
+        park_boost +
+        (recent_hr * 2.5) +
+        (recent_xbh * 0.8) +
+        (recent_iso * 25)
     )
 
     if isolate:
@@ -348,8 +593,10 @@ def build_hitter_metrics(player_id: int, player_name: str, team: str, opp_pitche
         (line_drive - 14) * 0.9 +
         (pitch_hard_hit_allowed - 30) * 0.4 +
         max(0, 10 - lineup_spot) * 1.5 +
-        max(0, weather_boost) +
-        park_boost
+        park_boost +
+        (recent_runs * 0.7) +
+        (recent_rbi * 0.7) +
+        (recent_avg * 15)
     )
 
     reasons = []
@@ -361,7 +608,7 @@ def build_hitter_metrics(player_id: int, player_name: str, team: str, opp_pitche
         reasons.append("Air-ball profile survives GB gate")
 
     if ev >= 95:
-        reasons.append("Strong EV")
+        reasons.append("Strong recent EV proxy")
     if hard_hit >= 40:
         reasons.append("Hard-hit target")
     if fly_ball >= 30:
@@ -371,19 +618,19 @@ def build_hitter_metrics(player_id: int, player_name: str, team: str, opp_pitche
     if line_drive >= 24:
         reasons.append("Strong line-drive rate")
     if barrel >= 12:
-        reasons.append("Strong barrel rate")
+        reasons.append("Strong barrel proxy")
     if pitch_hr9 >= 1.5:
         reasons.append("Pitcher HR/9 attack spot")
     elif pitch_hr9 >= 1.3:
         reasons.append("Pitcher HR/9 usable")
-    if isolate:
-        reasons.append("Pitch isolation valid")
-    else:
-        reasons.append("Balanced mix fallback")
-    if weather_boost >= 4:
-        reasons.append("Weather boost")
+    if recent_hr >= 2:
+        reasons.append("Recent HR form")
+    if recent_xbh >= 4:
+        reasons.append("Recent XBH form")
     if park_factor >= 1.05:
         reasons.append("Strong HR park")
+    if not isolate:
+        reasons.append("No forced pitch isolation")
 
     return {
         "Player": player_name,
@@ -398,7 +645,7 @@ def build_hitter_metrics(player_id: int, player_name: str, team: str, opp_pitche
         "Barrel%": round(barrel, 1),
         "Pitcher": opp_pitcher,
         "Pitcher_HR9_Last7": round(pitch_hr9, 2),
-        "Pitch_Isolation_Valid": "Yes" if isolate else "No",
+        "Pitch_Isolation_Valid": "No",
         "GB Rule": gb_status,
         "HR Eligible": hr_eligible,
         "HR Probability %": round(hr_prob, 1),
@@ -460,6 +707,7 @@ def build_daily_dataset():
                     team=away_abbr,
                     opp_pitcher=game["home_pitcher"],
                     park_factor=away_park,
+                    opp_pitcher_id=game["home_pitcher_id"],
                 )
             })
 
@@ -477,6 +725,7 @@ def build_daily_dataset():
                     team=home_abbr,
                     opp_pitcher=game["away_pitcher"],
                     park_factor=home_park,
+                    opp_pitcher_id=game["away_pitcher_id"],
                 )
             })
 
@@ -628,7 +877,6 @@ with c1:
 df, schedule = build_daily_dataset()
 lineup_mode = get_lineup_mode(schedule) if schedule else "PROJECTED"
 
-# Auto-sync tracker to everything on the app/software, then auto-update HR results
 tracker = sync_tracker_with_board(df)
 tracker = auto_update_tracker_results(tracker, schedule)
 summary = summarize_tracker(tracker)
@@ -709,7 +957,7 @@ with tabs[3]:
 
 with tabs[4]:
     st.subheader("Accuracy Tracker")
-    st.caption("This now auto-tracks every hitter on the app/software and updates homer results automatically as games progress/finalize.")
+    st.caption("Auto-tracks every hitter listed by BF Data and updates HR results as games progress/finalize.")
 
     a1, a2, a3 = st.columns(3)
     a1.metric("Today's Listed Hitters", summary["today_total"])
