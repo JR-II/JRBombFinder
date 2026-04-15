@@ -771,18 +771,9 @@ def build_hitter_metrics(
 
     reasons = []
     reasons.append(f"{lineup_source} lineup pool")
-    if statcast_pass:
-        reasons.append("Statcast damage pass")
-    else:
-        reasons.append("Failed Statcast damage")
-    if pitcher_attackable:
-        reasons.append("Pitcher attackable")
-    else:
-        reasons.append("Pitcher less attackable")
-    if recent_form_pass:
-        reasons.append("Recent damage form")
-    else:
-        reasons.append("Weak recent form")
+    reasons.append("Statcast damage pass" if statcast_pass else "Failed Statcast damage")
+    reasons.append("Pitcher attackable" if pitcher_attackable else "Pitcher less attackable")
+    reasons.append("Recent damage form" if recent_form_pass else "Weak recent form")
     if ground_ball >= 50:
         reasons.append("GB% 50%+ automatic HR fade")
     elif ground_ball >= 45:
@@ -812,11 +803,11 @@ def build_hitter_metrics(
         "Pitcher_HR9_Last7": round(pitch_hr9, 2),
         "Pitcher_Barrel_Allowed": round(pitch_barrel_allowed, 1),
         "Pitcher_HardHit_Allowed": round(pitch_hard_hit_allowed, 1),
-        "Pitch_Isolation_Valid": "No",
-        "GB Rule": gb_status,
         "Statcast Pass": "Yes" if statcast_pass else "No",
         "Recent Form Pass": "Yes" if recent_form_pass else "No",
         "Pitcher Attackable": "Yes" if pitcher_attackable else "No",
+        "Pitch_Isolation_Valid": "No",
+        "GB Rule": gb_status,
         "HR Eligible": hr_eligible,
         "HR Probability %": round(hr_prob, 1),
         "HRR Score": round(hrr_score, 1),
@@ -960,7 +951,6 @@ def get_team_game_view(df: pd.DataFrame, game_key: str, team: str):
 
     hr_pool = team_df[team_df["HR Eligible"]].copy()
     hr_pool = sort_for_hr(hr_pool)
-
     selected = hr_pool.head(4)
 
     hrr = team_df.sort_values(
