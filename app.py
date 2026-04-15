@@ -10,10 +10,6 @@ st.set_page_config(page_title="BF Data", layout="wide")
 st.title("BF Data")
 st.caption("Daily Home Run Probability Engine")
 
-# -----------------------------
-# Helpers
-# -----------------------------
-
 TEAM_ABBR = {
     "Arizona Diamondbacks": "ARI",
     "Atlanta Braves": "ATL",
@@ -56,37 +52,37 @@ PARK_FACTORS = {
     "STL": 1.00, "TB": 0.97, "TEX": 1.07, "TOR": 1.04, "WSH": 1.00,
 }
 
+
 def stable_float(key: str, low: float, high: float) -> float:
     digest = hashlib.md5(key.encode("utf-8")).hexdigest()
     value = int(digest[:8], 16) / 0xFFFFFFFF
     return low + (high - low) * value
 
-def fmt_pct(x: float) -> str:
-    return f"{x:.1f}%"
 
 def team_abbr(name: str) -> str:
     return TEAM_ABBR.get(name, name[:3].upper())
+
 
 def get_lineup_mode(schedule_rows: list[dict]) -> str:
     total = len(schedule_rows)
     confirmed = 0
     partial = 0
+
     for g in schedule_rows:
         away_c = g.get("away_confirmed_count", 0)
         home_c = g.get("home_confirmed_count", 0)
+
         if away_c >= 9 and home_c >= 9:
             confirmed += 1
         elif away_c > 0 or home_c > 0:
             partial += 1
+
     if confirmed == total and total > 0:
         return "CONFIRMED"
     if confirmed > 0 or partial > 0:
         return "MIXED"
     return "PROJECTED"
 
-# -----------------------------
-# Live schedule + rosters
-# -----------------------------
 
 @st.cache_data(ttl=900)
 def get_today_schedule():
@@ -128,7 +124,9 @@ def get_today_schedule():
                 "away_confirmed_count": away_confirmed,
                 "home_confirmed_count": home_confirmed,
             })
+
     return games
+
 
 @st.cache_data(ttl=1800)
 def get_team_hitters(team_id: int):
@@ -137,6 +135,7 @@ def get_team_hitters(team_id: int):
         resp = requests.get(url, timeout=20)
         resp.raise_for_status()
         data = resp.json()
+
         hitters = []
         for row in data.get("roster", []):
             pos_type = row.get("position", {}).get("type", "")
@@ -146,19 +145,17 @@ def get_team_hitters(team_id: int):
                     "player_name": row["person"]["fullName"],
                     "position": row.get("position", {}).get("abbreviation", "")
                 })
+
         return hitters[:13]
     except Exception:
         return []
 
-# -----------------------------
-# Placeholder metric engine
-# Real player names, deterministic fake metrics until live stat layer is wired
-# -----------------------------
 
 def build_hitter_metrics(player_id: int, player_name: str, team: str, opp_pitcher: str, park_factor: float):
     ev = stable_float(f"{player_id}-ev", 87, 99)
     hard_hit = stable_float(f"{player_id}-hh", 28, 54)
     fly_ball = stable_float(f"{player_id}-fb", 22, 48)
+    line_drive = stable_float(f"{player_id}-ld", 14, 31)
     ground_ball = stable_float(f"{player_id}-gb", 28, 58)
     barrel = stable_float(f"{player_id}-barrel", 4, 18)
     lineup_spot = int(stable_float(f"{player_id}-lineup", 1, 9.999))
@@ -186,6 +183,7 @@ def build_hitter_metrics(player_id: int, player_name: str, team: str, opp_pitche
         barrel >= 12,
         hard_hit >= 45,
         fly_ball >= 35,
+        line_drive >= 24,
         pitch_hr9 >= 1.5,
         weather_boost >= 4,
         park_factor >= 1.05
@@ -199,9 +197,10 @@ def build_hitter_metrics(player_id: int, player_name: str, team: str, opp_pitche
 
     base_score = (
         (ev - 87) * 1.9 +
-        (hard_hit - 28) * 1.5 +
-        (fly_ball - 22) * 1.4 +
-        (barrel - 4) * 2.3 +
+        (hard_hit - 28) * 1.6 +
+        (fly_ball - 22) * 1.5 +
+        (line_drive - 14) * 0.8 +
+        (barrel - 4) * 2.4 +
         (pitch_hr9 - 0.7) * 17 +
         (pitch_barrel_allowed - 4) * 0.9 +
         (pitch_hard_hit_allowed - 30) * 0.5 +
@@ -212,28 +211,35 @@ def build_hitter_metrics(player_id: int, player_name: str, team: str, opp_pitche
 
     if isolate:
         base_score += 4
+
     if lineup_spot <= 4:
-        base_score += 4
+        base_score += 3
     elif lineup_spot <= 6:
-        base_score += 2
+        base_score += 1.5
 
     if ground_ball < 40:
-        base_score += 5
+        base_score += 6
     elif 45 <= ground_ball < 50:
         base_score -= 8
     elif ground_ball >= 50:
         base_score -= 22
 
+    if fly_ball >= 30:
+        base_score += 4
+    elif fly_ball < 25:
+        base_score -= 4
+
     if not hr_eligible:
         hr_prob = 0.0
     else:
-        hr_prob = max(3.0, min(28.0, base_score / 5.2))
+        hr_prob = max(3.0, min(28.0, base_score / 5.0))
 
     hrr_score = (
         (ev - 87) * 1.2 +
         (hard_hit - 28) * 1.0 +
+        (line_drive - 14) * 0.9 +
         (pitch_hard_hit_allowed - 30) * 0.4 +
-        max(0, 10 - lineup_spot) * 1.7 +
+        max(0, 10 - lineup_spot) * 1.5 +
         max(0, weather_boost) +
         park_boost
     )
@@ -245,12 +251,17 @@ def build_hitter_metrics(player_id: int, player_name: str, team: str, opp_pitche
         reasons.append("High GB caution tier")
     else:
         reasons.append("Air-ball profile survives GB gate")
+
     if ev >= 95:
         reasons.append("Strong EV")
     if hard_hit >= 40:
         reasons.append("Hard-hit target")
     if fly_ball >= 30:
         reasons.append("Fly-ball target")
+    elif fly_ball < 25:
+        reasons.append("Low fly-ball downgrade")
+    if line_drive >= 24:
+        reasons.append("Strong line-drive rate")
     if barrel >= 12:
         reasons.append("Strong barrel rate")
     if pitch_hr9 >= 1.5:
@@ -274,6 +285,7 @@ def build_hitter_metrics(player_id: int, player_name: str, team: str, opp_pitche
         "EV": round(ev, 1),
         "HardHit%": round(hard_hit, 1),
         "FlyBall%": round(fly_ball, 1),
+        "LineDrive%": round(line_drive, 1),
         "GroundBall%": round(ground_ball, 1),
         "Barrel%": round(barrel, 1),
         "Pitcher": opp_pitcher,
@@ -283,8 +295,9 @@ def build_hitter_metrics(player_id: int, player_name: str, team: str, opp_pitche
         "HR Eligible": hr_eligible,
         "HR Probability %": round(hr_prob, 1),
         "HRR Score": round(hrr_score, 1),
-        "Why": " | ".join(reasons[:5])
+        "Why": " | ".join(reasons[:6])
     }
+
 
 def classify_hr_tier(prob: float) -> str:
     if prob >= 18:
@@ -294,6 +307,22 @@ def classify_hr_tier(prob: float) -> str:
     if prob >= 8:
         return "SLEEPER"
     return "DEEP"
+
+
+def sort_for_hr(df: pd.DataFrame) -> pd.DataFrame:
+    return df.sort_values(
+        by=[
+            "HR Probability %",
+            "GroundBall%",
+            "HardHit%",
+            "FlyBall%",
+            "LineDrive%",
+            "Barrel%",
+            "HRR Score",
+        ],
+        ascending=[False, True, False, False, False, False, False],
+    ).reset_index(drop=True)
+
 
 @st.cache_data(ttl=900)
 def build_daily_dataset():
@@ -340,8 +369,9 @@ def build_daily_dataset():
         return pd.DataFrame(), schedule
 
     df["HR Tier"] = df["HR Probability %"].apply(classify_hr_tier)
-    df = df.sort_values(["HR Probability %", "HRR Score"], ascending=[False, False]).reset_index(drop=True)
+    df = sort_for_hr(df)
     return df, schedule
+
 
 def get_team_game_view(df: pd.DataFrame, game_key: str, team: str):
     team_df = df[(df["Game"] == game_key) & (df["Team"] == team)].copy()
@@ -349,19 +379,22 @@ def get_team_game_view(df: pd.DataFrame, game_key: str, team: str):
         return team_df, team_df
 
     hr_pool = team_df[team_df["HR Eligible"]].copy()
-    hr_pool = hr_pool.sort_values(["HR Probability %", "HRR Score"], ascending=[False, False])
+    hr_pool = sort_for_hr(hr_pool)
 
     core = hr_pool[hr_pool["HR Tier"] == "CORE TARGET"].head(2)
     strong = hr_pool[hr_pool["HR Tier"] == "STRONG LOOK"].head(3)
     sleepers = hr_pool[hr_pool["HR Tier"] == "SLEEPER"].head(2)
 
-    selected = pd.concat([core, strong, sleepers]).drop_duplicates(subset=["Player"]).head(6)
-    hrr = team_df.sort_values("HRR Score", ascending=False).head(5)
+    selected = pd.concat([core, strong, sleepers]).drop_duplicates(subset=["Player"]).head(7)
+    selected = sort_for_hr(selected)
+
+    hrr = team_df.sort_values(
+        by=["HRR Score", "LineDrive%", "HardHit%", "GroundBall%"],
+        ascending=[False, False, False, True]
+    ).head(5)
+
     return selected, hrr
 
-# -----------------------------
-# Header / controls
-# -----------------------------
 
 c1, c2, c3, c4 = st.columns([1, 1, 1, 2])
 with c1:
@@ -383,72 +416,69 @@ if df.empty:
     st.warning("No games or hitter data loaded.")
     st.stop()
 
-# -----------------------------
-# Main tabs
-# -----------------------------
-
 base_tabs = ["HR Probability", "Top 12", "Hits + Runs + RBIs", "Engine Breakdown"]
 game_tabs = [g["game_key"] for g in schedule]
 tabs = st.tabs(base_tabs + game_tabs)
 
-# HR Probability
 with tabs[0]:
     st.subheader("HR Probability Board")
-    hr_df = df[df["HR Eligible"]].copy()
-    hr_df = hr_df.sort_values(["HR Probability %", "HRR Score"], ascending=[False, False]).reset_index(drop=True)
+    hr_df = sort_for_hr(df[df["HR Eligible"]].copy())
     hr_df.insert(0, "Rank", range(1, len(hr_df) + 1))
     st.dataframe(
         hr_df[[
             "Rank", "Player", "Team", "Game", "Pitcher", "Lineup Spot",
-            "HR Probability %", "HR Tier", "GroundBall%", "Barrel%", "HardHit%", "FlyBall%", "Why"
+            "HR Probability %", "HR Tier", "GroundBall%", "HardHit%",
+            "FlyBall%", "LineDrive%", "Barrel%", "Why"
         ]],
         use_container_width=True,
         hide_index=True
     )
 
-# Top 12
 with tabs[1]:
     st.subheader("Top 12 HR Candidates")
-    top12 = df[df["HR Eligible"]].copy().sort_values(["HR Probability %", "HRR Score"], ascending=[False, False]).head(12)
+    top12 = sort_for_hr(df[df["HR Eligible"]].copy()).head(12)
     top12.insert(0, "Rank", range(1, len(top12) + 1))
     st.dataframe(
         top12[[
-            "Rank", "Player", "Team", "Game", "Pitcher", "HR Probability %", "HR Tier", "Why"
+            "Rank", "Player", "Team", "Game", "Pitcher",
+            "HR Probability %", "HR Tier", "GroundBall%",
+            "HardHit%", "FlyBall%", "LineDrive%", "Barrel%", "Why"
         ]],
         use_container_width=True,
         hide_index=True
     )
 
-# HRRBI
 with tabs[2]:
     st.subheader("Hits + Runs + RBIs Board")
-    hrr = df.copy().sort_values("HRR Score", ascending=False).reset_index(drop=True)
+    hrr = df.copy().sort_values(
+        by=["HRR Score", "LineDrive%", "HardHit%", "GroundBall%"],
+        ascending=[False, False, False, True]
+    ).reset_index(drop=True)
     hrr.insert(0, "Rank", range(1, len(hrr) + 1))
     st.dataframe(
         hrr[[
             "Rank", "Player", "Team", "Game", "Lineup Spot", "HRR Score",
-            "GroundBall%", "EV", "HardHit%", "Why"
+            "GroundBall%", "LineDrive%", "EV", "HardHit%", "Why"
         ]],
         use_container_width=True,
         hide_index=True
     )
 
-# Engine Breakdown
 with tabs[3]:
     st.subheader("Engine Breakdown")
-    st.caption("Finalized GB logic: 50%+ automatic HR no, 45-49.9% heavy downgrade.")
-    breakdown = df.copy().sort_values(["HR Probability %", "HRR Score"], ascending=[False, False])
+    st.caption("GB 50%+ = automatic HR no | GB 45–49.9% = heavy downgrade | Low GB wins ties.")
+    breakdown = sort_for_hr(df.copy())
     st.dataframe(
         breakdown[[
             "Player", "Team", "Game", "Pitcher", "EV", "HardHit%", "FlyBall%",
-            "GroundBall%", "Barrel%", "Pitcher_HR9_Last7", "Pitch_Isolation_Valid",
-            "GB Rule", "HR Eligible", "HR Probability %", "HRR Score", "Why"
+            "LineDrive%", "GroundBall%", "Barrel%", "Pitcher_HR9_Last7",
+            "Pitch_Isolation_Valid", "GB Rule", "HR Eligible",
+            "HR Probability %", "HRR Score", "Why"
         ]],
         use_container_width=True,
         hide_index=True
     )
 
-# Dynamic game tabs
 for idx, game in enumerate(schedule, start=4):
     with tabs[idx]:
         st.subheader(game["game_key"])
@@ -472,13 +502,19 @@ for idx, game in enumerate(schedule, start=4):
             if not team_hr.empty:
                 st.markdown("**Best HR hitters**")
                 st.dataframe(
-                    team_hr[["Player", "HR Probability %", "HR Tier", "GroundBall%", "Pitcher_HR9_Last7", "Why"]],
+                    team_hr[[
+                        "Player", "HR Probability %", "HR Tier", "GroundBall%",
+                        "HardHit%", "FlyBall%", "LineDrive%", "Barrel%", "Why"
+                    ]],
                     use_container_width=True,
                     hide_index=True
                 )
             st.markdown("**Best Hits + Runs + RBIs**")
             st.dataframe(
-                team_hrr[["Player", "HRR Score", "Lineup Spot", "GroundBall%", "Why"]].head(5),
+                team_hrr[[
+                    "Player", "HRR Score", "Lineup Spot", "GroundBall%",
+                    "LineDrive%", "Why"
+                ]].head(5),
                 use_container_width=True,
                 hide_index=True
             )
@@ -490,13 +526,19 @@ for idx, game in enumerate(schedule, start=4):
             if not team_hr.empty:
                 st.markdown("**Best HR hitters**")
                 st.dataframe(
-                    team_hr[["Player", "HR Probability %", "HR Tier", "GroundBall%", "Pitcher_HR9_Last7", "Why"]],
+                    team_hr[[
+                        "Player", "HR Probability %", "HR Tier", "GroundBall%",
+                        "HardHit%", "FlyBall%", "LineDrive%", "Barrel%", "Why"
+                    ]],
                     use_container_width=True,
                     hide_index=True
                 )
             st.markdown("**Best Hits + Runs + RBIs**")
             st.dataframe(
-                team_hrr[["Player", "HRR Score", "Lineup Spot", "GroundBall%", "Why"]].head(5),
+                team_hrr[[
+                    "Player", "HRR Score", "Lineup Spot", "GroundBall%",
+                    "LineDrive%", "Why"
+                ]].head(5),
                 use_container_width=True,
                 hide_index=True
             )
