@@ -1677,7 +1677,7 @@ if not daily_summary.empty:
         use_container_width=True,
         hide_index=True
     )
-if not tracker.empty:
+ if not tracker.empty:
         st.divider()
         st.subheader("Historical Day Review")
 
@@ -1695,9 +1695,11 @@ if not tracker.empty:
         selected_day_df = tracker[
     tracker["date"].astype(str) == selected_date
 ].copy()
-            errors="coerce"
-        ).fillna(0).astype(int)
 
+selected_day_df["result_num"] = pd.to_numeric(
+    selected_day_df["result"],
+    errors="coerce"
+).fillna(0).astype(int)
         selected_total = len(selected_day_df)
         selected_hits = int(selected_day_df["result_num"].sum())
         selected_pct = round(
