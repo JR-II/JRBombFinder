@@ -1692,9 +1692,9 @@ if not daily_summary.empty:
             index=0
         )
 
-        selected_day_df = tracker[tracker["date"].astype(str) == selected_date].copy()
-        selected_day_df["result_num"] = pd.to_numeric(
-            selected_day_df["result"],
+        selected_day_df = tracker[
+    tracker["date"].astype(str) == selected_date
+].copy()
             errors="coerce"
         ).fillna(0).astype(int)
 
