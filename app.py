@@ -186,28 +186,6 @@ def load_tracker() -> pd.DataFrame:
 def save_tracker(df: pd.DataFrame):
     df.to_csv(TRACKER_FILE, index=False)
 
-def isolate_primary_pitch(pitch_mix: dict):
-    if not pitch_mix:
-        return None
-
-    sorted_mix = sorted(
-        pitch_mix.items(),
-        key=lambda x: x[1],
-        reverse=True
-    )
-
-    top_pitch, top_usage = sorted_mix[0]
-
-    if top_usage >= 50:
-        return top_pitch
-
-    if len(sorted_mix) > 1:
-        second_usage = sorted_mix[1][1]
-
-        if (top_usage - second_usage) >= 20:
-            return top_pitch
-
-    return None
 
 def summarize_tracker(df: pd.DataFrame):
     if df.empty:
@@ -956,27 +934,7 @@ def build_hitter_metrics(
 
     pullside_boost = stable_float(f"{player_id}-pull", -1, 3)
     park_boost = (park_factor - 1.0) * 20
-   
-    pitch_mix_example = {
-        "FF": stable_float(f"{opp_pitcher}-ff", 25, 55),
-        "SL": stable_float(f"{opp_pitcher}-sl", 10, 40),
-        "CH": stable_float(f"{opp_pitcher}-ch", 5, 25),
-    }
 
-    primary_pitch = isolate_primary_pitch(pitch_mix_example)
-
-    pitch_isolation_bonus = 0
-"Pitch_Isolation_Valid": pitch_isolation_valid,
-
-if primary_pitch is not None:
-    pitch_isolation_valid = "Yes"
-
-        hitter_pitch_fit = stable_float(
-            f"{player_name}-{primary_pitch}-fit",
-            -2.0,
-            4.5
-        )
-        pitch_isolation_bonus = hitter_pitch_fit
     gb_status = "PASS"
     if ground_ball >= 55:
         gb_status = "AUTO NO"
@@ -1017,7 +975,6 @@ if primary_pitch is not None:
         (ev - 87) * 1.1 +
         (xslg * 100) * 1.2 +
         (xiso * 100) * 0.7 +
-        pitch_isolation_bonus +
         (pitch_hr9 - 0.7) * 10.0 +
         (pitch_barrel_allowed - 4) * 0.9 +
         (pitch_hard_hit_allowed - 30) * 0.4 +
