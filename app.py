@@ -220,6 +220,28 @@ def summarize_tracker(df: pd.DataFrame):
             "all_pct": 0.0,
         }
 
+    df = df.copy()
+    df["result_num"] = pd.to_numeric(df["result"], errors="coerce").fillna(0).astype(int)
+
+    today_df = df[df["date"].astype(str) == today_str()]
+    today_total = len(today_df)
+    today_hits = int(today_df["result_num"].sum())
+    today_pct = round((today_hits / today_total) * 100, 2) if today_total else 0.0
+
+    all_total = len(df)
+    all_hits = int(df["result_num"].sum())
+    all_pct = round((all_hits / all_total) * 100, 2) if all_total else 0.0
+
+    return {
+        "today_total": today_total,
+        "today_hits": today_hits,
+        "today_pct": today_pct,
+        "all_total": all_total,
+        "all_hits": all_hits,
+        "all_pct": all_pct,
+    }
+
+
 def summarize_tracker_by_day(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return pd.DataFrame(columns=[
@@ -257,26 +279,6 @@ def summarize_tracker_by_day(df: pd.DataFrame) -> pd.DataFrame:
     ).reset_index(drop=True)
 
     return daily
-    df = df.copy()
-    df["result_num"] = pd.to_numeric(df["result"], errors="coerce").fillna(0).astype(int)
-
-    today_df = df[df["date"].astype(str) == today_str()]
-    today_total = len(today_df)
-    today_hits = int(today_df["result_num"].sum())
-    today_pct = round((today_hits / today_total) * 100, 2) if today_total else 0.0
-
-    all_total = len(df)
-    all_hits = int(df["result_num"].sum())
-    all_pct = round((all_hits / all_total) * 100, 2) if all_total else 0.0
-
-    return {
-        "today_total": today_total,
-        "today_hits": today_hits,
-        "today_pct": today_pct,
-        "all_total": all_total,
-        "all_hits": all_hits,
-        "all_pct": all_pct,
-    }
 
 
 def get_lineup_mode(schedule_rows: list[dict]) -> str:
