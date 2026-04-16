@@ -609,30 +609,48 @@ def compute_pitcher_live_metrics_from_map(pitcher_id: int, pitcher_name: str, st
     season_stat = data.get("season", {}) or {}
     gamelog = data.get("gamelog", []) or []
 
-    if gamelog:
-        starts_only = [g for g in gamelog if safe_int(g["stat"].get("gamesStarted", 0)) > 0]
-        use_logs = starts_only[:7] if starts_only else gamelog[:7]
+    # --- LAST 7 STARTS WINDOW ---
+    starts_only = [g for g in gamelog if safe_int(g["stat"].get("gamesStarted", 0)) > 0]
+    last7 = starts_only[:7] if starts_only else gamelog[:7]
+
+    # --- L7 CALC ---
+    if last7:
+        ip_l7 = sum(ip_to_float(g["stat"].get("inningsPitched", 0)) for g in last7)
+        hr_l7 = sum(safe_int(g["stat"].get("homeRuns", 0)) for g in last7)
+        hits_l7 = sum(safe_int(g["stat"].get("hits", 0)) for g in last7)
+        walks_l7 = sum(safe_int(g["stat"].get("baseOnBalls", 0)) for g in last7)
+
+        hr9_l7 = (hr_l7 * 9 / ip_l7) if ip_l7 > 0 else 0.0
+        hit9_l7 = (hits_l7 * 9 / ip_l7) if ip_l7 > 0 else 0.0
+        whip_l7 = ((hits_l7 + walks_l7) / ip_l7) if ip_l7 > 0 else 0.0
     else:
-        use_logs = []
+        hr9_l7 = None
+        hit9_l7 = None
+        whip_l7 = None
 
-    if use_logs:
-        ip = sum(ip_to_float(g["stat"].get("inningsPitched", 0)) for g in use_logs)
-        hr_allowed = sum(safe_int(g["stat"].get("homeRuns", 0)) for g in use_logs)
-        hits_allowed = sum(safe_int(g["stat"].get("hits", 0)) for g in use_logs)
-        walks_allowed = sum(safe_int(g["stat"].get("baseOnBalls", 0)) for g in use_logs)
+    # --- SEASON CALC ---
+    ip_season = ip_to_float(season_stat.get("inningsPitched", 0))
+    hr_season = safe_int(season_stat.get("homeRuns", 0))
+    hits_season = safe_int(season_stat.get("hits", 0))
+    walks_season = safe_int(season_stat.get("baseOnBalls", 0))
 
-        hr9 = (hr_allowed * 9 / ip) if ip > 0 else 0.0
-        hit9 = (hits_allowed * 9 / ip) if ip > 0 else 0.0
-        whip = ((hits_allowed + walks_allowed) / ip) if ip > 0 else 0.0
-    else:
-        ip = ip_to_float(season_stat.get("inningsPitched", 0))
-        hr_allowed = safe_int(season_stat.get("homeRuns", 0))
-        hits_allowed = safe_int(season_stat.get("hits", 0))
-        walks_allowed = safe_int(season_stat.get("baseOnBalls", 0))
+    hr9_season = (hr_season * 9 / ip_season) if ip_season > 0 else None
+    hit9_season = (hits_season * 9 / ip_season) if ip_season > 0 else None
+    whip_season = ((hits_season + walks_season) / ip_season) if ip_season > 0 else None
 
-        hr9 = (hr_allowed * 9 / ip) if ip > 0 else stable_float(f"{pitcher_name}-hr9-fallback", 0.8, 1.6)
-        hit9 = (hits_allowed * 9 / ip) if ip > 0 else stable_float(f"{pitcher_name}-hit9-fallback", 6.5, 10.5)
-        whip = ((hits_allowed + walks_allowed) / ip) if ip > 0 else stable_float(f"{pitcher_name}-whip-fallback", 1.0, 1.5)
+    # --- BLEND 70% L7 + 30% SEASON ---
+    def blend(l7, season, fallback_low, fallback_high, key):
+        if l7 is not None and season is not None:
+            return (l7 * 0.7) + (season * 0.3)
+        if l7 is not None:
+            return l7
+        if season is not None:
+            return season
+        return stable_float(f"{pitcher_name}-{key}", fallback_low, fallback_high)
+
+    hr9 = blend(hr9_l7, hr9_season, 0.8, 1.6, "hr9")
+    hit9 = blend(hit9_l7, hit9_season, 6.5, 10.5, "hit9")
+    whip = blend(whip_l7, whip_season, 1.0, 1.5, "whip")
 
     barrel_allowed = clip(2.5 + hr9 * 4.0 + (hit9 - 6) * 0.5, 3, 15)
     hard_hit_allowed = clip(26 + hr9 * 8 + (whip - 1.0) * 18, 25, 50)
