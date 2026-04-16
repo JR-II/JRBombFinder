@@ -803,13 +803,17 @@ def get_team_candidate_hitters(game_pk: int, team_id: int, side: str, savant_bat
         )
 
         strong_projected_candidate = (
-            metrics["recent_pa"] >= 12 and
-            metrics["season_games"] >= 3 and
-            metrics["season_ab"] >= 8 and
-            projected_statcast_pass and
-            projected_recent_pass and
-            gb_survival
-        )
+    metrics["recent_pa"] >= 12 and
+    metrics["season_games"] >= 3 and
+    metrics["season_ab"] >= 8 and
+    projected_statcast_pass and
+    (
+        projected_recent_pass
+        or sav_brl >= 13
+        or sav_xslg >= 0.500
+    ) and
+    gb_survival
+)
 
         if not strong_projected_candidate:
             continue
