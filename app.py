@@ -239,40 +239,6 @@ def get_lineup_mode(schedule_rows: list[dict]) -> str:
     return "PROJECTED"
 
 
-def add_rank_column(df: pd.DataFrame) -> pd.DataFrame:
-    ranked = df.copy()
-    if "Rank" in ranked.columns:
-        ranked = ranked.drop(columns=["Rank"])
-    ranked.insert(0, "Rank", range(1, len(ranked) + 1))
-    return ranked
-
-
-def strict_statcast_ok(row: pd.Series) -> bool:
-    return bool(
-        row.get("Statcast Pass") == "Yes"
-        and safe_float(row.get("GroundBall%", 999), 999) < 52
-        and (
-            safe_float(row.get("Barrel%", 0), 0) >= 10
-            or safe_float(row.get("AIR%", 0), 0) >= 55
-            or safe_float(row.get("xSLG", 0), 0) >= 0.450
-        )
-    )
-
-
-def get_gb_explanation(ground_ball: float, barrel: float, air_pct: float, xslg: float) -> str:
-    if ground_ball >= 55:
-        return "Stay away: 55%+ GB"
-    if ground_ball >= 50:
-        if barrel >= 12 or xslg >= 0.500 or air_pct >= 60:
-            return "Heavy GB, but real damage traits keep it in play"
-        return "Heavy GB downgrade"
-    if ground_ball >= 45:
-        if barrel >= 11 or xslg >= 0.470 or air_pct >= 58:
-            return "Borderline GB, but damage traits keep it alive"
-        return "Borderline GB caution"
-    return "Clean enough launch shape"
-
-
 @st.cache_data(ttl=300)
 def fetch_schedule_payload():
     url = (
@@ -714,7 +680,6 @@ def get_team_candidate_hitters(game_pk: int, team_id: int, side: str, savant_bat
         sav_hh = safe_float(sav.get("Savant_HardHit%"), metrics["HardHit%"])
         sav_air = safe_float(sav.get("Savant_AIR%"), 100 - metrics["GroundBall%"])
         sav_xslg = safe_float(sav.get("Savant_xSLG"), 0.0)
-        sav_gb = safe_float(sav.get("Savant_GB%"), metrics["GroundBall%"])
 
         projected_statcast_pass = (
             sav_brl >= 10 or
@@ -728,24 +693,12 @@ def get_team_candidate_hitters(game_pk: int, team_id: int, side: str, savant_bat
             metrics["recent_iso"] >= 0.180
         )
 
-        gb_survival = (
-            sav_gb < 50
-            or (
-                sav_gb < 54 and (
-                    sav_brl >= 11 or
-                    sav_air >= 58 or
-                    sav_xslg >= 0.470
-                )
-            )
-        )
-
         strong_projected_candidate = (
             metrics["recent_pa"] >= 12 and
             metrics["season_games"] >= 3 and
             metrics["season_ab"] >= 8 and
             projected_statcast_pass and
-            projected_recent_pass and
-            gb_survival
+            projected_recent_pass
         )
 
         if not strong_projected_candidate:
@@ -766,7 +719,7 @@ def get_team_candidate_hitters(game_pk: int, team_id: int, side: str, savant_bat
             "lineup_likelihood": lineup_likelihood
         })
 
-    scored = sorted(scored, key=lambda x: x["lineup_likelihood"], reverse=True)[:6]
+    scored = sorted(scored, key=lambda x: x["lineup_likelihood"], reverse=True)[:5]
 
     for hitter in scored:
         hitter["lineup_spot"] = None
@@ -818,8 +771,8 @@ def qualifies_hr_profile(
     )
 
     awful_hr_shape = (
-        ground_ball >= 58 or
-        (ground_ball >= 55 and air_pct <= 35) or
+        ground_ball >= 55 or
+        (ground_ball >= 50 and air_pct <= 35) or
         (barrel < 5 and hard_hit < 30 and recent_hr == 0)
     )
 
@@ -836,27 +789,15 @@ def qualifies_hr_profile(
         (lineup_source == "PROJECTED" and recent_hr >= 1 and recent_xbh >= 3 and statcast_pass)
     )
 
-    borderline_gb_survival = (
-        ground_ball < 50 or
-        elite_override or
-        (
-            ground_ball < 55 and pitcher_attackable and (
-                barrel >= 11 or
-                air_pct >= 58 or
-                xslg >= 0.470
-            )
-        )
-    )
-
     hr_eligible = True
 
     if recent_pa < 8:
         hr_eligible = False
     elif awful_hr_shape and not elite_override:
         hr_eligible = False
-    elif ground_ball >= 55 and not elite_override:
+    elif ground_ball >= 50 and not elite_override:
         hr_eligible = False
-    elif not borderline_gb_survival:
+    elif ground_ball >= 45 and not elite_override and not pitcher_attackable:
         hr_eligible = False
     elif not statcast_pass:
         hr_eligible = False
@@ -930,16 +871,15 @@ def build_hitter_metrics(
         pitch_barrel_allowed = live_pitcher["Pitcher_Barrel_Allowed"]
         pitch_hard_hit_allowed = live_pitcher["Pitcher_HardHit_Allowed"]
 
+    isolate = False
     pullside_boost = stable_float(f"{player_id}-pull", -1, 3)
     park_boost = (park_factor - 1.0) * 20
 
     gb_status = "PASS"
-    if ground_ball >= 55:
+    if ground_ball >= 50:
         gb_status = "AUTO NO"
-    elif ground_ball >= 50:
-        gb_status = "HEAVY DOWNGRADE"
     elif ground_ball >= 45:
-        gb_status = "CAUTION"
+        gb_status = "HEAVY DOWNGRADE"
 
     qual = qualifies_hr_profile(
         barrel=barrel,
@@ -994,10 +934,8 @@ def build_hitter_metrics(
     if ground_ball < 40:
         base_score += 4.0
     elif 45 <= ground_ball < 50:
-        base_score -= 7.0
-    elif 50 <= ground_ball < 55:
-        base_score -= 14.0
-    elif ground_ball >= 55:
+        base_score -= 11.0
+    elif ground_ball >= 50:
         base_score -= 25.0
 
     if air_pct >= 65:
@@ -1025,8 +963,6 @@ def build_hitter_metrics(
         base_score -= 14.0
     if lineup_source == "PROJECTED" and lineup_spot is None:
         base_score -= 4.0
-    if elite_override and ground_ball < 55:
-        base_score += 2.5
 
     if not hr_eligible:
         hr_prob = 0.0
@@ -1046,28 +982,23 @@ def build_hitter_metrics(
     if lineup_spot is not None:
         hrr_score += max(0, 10 - lineup_spot) * 1.5
 
-    gb_note = get_gb_explanation(ground_ball, barrel, air_pct, xslg)
-
     reasons = []
     reasons.append(f"{lineup_source} lineup pool")
     reasons.append("Statcast damage pass" if statcast_pass else "Failed Statcast damage")
     reasons.append("Pitcher attackable" if pitcher_attackable else "Pitcher less attackable")
     reasons.append("Recent damage form" if recent_form_pass else "Weak recent form")
-    reasons.append(gb_note)
+    if ground_ball >= 50:
+        reasons.append("GB% 50%+ automatic HR fade")
+    elif ground_ball >= 45:
+        reasons.append("High GB caution tier")
+    else:
+        reasons.append("Air-ball profile survives GB gate")
     if barrel >= 12:
         reasons.append("Strong barrel")
     elif hard_hit >= 40:
         reasons.append("Hard-hit target")
     elif air_pct >= 55:
         reasons.append("Air-ball target")
-
-    strict_flag = strict_statcast_ok(pd.Series({
-        "Statcast Pass": "Yes" if statcast_pass else "No",
-        "GroundBall%": ground_ball,
-        "Barrel%": barrel,
-        "AIR%": air_pct,
-        "xSLG": xslg,
-    }))
 
     return {
         "Player": player_name,
@@ -1093,9 +1024,7 @@ def build_hitter_metrics(
         "Pitcher Attackable": "Yes" if pitcher_attackable else "No",
         "Pitch_Isolation_Valid": "No",
         "GB Rule": gb_status,
-        "GB Note": gb_note,
         "HR Eligible": hr_eligible,
-        "Strict Statcast": "Yes" if strict_flag else "No",
         "HR Probability %": round(hr_prob, 1),
         "HRR Score": round(hrr_score, 1),
         "Why": " | ".join(reasons[:6])
@@ -1244,34 +1173,7 @@ def get_strict_hr_pool(df: pd.DataFrame) -> pd.DataFrame:
     hr_pool = df[df["HR Eligible"]].copy()
     if hr_pool.empty:
         return hr_pool
-    hr_pool = sort_for_hr(hr_pool)
-    return add_rank_column(hr_pool)
-
-
-def get_top12_hybrid(df: pd.DataFrame) -> pd.DataFrame:
-    hr_pool = df[df["HR Eligible"]].copy()
-    if hr_pool.empty:
-        return hr_pool
-
-    hr_pool = sort_for_hr(hr_pool)
-    strict_pool = hr_pool[hr_pool["Strict Statcast"] == "Yes"].copy()
-    strict_pool = sort_for_hr(strict_pool)
-
-    strict_keys = set(zip(strict_pool["Player"], strict_pool["Team"], strict_pool["Game"]))
-    fallback_rows = []
-    for _, row in hr_pool.iterrows():
-        key = (row["Player"], row["Team"], row["Game"])
-        if key not in strict_keys:
-            fallback_rows.append(row)
-
-    fallback_df = pd.DataFrame(fallback_rows) if fallback_rows else pd.DataFrame(columns=hr_pool.columns)
-    top12 = pd.concat([strict_pool, fallback_df], ignore_index=True).head(12)
-
-    if top12.empty:
-        return top12
-
-    top12 = sort_for_hr(top12)
-    return add_rank_column(top12)
+    return sort_for_hr(hr_pool)
 
 
 def get_team_game_view(df: pd.DataFrame, game_key: str, team: str):
@@ -1279,29 +1181,26 @@ def get_team_game_view(df: pd.DataFrame, game_key: str, team: str):
     if team_df.empty:
         return team_df, team_df
 
-    hr_pool = team_df[team_df["HR Eligible"]].copy()
-    hr_pool = sort_for_hr(hr_pool).head(4)
-    if not hr_pool.empty:
-        hr_pool = add_rank_column(hr_pool)
+    hr_pool = get_strict_hr_pool(team_df)
+    selected = hr_pool.head(4)
 
     hrr = team_df.sort_values(
         by=["HRR Score", "LineDrive%", "HardHit%", "GroundBall%"],
         ascending=[False, False, False, True]
     ).head(5)
 
-    return hr_pool, hrr
+    return selected, hrr
 
 
 def build_visible_tracker_pool(df: pd.DataFrame, schedule: list[dict]) -> pd.DataFrame:
     visible_frames = []
 
-    hr_board = df[df["HR Eligible"]].copy()
+    hr_board = get_strict_hr_pool(df)
     if not hr_board.empty:
-        hr_board = sort_for_hr(hr_board)
         hr_board["Tracker Source"] = "HR_BOARD"
         visible_frames.append(hr_board)
 
-    top12 = get_top12_hybrid(df).copy()
+    top12 = hr_board.head(12).copy()
     if not top12.empty:
         top12["Tracker Source"] = "TOP12"
         visible_frames.append(top12)
@@ -1473,11 +1372,12 @@ tabs = st.tabs(base_tabs + game_tabs)
 with tabs[0]:
     st.subheader("HR Probability Board")
     hr_df = get_strict_hr_pool(df)
+    hr_df.insert(0, "Rank", range(1, len(hr_df) + 1))
     st.dataframe(
         hr_df[[
             "Rank", "Player", "Team", "Game", "Pitcher", "Lineup Spot",
             "Lineup Source", "HR Probability %", "HR Tier", "GroundBall%",
-            "GB Rule", "GB Note", "HardHit%", "FlyBall%", "AIR%", "xSLG", "xwOBA", "Barrel%", "Why"
+            "HardHit%", "FlyBall%", "AIR%", "xSLG", "xwOBA", "Barrel%", "Why"
         ]],
         use_container_width=True,
         hide_index=True
@@ -1485,13 +1385,13 @@ with tabs[0]:
 
 with tabs[1]:
     st.subheader("Top 12 HR Candidates")
-    st.caption("Strict Statcast first, then best remaining eligible bats")
-    top12 = get_top12_hybrid(df)
+    top12 = get_strict_hr_pool(df).head(12)
+    top12.insert(0, "Rank", range(1, len(top12) + 1))
     st.dataframe(
         top12[[
             "Rank", "Player", "Team", "Game", "Pitcher", "Lineup Spot",
             "Lineup Source", "HR Probability %", "HR Tier", "GroundBall%",
-            "GB Rule", "GB Note", "HardHit%", "FlyBall%", "AIR%", "xSLG", "xwOBA", "Barrel%", "Why"
+            "HardHit%", "FlyBall%", "AIR%", "xSLG", "xwOBA", "Barrel%", "Why"
         ]],
         use_container_width=True,
         hide_index=True
@@ -1515,7 +1415,7 @@ with tabs[2]:
 
 with tabs[3]:
     st.subheader("Engine Breakdown")
-    st.caption("Per-game and full HR lists are ranked best to last. Heavy GB bats are downgraded, not blindly erased unless the profile is truly bad.")
+    st.caption("Statcast-first hitter gate active | Savant season shape + MLB recent form.")
     breakdown = sort_for_hr(df.copy())
     st.dataframe(
         breakdown[[
@@ -1523,8 +1423,8 @@ with tabs[3]:
             "EV", "HardHit%", "FlyBall%", "AIR%", "LineDrive%", "GroundBall%", "Barrel%",
             "xSLG", "xwOBA",
             "Pitcher_HR9_Last7", "Pitcher_Barrel_Allowed", "Pitcher_HardHit_Allowed",
-            "Statcast Pass", "Strict Statcast", "Recent Form Pass", "Pitcher Attackable",
-            "Pitch_Isolation_Valid", "GB Rule", "GB Note", "HR Eligible",
+            "Statcast Pass", "Recent Form Pass", "Pitcher Attackable",
+            "Pitch_Isolation_Valid", "GB Rule", "HR Eligible",
             "HR Probability %", "HRR Score", "Why"
         ]],
         use_container_width=True,
@@ -1599,9 +1499,9 @@ for idx, game in enumerate(schedule, start=5):
                 st.markdown("**Best HR hitters**")
                 st.dataframe(
                     team_hr[[
-                        "Rank", "Player", "Lineup Spot", "Lineup Source", "Statcast Pass",
-                        "Strict Statcast", "Recent Form Pass", "Pitcher Attackable", "HR Probability %",
-                        "HR Tier", "GroundBall%", "GB Rule", "GB Note", "HardHit%", "FlyBall%",
+                        "Player", "Lineup Spot", "Lineup Source", "Statcast Pass",
+                        "Recent Form Pass", "Pitcher Attackable", "HR Probability %",
+                        "HR Tier", "GroundBall%", "HardHit%", "FlyBall%",
                         "AIR%", "xSLG", "xwOBA", "Barrel%", "Why"
                     ]],
                     use_container_width=True,
@@ -1628,9 +1528,9 @@ for idx, game in enumerate(schedule, start=5):
                 st.markdown("**Best HR hitters**")
                 st.dataframe(
                     team_hr[[
-                        "Rank", "Player", "Lineup Spot", "Lineup Source", "Statcast Pass",
-                        "Strict Statcast", "Recent Form Pass", "Pitcher Attackable", "HR Probability %",
-                        "HR Tier", "GroundBall%", "GB Rule", "GB Note", "HardHit%", "FlyBall%",
+                        "Player", "Lineup Spot", "Lineup Source", "Statcast Pass",
+                        "Recent Form Pass", "Pitcher Attackable", "HR Probability %",
+                        "HR Tier", "GroundBall%", "HardHit%", "FlyBall%",
                         "AIR%", "xSLG", "xwOBA", "Barrel%", "Why"
                     ]],
                     use_container_width=True,
