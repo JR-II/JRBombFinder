@@ -186,36 +186,7 @@ def load_tracker() -> pd.DataFrame:
 def save_tracker(df: pd.DataFrame):
     df.to_csv(TRACKER_FILE, index=False)
 
-def isolate_primary_pitch(pitch_mix: dict):
-    """
-    BF Data pitch-isolation logic:
-    isolate pitch if:
-    - usage >= 50%
-    OR
-    - usage >= 20% higher than next-highest pitch
-    """
 
-    if not pitch_mix:
-        return None
-
-    sorted_mix = sorted(
-        pitch_mix.items(),
-        key=lambda x: x[1],
-        reverse=True
-    )
-
-    primary_pitch, primary_usage = sorted_mix[0]
-
-    if primary_usage >= 50:
-        return primary_pitch
-
-    if len(sorted_mix) > 1:
-        second_usage = sorted_mix[1][1]
-        if primary_usage >= second_usage + 20:
-            return primary_pitch
-
-    return None
-    
 def summarize_tracker(df: pd.DataFrame):
     if df.empty:
         return {
@@ -638,48 +609,30 @@ def compute_pitcher_live_metrics_from_map(pitcher_id: int, pitcher_name: str, st
     season_stat = data.get("season", {}) or {}
     gamelog = data.get("gamelog", []) or []
 
-    # --- LAST 7 STARTS WINDOW ---
-    starts_only = [g for g in gamelog if safe_int(g["stat"].get("gamesStarted", 0)) > 0]
-    last7 = starts_only[:7] if starts_only else gamelog[:7]
-
-    # --- L7 CALC ---
-    if last7:
-        ip_l7 = sum(ip_to_float(g["stat"].get("inningsPitched", 0)) for g in last7)
-        hr_l7 = sum(safe_int(g["stat"].get("homeRuns", 0)) for g in last7)
-        hits_l7 = sum(safe_int(g["stat"].get("hits", 0)) for g in last7)
-        walks_l7 = sum(safe_int(g["stat"].get("baseOnBalls", 0)) for g in last7)
-
-        hr9_l7 = (hr_l7 * 9 / ip_l7) if ip_l7 > 0 else 0.0
-        hit9_l7 = (hits_l7 * 9 / ip_l7) if ip_l7 > 0 else 0.0
-        whip_l7 = ((hits_l7 + walks_l7) / ip_l7) if ip_l7 > 0 else 0.0
+    if gamelog:
+        starts_only = [g for g in gamelog if safe_int(g["stat"].get("gamesStarted", 0)) > 0]
+        use_logs = starts_only[:7] if starts_only else gamelog[:7]
     else:
-        hr9_l7 = None
-        hit9_l7 = None
-        whip_l7 = None
+        use_logs = []
 
-    # --- SEASON CALC ---
-    ip_season = ip_to_float(season_stat.get("inningsPitched", 0))
-    hr_season = safe_int(season_stat.get("homeRuns", 0))
-    hits_season = safe_int(season_stat.get("hits", 0))
-    walks_season = safe_int(season_stat.get("baseOnBalls", 0))
+    if use_logs:
+        ip = sum(ip_to_float(g["stat"].get("inningsPitched", 0)) for g in use_logs)
+        hr_allowed = sum(safe_int(g["stat"].get("homeRuns", 0)) for g in use_logs)
+        hits_allowed = sum(safe_int(g["stat"].get("hits", 0)) for g in use_logs)
+        walks_allowed = sum(safe_int(g["stat"].get("baseOnBalls", 0)) for g in use_logs)
 
-    hr9_season = (hr_season * 9 / ip_season) if ip_season > 0 else None
-    hit9_season = (hits_season * 9 / ip_season) if ip_season > 0 else None
-    whip_season = ((hits_season + walks_season) / ip_season) if ip_season > 0 else None
+        hr9 = (hr_allowed * 9 / ip) if ip > 0 else 0.0
+        hit9 = (hits_allowed * 9 / ip) if ip > 0 else 0.0
+        whip = ((hits_allowed + walks_allowed) / ip) if ip > 0 else 0.0
+    else:
+        ip = ip_to_float(season_stat.get("inningsPitched", 0))
+        hr_allowed = safe_int(season_stat.get("homeRuns", 0))
+        hits_allowed = safe_int(season_stat.get("hits", 0))
+        walks_allowed = safe_int(season_stat.get("baseOnBalls", 0))
 
-    # --- BLEND 70% L7 + 30% SEASON ---
-    def blend(l7, season, fallback_low, fallback_high, key):
-        if l7 is not None and season is not None:
-            return (l7 * 0.7) + (season * 0.3)
-        if l7 is not None:
-            return l7
-        if season is not None:
-            return season
-        return stable_float(f"{pitcher_name}-{key}", fallback_low, fallback_high)
-
-    hr9 = blend(hr9_l7, hr9_season, 0.8, 1.6, "hr9")
-    hit9 = blend(hit9_l7, hit9_season, 6.5, 10.5, "hit9")
-    whip = blend(whip_l7, whip_season, 1.0, 1.5, "whip")
+        hr9 = (hr_allowed * 9 / ip) if ip > 0 else stable_float(f"{pitcher_name}-hr9-fallback", 0.8, 1.6)
+        hit9 = (hits_allowed * 9 / ip) if ip > 0 else stable_float(f"{pitcher_name}-hit9-fallback", 6.5, 10.5)
+        whip = ((hits_allowed + walks_allowed) / ip) if ip > 0 else stable_float(f"{pitcher_name}-whip-fallback", 1.0, 1.5)
 
     barrel_allowed = clip(2.5 + hr9 * 4.0 + (hit9 - 6) * 0.5, 3, 15)
     hard_hit_allowed = clip(26 + hr9 * 8 + (whip - 1.0) * 18, 25, 50)
@@ -981,19 +934,7 @@ def build_hitter_metrics(
 
     pullside_boost = stable_float(f"{player_id}-pull", -1, 3)
     park_boost = (park_factor - 1.0) * 20
-# --- BF Data pitch isolation weighting ---
-pitch_mix_example = {
-    "FF": stable_float(f"{opp_pitcher}-ff", 25, 55),
-    "SL": stable_float(f"{opp_pitcher}-sl", 10, 40),
-    "CH": stable_float(f"{opp_pitcher}-ch", 5, 25),
-}
 
-primary_pitch = isolate_primary_pitch(pitch_mix_example)
-
-pitch_isolation_bonus = 0
-
-if primary_pitch:
-    pitch_isolation_bonus = 2.5
     gb_status = "PASS"
     if ground_ball >= 55:
         gb_status = "AUTO NO"
@@ -1034,7 +975,6 @@ if primary_pitch:
         (ev - 87) * 1.1 +
         (xslg * 100) * 1.2 +
         (xiso * 100) * 0.7 +
-        pitch_isolation_bonus +
         (pitch_hr9 - 0.7) * 10.0 +
         (pitch_barrel_allowed - 4) * 0.9 +
         (pitch_hard_hit_allowed - 30) * 0.4 +
