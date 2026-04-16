@@ -219,6 +219,7 @@ def summarize_tracker(df: pd.DataFrame):
             "all_hits": 0,
             "all_pct": 0.0,
         }
+
 def summarize_tracker_by_day(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return pd.DataFrame(columns=[
