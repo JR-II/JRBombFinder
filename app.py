@@ -1677,6 +1677,51 @@ if not daily_summary.empty:
         use_container_width=True,
         hide_index=True
     )
+        if not tracker.empty:
+        st.divider()
+        st.subheader("Historical Day Review")
+
+        available_dates = sorted(
+            tracker["date"].dropna().astype(str).unique().tolist(),
+            reverse=True
+        )
+
+        selected_date = st.selectbox(
+            "Select a saved tracker date to review",
+            available_dates,
+            index=0
+        )
+
+        selected_day_df = tracker[tracker["date"].astype(str) == selected_date].copy()
+        selected_day_df["result_num"] = pd.to_numeric(
+            selected_day_df["result"],
+            errors="coerce"
+        ).fillna(0).astype(int)
+
+        selected_total = len(selected_day_df)
+        selected_hits = int(selected_day_df["result_num"].sum())
+        selected_pct = round(
+            (selected_hits / selected_total) * 100,
+            2
+        ) if selected_total else 0.0
+
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Selected Day Surfaced HR Picks", selected_total)
+        c2.metric("Selected Day Correct HR", selected_hits)
+        c3.metric("Selected Day Hit Rate %", selected_pct)
+
+        st.caption(f"Tracked surfaced picks for {selected_date}")
+        st.dataframe(
+            selected_day_df.sort_values(
+                by=["hr_probability", "player"],
+                ascending=[False, True]
+            )[[
+                "player", "team", "game", "hr_probability", "hr_tier",
+                "hr_eligible", "result", "result_state", "game_state", "updated_at"
+            ]],
+            use_container_width=True,
+            hide_index=True
+        )
 for idx, game in enumerate(schedule, start=5):
     with tabs[idx]:
         st.subheader(game["game_key"])
