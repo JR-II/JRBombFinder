@@ -1665,7 +1665,15 @@ with tabs[4]:
             use_container_width=True,
             hide_index=True
         )
+if not daily_summary.empty:
+    st.divider()
+    st.caption("Daily HR prediction accuracy history")
 
+    st.dataframe(
+        daily_summary,
+        use_container_width=True,
+        hide_index=True
+    )
 for idx, game in enumerate(schedule, start=5):
     with tabs[idx]:
         st.subheader(game["game_key"])
