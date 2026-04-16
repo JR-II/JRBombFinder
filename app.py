@@ -186,7 +186,36 @@ def load_tracker() -> pd.DataFrame:
 def save_tracker(df: pd.DataFrame):
     df.to_csv(TRACKER_FILE, index=False)
 
+def isolate_primary_pitch(pitch_mix: dict):
+    """
+    BF Data pitch-isolation logic:
+    isolate pitch if:
+    - usage >= 50%
+    OR
+    - usage >= 20% higher than next-highest pitch
+    """
 
+    if not pitch_mix:
+        return None
+
+    sorted_mix = sorted(
+        pitch_mix.items(),
+        key=lambda x: x[1],
+        reverse=True
+    )
+
+    primary_pitch, primary_usage = sorted_mix[0]
+
+    if primary_usage >= 50:
+        return primary_pitch
+
+    if len(sorted_mix) > 1:
+        second_usage = sorted_mix[1][1]
+        if primary_usage >= second_usage + 20:
+            return primary_pitch
+
+    return None
+    
 def summarize_tracker(df: pd.DataFrame):
     if df.empty:
         return {
