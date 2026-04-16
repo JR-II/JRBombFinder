@@ -1658,26 +1658,27 @@ with tabs[4]:
         )
 
     if not tracker.empty:
-        st.divider()
-        st.caption("Full tracker history")
-        st.dataframe(
-            tracker.sort_values(
-                by=["date", "hr_probability", "player"],
-                ascending=[False, False, True]
-            ),
-            use_container_width=True,
-            hide_index=True
-        )
-   if not daily_summary.empty:
+    st.divider()
+    st.caption("Full tracker history")
+    st.dataframe(
+        tracker.sort_values(
+            by=["date", "hr_probability", "player"],
+            ascending=[False, False, True]
+        ),
+        use_container_width=True,
+        hide_index=True
+    )
+
+if not daily_summary.empty:
     st.divider()
     st.caption("Daily HR prediction accuracy history")
-
     st.dataframe(
         daily_summary,
         use_container_width=True,
         hide_index=True
     )
- if not tracker.empty:
+
+if not tracker.empty:
     st.divider()
     st.subheader("Historical Day Review")
 
@@ -1703,7 +1704,6 @@ with tabs[4]:
 
     selected_total = len(selected_day_df)
     selected_hits = int(selected_day_df["result_num"].sum())
-
     selected_pct = round(
         (selected_hits / selected_total) * 100,
         2
@@ -1715,7 +1715,6 @@ with tabs[4]:
     c3.metric("Selected Day Hit Rate %", selected_pct)
 
     st.caption(f"Tracked surfaced picks for {selected_date}")
-
     st.dataframe(
         selected_day_df.sort_values(
             by=["hr_probability", "player"],
