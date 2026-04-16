@@ -1642,22 +1642,31 @@ with tabs[4]:
 
     st.divider()
 
-    today_tracker = tracker[tracker["date"].astype(str) == today_str()].copy()
-    if not today_tracker.empty:
-        st.caption("Today's tracked surfaced picks")
-        st.dataframe(
-            today_tracker.sort_values(
-                by=["hr_probability", "player"],
-                ascending=[False, True]
-            )[[
-                "player", "team", "game", "hr_probability", "hr_tier",
-                "hr_eligible", "result", "result_state", "game_state", "updated_at"
-            ]],
-            use_container_width=True,
-            hide_index=True
-        )
+today_tracker = tracker[tracker["date"].astype(str) == today_str].copy()
 
-    if not tracker.empty:
+if not today_tracker.empty:
+    st.caption("Today's tracked surfaced picks")
+    st.dataframe(
+        today_tracker.sort_values(
+            by=["hr_probability", "player"],
+            ascending=[False, True]
+        )[[
+            "player",
+            "team",
+            "game",
+            "hr_probability",
+            "hr_tier",
+            "hr_eligible",
+            "result",
+            "result_state",
+            "game_state",
+            "updated_at"
+        ]],
+        use_container_width=True,
+        hide_index=True
+    )
+
+if not tracker.empty:
     st.divider()
     st.caption("Full tracker history")
     st.dataframe(
@@ -1704,17 +1713,20 @@ if not tracker.empty:
 
     selected_total = len(selected_day_df)
     selected_hits = int(selected_day_df["result_num"].sum())
+
     selected_pct = round(
         (selected_hits / selected_total) * 100,
         2
     ) if selected_total else 0.0
 
     c1, c2, c3 = st.columns(3)
+
     c1.metric("Selected Day Surfaced HR Picks", selected_total)
     c2.metric("Selected Day Correct HR", selected_hits)
     c3.metric("Selected Day Hit Rate %", selected_pct)
 
     st.caption(f"Tracked surfaced picks for {selected_date}")
+
     st.dataframe(
         selected_day_df.sort_values(
             by=["hr_probability", "player"],
