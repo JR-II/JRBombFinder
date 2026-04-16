@@ -2,6 +2,7 @@ import hashlib
 import os
 import re
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import requests
@@ -105,7 +106,8 @@ def team_abbr(name: str) -> str:
 
 
 def today_str() -> str:
-    return datetime.now().strftime("%Y-%m-%d")
+    # Lock tracker + schedule logic to MLB Eastern Time
+    return datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d")
 
 
 def chunked(items, size):
