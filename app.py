@@ -1007,8 +1007,8 @@ def build_hitter_metrics(
 
     primary_pitch = isolate_primary_pitch(pitch_mix_example)
 
-    pitch_isolation_bonus = 0
-    pitch_isolation_valid = "No"
+    pitch_isolation_bonus = -2.5
+pitch_isolation_valid = "No"
 
     if primary_pitch is not None:
         pitch_isolation_valid = "Yes"
