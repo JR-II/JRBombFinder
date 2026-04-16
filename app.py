@@ -959,7 +959,11 @@ def build_hitter_metrics(
     savant_batter_map,
 ):
     live_hitter = compute_hitter_live_metrics_from_map(player_id, hitter_stats_map)
-    live_pitcher = compute_pitcher_live_metrics_from_map(opp_pitcher_id, opp_pitcher, pitcher_stats_map)
+    live_pitcher = compute_pitcher_live_metrics_from_map(
+        opp_pitcher_id,
+        opp_pitcher,
+        pitcher_stats_map,
+    )
 
     if live_hitter is None:
         return None
@@ -996,6 +1000,7 @@ def build_hitter_metrics(
         pitch_hr9 = live_pitcher["Pitcher_HR9_Last7"]
         pitch_barrel_allowed = live_pitcher["Pitcher_Barrel_Allowed"]
         pitch_hard_hit_allowed = live_pitcher["Pitcher_HardHit_Allowed"]
+
     pullside_boost = stable_float(f"{player_id}-pull", -1, 3)
     park_boost = (park_factor - 1.0) * 20
 
@@ -1007,21 +1012,19 @@ def build_hitter_metrics(
 
     primary_pitch = isolate_primary_pitch(pitch_mix_example)
 
-pitch_isolation_bonus = -2.5
-pitch_isolation_valid = "No"
+    pitch_isolation_bonus = -2.5
+    pitch_isolation_valid = "No"
 
-if primary_pitch is not None:
-    pitch_isolation_valid = "Yes"
-    hitter_pitch_fit = stable_float(
-        f"{player_name}-{primary_pitch}-fit",
-        -2.0,
-        4.5
-    )
-    pitch_isolation_bonus = hitter_pitch_fit
+    if primary_pitch is not None:
+        pitch_isolation_valid = "Yes"
+        hitter_pitch_fit = stable_float(
+            f"{player_name}-{primary_pitch}-fit",
+            -2.0,
+            4.5,
+        )
+        pitch_isolation_bonus = hitter_pitch_fit
+
     gb_status = "PASS"
-    
-    
-
     if ground_ball >= 55:
         gb_status = "AUTO NO"
     elif ground_ball >= 50:
@@ -1143,6 +1146,8 @@ if primary_pitch is not None:
     reasons.append("Pitcher attackable" if pitcher_attackable else "Pitcher less attackable")
     reasons.append("Recent damage form" if recent_form_pass else "Weak recent form")
     reasons.append(gb_note)
+    reasons.append("Pitch isolated" if pitch_isolation_valid == "Yes" else "No isolated pitch edge")
+
     if barrel >= 12:
         reasons.append("Strong barrel")
     elif hard_hit >= 40:
@@ -1187,7 +1192,7 @@ if primary_pitch is not None:
         "Strict Statcast": "Yes" if strict_flag else "No",
         "HR Probability %": round(hr_prob, 1),
         "HRR Score": round(hrr_score, 1),
-        "Why": " | ".join(reasons[:6])
+        "Why": " | ".join(reasons[:6]),
     }
 
 
