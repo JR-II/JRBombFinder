@@ -956,7 +956,7 @@ def build_hitter_metrics(
 
     pullside_boost = stable_float(f"{player_id}-pull", -1, 3)
     park_boost = (park_factor - 1.0) * 20
-    pitch_mix_example = {
+        pitch_mix_example = {
         "FF": stable_float(f"{opp_pitcher}-ff", 25, 55),
         "SL": stable_float(f"{opp_pitcher}-sl", 10, 40),
         "CH": stable_float(f"{opp_pitcher}-ch", 5, 25),
@@ -968,8 +968,7 @@ def build_hitter_metrics(
     pitch_isolation_valid = "No"
 
     if primary_pitch is not None:
-        "Pitch_Isolation_Valid": pitch_isolation_valid,
-
+        pitch_isolation_valid = "Yes"
         hitter_pitch_fit = stable_float(
             f"{player_name}-{primary_pitch}-fit",
             -2.0,
