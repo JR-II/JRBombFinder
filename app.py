@@ -1642,7 +1642,9 @@ with tabs[4]:
 
     st.divider()
 
-today_tracker = tracker[tracker["date"].astype(str) == today_str].copy()
+today_tracker = tracker[
+    tracker["date"].astype("string").fillna("") == str(today_str)
+].copy()
 
 if not today_tracker.empty:
     st.caption("Today's tracked surfaced picks")
@@ -1703,8 +1705,8 @@ if not tracker.empty:
     )
 
     selected_day_df = tracker[
-        tracker["date"].astype(str) == selected_date
-    ].copy()
+    tracker["date"].astype("string").fillna("") == str(selected_date)
+].copy()
 
     selected_day_df["result_num"] = pd.to_numeric(
         selected_day_df["result"],
