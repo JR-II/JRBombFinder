@@ -1546,7 +1546,7 @@ tracked_df = build_visible_tracker_pool(df, schedule)
 tracker = sync_tracker_with_board(tracked_df)
 tracker = auto_update_tracker_results(tracker, schedule)
 summary = summarize_tracker(tracker)
-
+daily_summary = summarize_tracker_by_day(tracker)
 with c2:
     st.metric("Games On Slate", len(schedule))
 with c3:
