@@ -1016,18 +1016,9 @@ def build_hitter_metrics(
         pitch_isolation_bonus = hitter_pitch_fit
 
     gb_status = "PASS"
-    pitch_isolation_bonus = 0
-    pitch_isolation_valid = "No"
+    
+    
 
-    if primary_pitch is not None:
-        pitch_isolation_valid = "Yes"
-        hitter_pitch_fit = stable_float(
-            f"{player_name}-{primary_pitch}-fit",
-            -2.0,
-            4.5
-        )
-        pitch_isolation_bonus = hitter_pitch_fit
-    gb_status = "PASS"
     if ground_ball >= 55:
         gb_status = "AUTO NO"
     elif ground_ball >= 50:
@@ -1186,7 +1177,7 @@ def build_hitter_metrics(
         "Statcast Pass": "Yes" if statcast_pass else "No",
         "Recent Form Pass": "Yes" if recent_form_pass else "No",
         "Pitcher Attackable": "Yes" if pitcher_attackable else "No",
-        "Pitch_Isolation_Valid": "No",
+        "Pitch_Isolation_Valid": pitch_isolation_valid,
         "GB Rule": gb_status,
         "GB Note": gb_note,
         "HR Eligible": hr_eligible,
