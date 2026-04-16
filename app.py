@@ -1668,7 +1668,7 @@ with tabs[4]:
             use_container_width=True,
             hide_index=True
         )
-if not daily_summary.empty:
+    if not daily_summary.empty:
     st.divider()
     st.caption("Daily HR prediction accuracy history")
 
@@ -1677,7 +1677,7 @@ if not daily_summary.empty:
         use_container_width=True,
         hide_index=True
     )
- if not tracker.empty:
+    if not tracker.empty:
         st.divider()
         st.subheader("Historical Day Review")
 
