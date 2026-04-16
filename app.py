@@ -82,6 +82,16 @@ def safe_float(value, default=0.0):
         return default
 
 
+def weighted_blend(parts: list[tuple[float, float]]) -> float:
+    usable = [(safe_float(v, 0.0), safe_float(w, 0.0)) for v, w in parts if pd.notna(v) and safe_float(w, 0.0) > 0]
+    if not usable:
+        return 0.0
+    total_weight = sum(w for _, w in usable)
+    if total_weight <= 0:
+        return 0.0
+    return sum(v * w for v, w in usable) / total_weight
+
+
 def ip_to_float(ip_value) -> float:
     if ip_value is None:
         return 0.0
@@ -536,7 +546,7 @@ def fetch_savant_batter_map(year: int):
 def compute_hitter_live_metrics_from_map(player_id: int, stats_map: dict):
     data = stats_map.get(player_id, {"season": {}, "gamelog": []})
     season_stat = data.get("season", {}) or {}
-    gamelog = (data.get("gamelog", []) or [])[:10]
+    gamelog = (data.get("gamelog", []) or [])[:10]  # hitters = Last 10
 
     if not gamelog:
         return None
@@ -607,38 +617,68 @@ def compute_pitcher_live_metrics_from_map(pitcher_id: int, pitcher_name: str, st
     season_stat = data.get("season", {}) or {}
     gamelog = data.get("gamelog", []) or []
 
-    if gamelog:
-        starts_only = [g for g in gamelog if safe_int(g["stat"].get("gamesStarted", 0)) > 0]
-        use_logs = starts_only[:7] if starts_only else gamelog[:7]
+    # pitchers = Last 7
+    starts_only = [g for g in gamelog if safe_int(g["stat"].get("gamesStarted", 0)) > 0]
+    use_logs = starts_only[:7] if starts_only else gamelog[:7]
+
+    season_ip = ip_to_float(season_stat.get("inningsPitched", 0))
+    season_hr_allowed = safe_int(season_stat.get("homeRuns", 0))
+    season_hits_allowed = safe_int(season_stat.get("hits", 0))
+    season_walks_allowed = safe_int(season_stat.get("baseOnBalls", 0))
+
+    if season_ip > 0:
+        season_hr9 = season_hr_allowed * 9 / season_ip
+        season_hit9 = season_hits_allowed * 9 / season_ip
+        season_whip = (season_hits_allowed + season_walks_allowed) / season_ip
     else:
-        use_logs = []
+        season_hr9 = stable_float(f"{pitcher_name}-season-hr9-fallback", 0.8, 1.6)
+        season_hit9 = stable_float(f"{pitcher_name}-season-hit9-fallback", 6.5, 10.5)
+        season_whip = stable_float(f"{pitcher_name}-season-whip-fallback", 1.0, 1.5)
 
     if use_logs:
-        ip = sum(ip_to_float(g["stat"].get("inningsPitched", 0)) for g in use_logs)
-        hr_allowed = sum(safe_int(g["stat"].get("homeRuns", 0)) for g in use_logs)
-        hits_allowed = sum(safe_int(g["stat"].get("hits", 0)) for g in use_logs)
-        walks_allowed = sum(safe_int(g["stat"].get("baseOnBalls", 0)) for g in use_logs)
+        last7_ip = sum(ip_to_float(g["stat"].get("inningsPitched", 0)) for g in use_logs)
+        last7_hr_allowed = sum(safe_int(g["stat"].get("homeRuns", 0)) for g in use_logs)
+        last7_hits_allowed = sum(safe_int(g["stat"].get("hits", 0)) for g in use_logs)
+        last7_walks_allowed = sum(safe_int(g["stat"].get("baseOnBalls", 0)) for g in use_logs)
 
-        hr9 = (hr_allowed * 9 / ip) if ip > 0 else 0.0
-        hit9 = (hits_allowed * 9 / ip) if ip > 0 else 0.0
-        whip = ((hits_allowed + walks_allowed) / ip) if ip > 0 else 0.0
+        last7_hr9 = (last7_hr_allowed * 9 / last7_ip) if last7_ip > 0 else season_hr9
+        last7_hit9 = (last7_hits_allowed * 9 / last7_ip) if last7_ip > 0 else season_hit9
+        last7_whip = ((last7_hits_allowed + last7_walks_allowed) / last7_ip) if last7_ip > 0 else season_whip
     else:
-        ip = ip_to_float(season_stat.get("inningsPitched", 0))
-        hr_allowed = safe_int(season_stat.get("homeRuns", 0))
-        hits_allowed = safe_int(season_stat.get("hits", 0))
-        walks_allowed = safe_int(season_stat.get("baseOnBalls", 0))
+        last7_hr9 = season_hr9
+        last7_hit9 = season_hit9
+        last7_whip = season_whip
 
-        hr9 = (hr_allowed * 9 / ip) if ip > 0 else stable_float(f"{pitcher_name}-hr9-fallback", 0.8, 1.6)
-        hit9 = (hits_allowed * 9 / ip) if ip > 0 else stable_float(f"{pitcher_name}-hit9-fallback", 6.5, 10.5)
-        whip = ((hits_allowed + walks_allowed) / ip) if ip > 0 else stable_float(f"{pitcher_name}-whip-fallback", 1.0, 1.5)
+    season_barrel_allowed = clip(2.5 + season_hr9 * 4.0 + (season_hit9 - 6) * 0.5, 3, 15)
+    season_hard_hit_allowed = clip(26 + season_hr9 * 8 + (season_whip - 1.0) * 18, 25, 50)
 
-    barrel_allowed = clip(2.5 + hr9 * 4.0 + (hit9 - 6) * 0.5, 3, 15)
-    hard_hit_allowed = clip(26 + hr9 * 8 + (whip - 1.0) * 18, 25, 50)
+    last7_barrel_allowed = clip(2.5 + last7_hr9 * 4.0 + (last7_hit9 - 6) * 0.5, 3, 15)
+    last7_hard_hit_allowed = clip(26 + last7_hr9 * 8 + (last7_whip - 1.0) * 18, 25, 50)
+
+    # Season + Last 7 blend
+    blended_hr9 = weighted_blend([
+        (season_hr9, 0.45),
+        (last7_hr9, 0.55),
+    ])
+    blended_barrel_allowed = weighted_blend([
+        (season_barrel_allowed, 0.45),
+        (last7_barrel_allowed, 0.55),
+    ])
+    blended_hard_hit_allowed = weighted_blend([
+        (season_hard_hit_allowed, 0.45),
+        (last7_hard_hit_allowed, 0.55),
+    ])
 
     return {
-        "Pitcher_HR9_Last7": round(hr9, 2),
-        "Pitcher_Barrel_Allowed": round(barrel_allowed, 1),
-        "Pitcher_HardHit_Allowed": round(hard_hit_allowed, 1),
+        "Pitcher_HR9_Season": round(season_hr9, 2),
+        "Pitcher_HR9_Last7": round(last7_hr9, 2),
+        "Pitcher_HR9_Blend": round(blended_hr9, 2),
+        "Pitcher_Barrel_Allowed_Season": round(season_barrel_allowed, 1),
+        "Pitcher_Barrel_Allowed": round(last7_barrel_allowed, 1),
+        "Pitcher_Barrel_Allowed_Blend": round(blended_barrel_allowed, 1),
+        "Pitcher_HardHit_Allowed_Season": round(season_hard_hit_allowed, 1),
+        "Pitcher_HardHit_Allowed": round(last7_hard_hit_allowed, 1),
+        "Pitcher_HardHit_Allowed_Blend": round(blended_hard_hit_allowed, 1),
     }
 
 
@@ -922,13 +962,29 @@ def build_hitter_metrics(
     bats = "L" if int(stable_float(f"{player_id}-bat", 0, 10)) % 2 == 0 else "R"
 
     if live_pitcher is None:
-        pitch_hr9 = stable_float(f"{opp_pitcher}-hr9", 0.7, 1.9)
-        pitch_barrel_allowed = stable_float(f"{opp_pitcher}-barrel-allowed", 4, 13)
-        pitch_hard_hit_allowed = stable_float(f"{opp_pitcher}-hh-allowed", 30, 48)
+        pitch_hr9_last7 = stable_float(f"{opp_pitcher}-hr9-last7-fallback", 0.7, 1.9)
+        pitch_hr9_season = stable_float(f"{opp_pitcher}-hr9-season-fallback", 0.7, 1.9)
+        pitch_hr9_blend = weighted_blend([(pitch_hr9_season, 0.45), (pitch_hr9_last7, 0.55)])
+
+        pitch_barrel_allowed_last7 = stable_float(f"{opp_pitcher}-barrel-last7-fallback", 4, 13)
+        pitch_barrel_allowed_season = stable_float(f"{opp_pitcher}-barrel-season-fallback", 4, 13)
+        pitch_barrel_allowed_blend = weighted_blend([(pitch_barrel_allowed_season, 0.45), (pitch_barrel_allowed_last7, 0.55)])
+
+        pitch_hard_hit_allowed_last7 = stable_float(f"{opp_pitcher}-hh-last7-fallback", 30, 48)
+        pitch_hard_hit_allowed_season = stable_float(f"{opp_pitcher}-hh-season-fallback", 30, 48)
+        pitch_hard_hit_allowed_blend = weighted_blend([(pitch_hard_hit_allowed_season, 0.45), (pitch_hard_hit_allowed_last7, 0.55)])
     else:
-        pitch_hr9 = live_pitcher["Pitcher_HR9_Last7"]
-        pitch_barrel_allowed = live_pitcher["Pitcher_Barrel_Allowed"]
-        pitch_hard_hit_allowed = live_pitcher["Pitcher_HardHit_Allowed"]
+        pitch_hr9_last7 = live_pitcher["Pitcher_HR9_Last7"]
+        pitch_hr9_season = live_pitcher["Pitcher_HR9_Season"]
+        pitch_hr9_blend = live_pitcher["Pitcher_HR9_Blend"]
+
+        pitch_barrel_allowed_last7 = live_pitcher["Pitcher_Barrel_Allowed"]
+        pitch_barrel_allowed_season = live_pitcher["Pitcher_Barrel_Allowed_Season"]
+        pitch_barrel_allowed_blend = live_pitcher["Pitcher_Barrel_Allowed_Blend"]
+
+        pitch_hard_hit_allowed_last7 = live_pitcher["Pitcher_HardHit_Allowed"]
+        pitch_hard_hit_allowed_season = live_pitcher["Pitcher_HardHit_Allowed_Season"]
+        pitch_hard_hit_allowed_blend = live_pitcher["Pitcher_HardHit_Allowed_Blend"]
 
     pullside_boost = stable_float(f"{player_id}-pull", -1, 3)
     park_boost = (park_factor - 1.0) * 20
@@ -952,9 +1008,9 @@ def build_hitter_metrics(
         recent_xbh=recent_xbh,
         recent_iso=recent_iso,
         recent_pa=recent_pa,
-        pitch_hr9=pitch_hr9,
-        pitch_barrel_allowed=pitch_barrel_allowed,
-        pitch_hard_hit_allowed=pitch_hard_hit_allowed,
+        pitch_hr9=pitch_hr9_blend,
+        pitch_barrel_allowed=pitch_barrel_allowed_blend,
+        pitch_hard_hit_allowed=pitch_hard_hit_allowed_blend,
         lineup_source=lineup_source,
     )
 
@@ -973,9 +1029,9 @@ def build_hitter_metrics(
         (ev - 87) * 1.1 +
         (xslg * 100) * 1.2 +
         (xiso * 100) * 0.7 +
-        (pitch_hr9 - 0.7) * 10.0 +
-        (pitch_barrel_allowed - 4) * 0.9 +
-        (pitch_hard_hit_allowed - 30) * 0.4 +
+        (pitch_hr9_blend - 0.7) * 10.0 +
+        (pitch_barrel_allowed_blend - 4) * 0.9 +
+        (pitch_hard_hit_allowed_blend - 30) * 0.4 +
         (recent_hr * 3.2) +
         (recent_xbh * 1.5) +
         (recent_iso * 24.0) +
@@ -1037,7 +1093,7 @@ def build_hitter_metrics(
         (ev - 87) * 1.1 +
         (hard_hit - 28) * 1.0 +
         (line_drive - 14) * 0.9 +
-        (pitch_hard_hit_allowed - 30) * 0.4 +
+        (pitch_hard_hit_allowed_blend - 30) * 0.4 +
         park_boost +
         (recent_runs * 0.7) +
         (recent_rbi * 0.7) +
@@ -1085,9 +1141,15 @@ def build_hitter_metrics(
         "xSLG": round(xslg, 3) if xslg else 0.0,
         "xwOBA": round(xwoba, 3) if xwoba else 0.0,
         "Pitcher": opp_pitcher,
-        "Pitcher_HR9_Last7": round(pitch_hr9, 2),
-        "Pitcher_Barrel_Allowed": round(pitch_barrel_allowed, 1),
-        "Pitcher_HardHit_Allowed": round(pitch_hard_hit_allowed, 1),
+        "Pitcher_HR9_Season": round(pitch_hr9_season, 2),
+        "Pitcher_HR9_Last7": round(pitch_hr9_last7, 2),
+        "Pitcher_HR9_Blend": round(pitch_hr9_blend, 2),
+        "Pitcher_Barrel_Allowed_Season": round(pitch_barrel_allowed_season, 1),
+        "Pitcher_Barrel_Allowed": round(pitch_barrel_allowed_last7, 1),
+        "Pitcher_Barrel_Allowed_Blend": round(pitch_barrel_allowed_blend, 1),
+        "Pitcher_HardHit_Allowed_Season": round(pitch_hard_hit_allowed_season, 1),
+        "Pitcher_HardHit_Allowed": round(pitch_hard_hit_allowed_last7, 1),
+        "Pitcher_HardHit_Allowed_Blend": round(pitch_hard_hit_allowed_blend, 1),
         "Statcast Pass": "Yes" if statcast_pass else "No",
         "Recent Form Pass": "Yes" if recent_form_pass else "No",
         "Pitcher Attackable": "Yes" if pitcher_attackable else "No",
@@ -1124,8 +1186,8 @@ def sort_for_hr(df: pd.DataFrame) -> pd.DataFrame:
             "AIR%",
             "xSLG",
             "GroundBall%",
-            "Pitcher_HR9_Last7",
-            "Pitcher_Barrel_Allowed",
+            "Pitcher_HR9_Blend",
+            "Pitcher_Barrel_Allowed_Blend",
             "HRR Score",
         ],
         ascending=[False, True, False, False, False, False, True, False, False, False],
@@ -1515,14 +1577,16 @@ with tabs[2]:
 
 with tabs[3]:
     st.subheader("Engine Breakdown")
-    st.caption("Per-game and full HR lists are ranked best to last. Heavy GB bats are downgraded, not blindly erased unless the profile is truly bad.")
+    st.caption("Hitters = Last 10 | Pitchers = raw Last 7 plus Season + Last 7 blend for scoring.")
     breakdown = sort_for_hr(df.copy())
     st.dataframe(
         breakdown[[
             "Player", "Team", "Game", "Pitcher", "Lineup Spot", "Lineup Source",
             "EV", "HardHit%", "FlyBall%", "AIR%", "LineDrive%", "GroundBall%", "Barrel%",
             "xSLG", "xwOBA",
-            "Pitcher_HR9_Last7", "Pitcher_Barrel_Allowed", "Pitcher_HardHit_Allowed",
+            "Pitcher_HR9_Season", "Pitcher_HR9_Last7", "Pitcher_HR9_Blend",
+            "Pitcher_Barrel_Allowed_Season", "Pitcher_Barrel_Allowed", "Pitcher_Barrel_Allowed_Blend",
+            "Pitcher_HardHit_Allowed_Season", "Pitcher_HardHit_Allowed", "Pitcher_HardHit_Allowed_Blend",
             "Statcast Pass", "Strict Statcast", "Recent Form Pass", "Pitcher Attackable",
             "Pitch_Isolation_Valid", "GB Rule", "GB Note", "HR Eligible",
             "HR Probability %", "HRR Score", "Why"
