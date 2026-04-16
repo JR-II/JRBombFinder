@@ -219,7 +219,43 @@ def summarize_tracker(df: pd.DataFrame):
             "all_hits": 0,
             "all_pct": 0.0,
         }
+def summarize_tracker_by_day(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return pd.DataFrame(columns=[
+            "date",
+            "surfaced_hr_picks",
+            "correct_hr",
+            "hit_rate_pct"
+        ])
 
+    work = df.copy()
+    work["result_num"] = pd.to_numeric(
+        work["result"],
+        errors="coerce"
+    ).fillna(0).astype(int)
+
+    daily = (
+        work.groupby("date", as_index=False)
+        .agg(
+            surfaced_hr_picks=("player", "count"),
+            correct_hr=("result_num", "sum"),
+        )
+    )
+
+    daily["hit_rate_pct"] = daily.apply(
+        lambda row: round(
+            (row["correct_hr"] / row["surfaced_hr_picks"]) * 100,
+            2
+        ) if row["surfaced_hr_picks"] else 0.0,
+        axis=1
+    )
+
+    daily = daily.sort_values(
+        "date",
+        ascending=False
+    ).reset_index(drop=True)
+
+    return daily
     df = df.copy()
     df["result_num"] = pd.to_numeric(df["result"], errors="coerce").fillna(0).astype(int)
 
