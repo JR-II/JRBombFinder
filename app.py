@@ -1007,18 +1007,17 @@ def build_hitter_metrics(
 
     primary_pitch = isolate_primary_pitch(pitch_mix_example)
 
-    pitch_isolation_bonus = -2.5
+pitch_isolation_bonus = -2.5
 pitch_isolation_valid = "No"
 
-    if primary_pitch is not None:
-        pitch_isolation_valid = "Yes"
-        hitter_pitch_fit = stable_float(
-            f"{player_name}-{primary_pitch}-fit",
-            -2.0,
-            4.5
-        )
-        pitch_isolation_bonus = hitter_pitch_fit
-
+if primary_pitch is not None:
+    pitch_isolation_valid = "Yes"
+    hitter_pitch_fit = stable_float(
+        f"{player_name}-{primary_pitch}-fit",
+        -2.0,
+        4.5
+    )
+    pitch_isolation_bonus = hitter_pitch_fit
     gb_status = "PASS"
     
     
