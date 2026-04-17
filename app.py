@@ -1384,6 +1384,16 @@ def get_team_candidate_hitters(game_pk: int, team_id: int, side: str, savant_bat
             or (sav_la >= 15 and sav_la <= 24 and sav_brl >= 11)
         )
 
+        projected_authority_score, projected_authority_multiplier, projected_authority_tier = compute_statcast_authority(
+            safe_float(sav.get("Savant_EV"), metrics["EV"]),
+            sav_brl,
+            sav_hh,
+            sav_air,
+            sav_la,
+            sav_xslg,
+            sav_gb,
+        )
+
         strong_projected_candidate = (
             metrics["recent_pa"] >= 12 and
             metrics["season_games"] >= 3 and
@@ -1395,6 +1405,11 @@ def get_team_candidate_hitters(game_pk: int, team_id: int, side: str, savant_bat
             ) and
             gb_survival
         )
+
+        if projected_authority_tier == "FAIL" and not elite_projection_override:
+            strong_projected_candidate = False
+        elif projected_authority_tier == "WEAK" and not (elite_projection_override or projected_recent_pass):
+            strong_projected_candidate = False
 
         if not strong_projected_candidate:
             continue
@@ -1408,8 +1423,18 @@ def get_team_candidate_hitters(game_pk: int, team_id: int, side: str, savant_bat
             max(0, 24 - abs(sav_la - 18)) * 0.6 +
             metrics["recent_hr"] * 5.5 +
             metrics["recent_xbh"] * 2.0 +
-            metrics["recent_iso"] * 18
+            metrics["recent_iso"] * 18 +
+            projected_authority_score * 0.9
         )
+
+        if projected_authority_tier == "ELITE":
+            lineup_likelihood += 10.0
+        elif projected_authority_tier == "STRONG":
+            lineup_likelihood += 5.0
+        elif projected_authority_tier == "MEDIUM":
+            lineup_likelihood += 0.5
+        elif projected_authority_tier == "WEAK":
+            lineup_likelihood -= 8.0
 
         scored.append({
             **h,
@@ -2373,8 +2398,6 @@ def sync_tracker_with_board(tracked_df: pd.DataFrame):
 
     new_rows = []
     for _, row in tracked_df.iterrows():
-        if str(row.get("Lineup Source", "")) != "CONFIRMED":
-            continue
         key = (row["Player"], row["Team"], row["Game"])
         if key in existing_keys:
             continue
