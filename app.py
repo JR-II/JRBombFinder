@@ -601,6 +601,128 @@ def fetch_weather_for_park(home_team_abbr: str):
     }
 
 
+@st.cache_data(ttl=1800)
+def get_previous_team_game_pk(team_id: int):
+    start_date = datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d")
+    try:
+        start_dt = datetime.now(ZoneInfo("America/New_York"))
+        past_dt = start_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+        from datetime import timedelta
+        start_range = (past_dt - timedelta(days=7)).strftime("%Y-%m-%d")
+        end_range = (past_dt - timedelta(days=1)).strftime("%Y-%m-%d")
+        url = (
+            "https://statsapi.mlb.com/api/v1/schedule"
+            f"?sportId=1&teamId={team_id}&startDate={start_range}&endDate={end_range}"
+        )
+        resp = requests.get(url, timeout=20)
+        resp.raise_for_status()
+        payload = resp.json()
+    except Exception:
+        return None
+
+    games = []
+    for date_block in payload.get("dates", []):
+        for game in date_block.get("games", []):
+            game_date = game.get("gameDate", "")
+            if game.get("status", {}).get("abstractGameState") != "Final":
+                continue
+            games.append((game_date, game.get("gamePk")))
+    if not games:
+        return None
+    games = sorted(games, key=lambda x: x[0], reverse=True)
+    return games[0][1]
+
+
+@st.cache_data(ttl=1800)
+def fetch_bullpen_fatigue_for_team(team_id: int):
+    game_pk = get_previous_team_game_pk(team_id)
+    neutral = {
+        "BullpenFatigueScore": 0.0,
+        "BullpenFatigueNote": "Neutral bullpen rest",
+        "BullpenIPPrev": 0.0,
+        "BullpenArmsPrev": 0,
+        "BullpenPitchesPrev": 0,
+    }
+    if game_pk is None:
+        return neutral
+
+    box = fetch_boxscore(game_pk)
+    teams_block = box.get("teams", {}) or {}
+
+    for side in ["away", "home"]:
+        team_block = teams_block.get(side, {}) or {}
+        team_info = team_block.get("team", {}) or {}
+        if team_info.get("id") != team_id:
+            continue
+
+        players = team_block.get("players", {}) or {}
+        starter_id = None
+        for pdata in players.values():
+            stats = ((pdata.get("stats") or {}).get("pitching") or {})
+            if safe_int(stats.get("gamesStarted", 0)) > 0:
+                starter_id = (pdata.get("person") or {}).get("id")
+                break
+
+        bullpen_ip = 0.0
+        bullpen_pitches = 0
+        bullpen_arms = 0
+
+        for pdata in players.values():
+            pos_type = ((pdata.get("position") or {}).get("type") or (pdata.get("primaryPosition") or {}).get("type") or "")
+            if pos_type != "Pitcher":
+                continue
+
+            pid = (pdata.get("person") or {}).get("id")
+            if starter_id is not None and pid == starter_id:
+                continue
+
+            stats = ((pdata.get("stats") or {}).get("pitching") or {})
+            ip = ip_to_float(stats.get("inningsPitched", 0))
+            pitches = safe_int(stats.get("numberOfPitches", 0))
+            if ip <= 0 and pitches <= 0:
+                continue
+
+            bullpen_ip += ip
+            bullpen_pitches += pitches
+            bullpen_arms += 1
+
+        fatigue_score = 0.0
+        notes = []
+
+        if bullpen_ip >= 5.0:
+            fatigue_score += 2.1
+            notes.append("heavy bullpen usage")
+        elif bullpen_ip >= 3.5:
+            fatigue_score += 1.1
+            notes.append("live bullpen usage")
+        else:
+            notes.append("rested bullpen")
+
+        if bullpen_arms >= 5:
+            fatigue_score += 1.0
+            notes.append("many bullpen arms used")
+        elif bullpen_arms >= 3:
+            fatigue_score += 0.4
+
+        if bullpen_pitches >= 85:
+            fatigue_score += 1.0
+        elif bullpen_pitches >= 60:
+            fatigue_score += 0.5
+
+        if not notes:
+            notes.append("neutral bullpen rest")
+
+        return {
+            "BullpenFatigueScore": round(fatigue_score, 2),
+            "BullpenFatigueNote": " | ".join(notes[:2]),
+            "BullpenIPPrev": round(bullpen_ip, 1),
+            "BullpenArmsPrev": bullpen_arms,
+            "BullpenPitchesPrev": bullpen_pitches,
+        }
+
+    return neutral
+
+
 @st.cache_data(ttl=300)
 def fetch_schedule_payload():
     url = (
@@ -1237,6 +1359,10 @@ def build_hitter_metrics(
     weather_note: str = "neutral weather",
     temp_f: float = 72.0,
     wind_mph: float = 7.0,
+    bullpen_fatigue_score: float = 0.0,
+    bullpen_fatigue_note: str = "Neutral bullpen rest",
+    bullpen_ip_prev: float = 0.0,
+    bullpen_arms_prev: int = 0,
 ):
     live_hitter = compute_hitter_live_metrics_from_map(player_id, hitter_stats_map)
     live_pitcher = compute_pitcher_live_metrics_from_map(
@@ -1302,6 +1428,7 @@ def build_hitter_metrics(
     pullside_boost = stable_float(f"{player_id}-pull", -1, 3)
     park_boost = (park_factor - 1.0) * 20
     weather_score_boost = weather_boost * 1.6
+    bullpen_fatigue_boost = bullpen_fatigue_score * 1.8
 
     pitch_mix_example = build_pitch_mix_profile(
         opp_pitcher,
@@ -1408,7 +1535,8 @@ def build_hitter_metrics(
         (recent_damage_score * 0.22) +
         pullside_boost +
         park_boost +
-        weather_score_boost
+        weather_score_boost +
+        bullpen_fatigue_boost
     )
 
     if lineup_spot is not None:
@@ -1488,7 +1616,8 @@ def build_hitter_metrics(
         (recent_runs * 0.7) +
         (recent_rbi * 0.7) +
         (recent_avg * 15) +
-        (weather_boost * 0.8)
+        (weather_boost * 0.8) +
+        (bullpen_fatigue_score * 0.7)
     )
     if lineup_spot is not None:
         hrr_score += max(0, 10 - lineup_spot) * 1.5
@@ -1526,6 +1655,13 @@ def build_hitter_metrics(
     else:
         reasons.append("Neutral weather")
 
+    if bullpen_fatigue_score >= 2.0:
+        reasons.append("Bullpen fatigue boost")
+    elif bullpen_fatigue_score >= 0.8:
+        reasons.append("Bullpen slightly taxed")
+    else:
+        reasons.append("Bullpen rested")
+
     if ground_ball >= 50:
         reasons.append("Heavy GB downgrade")
     elif ground_ball >= 45:
@@ -1555,7 +1691,8 @@ def build_hitter_metrics(
         (recent_damage_score * 0.35) +
         (pitch_matchup_score * 2.4) +
         (handedness_edge * 2.0) +
-        (weather_boost * 4.0)
+        (weather_boost * 4.0) +
+        (bullpen_fatigue_score * 4.8)
     )
 
     if pitch_isolation_valid == "Yes":
@@ -1638,6 +1775,10 @@ def build_hitter_metrics(
         "WindMPH": round(wind_mph, 1),
         "WeatherBoost": round(weather_boost, 2),
         "WeatherNote": weather_note,
+        "BullpenFatigueScore": round(bullpen_fatigue_score, 2),
+        "BullpenFatigueNote": bullpen_fatigue_note,
+        "BullpenIPPrev": round(bullpen_ip_prev, 1),
+        "BullpenArmsPrev": int(bullpen_arms_prev),
         "Why": " | ".join(reasons[:6]),
     }
 
@@ -1763,6 +1904,8 @@ def build_daily_dataset():
         away_park = PARK_FACTORS.get(home_abbr, 1.00)
         home_park = PARK_FACTORS.get(home_abbr, 1.00)
         weather = fetch_weather_for_park(home_abbr)
+        home_bullpen = fetch_bullpen_fatigue_for_team(game["home_team_id"])
+        away_bullpen = fetch_bullpen_fatigue_for_team(game["away_team_id"])
 
         away_candidates, away_source = candidate_map[(game["game_pk"], "away")]
         home_candidates, home_source = candidate_map[(game["game_pk"], "home")]
@@ -1784,6 +1927,10 @@ def build_daily_dataset():
                 weather_note=weather.get("WeatherNote", "neutral weather"),
                 temp_f=weather.get("TempF", 72.0),
                 wind_mph=weather.get("WindMPH", 7.0),
+                bullpen_fatigue_score=home_bullpen.get("BullpenFatigueScore", 0.0),
+                bullpen_fatigue_note=home_bullpen.get("BullpenFatigueNote", "Neutral bullpen rest"),
+                bullpen_ip_prev=home_bullpen.get("BullpenIPPrev", 0.0),
+                bullpen_arms_prev=home_bullpen.get("BullpenArmsPrev", 0),
             )
             if metrics is not None:
                 rows.append({
@@ -1813,6 +1960,10 @@ def build_daily_dataset():
                 weather_note=weather.get("WeatherNote", "neutral weather"),
                 temp_f=weather.get("TempF", 72.0),
                 wind_mph=weather.get("WindMPH", 7.0),
+                bullpen_fatigue_score=away_bullpen.get("BullpenFatigueScore", 0.0),
+                bullpen_fatigue_note=away_bullpen.get("BullpenFatigueNote", "Neutral bullpen rest"),
+                bullpen_ip_prev=away_bullpen.get("BullpenIPPrev", 0.0),
+                bullpen_arms_prev=away_bullpen.get("BullpenArmsPrev", 0),
             )
             if metrics is not None:
                 rows.append({
@@ -2090,7 +2241,7 @@ with tabs[0]:
         hr_df[[
             "Rank", "Player", "Team", "Game", "Pitcher", "Lineup Spot",
             "Lineup Source", "HR Probability %", "HR Tier", "GroundBall%",
-            "GB Rule", "GB Note", "WeatherNote", "HardHit%", "FlyBall%", "AIR%", "xSLG", "xwOBA", "Barrel%", "Why"
+            "GB Rule", "GB Note", "WeatherNote", "BullpenFatigueNote", "HardHit%", "FlyBall%", "AIR%", "xSLG", "xwOBA", "Barrel%", "Why"
         ]],
         use_container_width=True,
         hide_index=True
@@ -2104,7 +2255,7 @@ with tabs[1]:
         top12[[
             "Rank", "Player", "Team", "Game", "Pitcher", "Lineup Spot",
             "Lineup Source", "HR Probability %", "HR Tier", "GroundBall%",
-            "GB Rule", "GB Note", "WeatherNote", "HardHit%", "FlyBall%", "AIR%", "xSLG", "xwOBA", "Barrel%", "Why"
+            "GB Rule", "GB Note", "WeatherNote", "BullpenFatigueNote", "HardHit%", "FlyBall%", "AIR%", "xSLG", "xwOBA", "Barrel%", "Why"
         ]],
         use_container_width=True,
         hide_index=True
@@ -2138,7 +2289,7 @@ with tabs[3]:
             "xSLG", "xwOBA",
             "Pitcher_HR9_Last7", "Pitcher_Barrel_Allowed", "Pitcher_HardHit_Allowed",
             "Statcast Pass", "Strict Statcast", "Recent Form Pass", "Pitcher Attackable",
-            "Pitch_Isolation_Valid", "GB Rule", "GB Note", "WeatherNote", "TempF", "WindMPH", "HR Eligible",
+            "Pitch_Isolation_Valid", "GB Rule", "GB Note", "WeatherNote", "BullpenFatigueNote", "BullpenFatigueScore", "TempF", "WindMPH", "HR Eligible",
             "HR Probability %", "HRR Score", "Why"
         ]],
         use_container_width=True,
@@ -2292,7 +2443,7 @@ for idx, game in enumerate(schedule, start=5):
                     team_hr[[
                         "Rank", "Player", "Lineup Spot", "Lineup Source", "Statcast Pass",
                         "Strict Statcast", "Recent Form Pass", "Pitcher Attackable", "HR Probability %",
-                        "HR Tier", "GroundBall%", "GB Rule", "GB Note", "WeatherNote", "HardHit%", "FlyBall%",
+                        "HR Tier", "GroundBall%", "GB Rule", "GB Note", "WeatherNote", "BullpenFatigueNote", "HardHit%", "FlyBall%",
                         "AIR%", "xSLG", "xwOBA", "Barrel%", "Why"
                     ]],
                     use_container_width=True,
@@ -2325,7 +2476,7 @@ for idx, game in enumerate(schedule, start=5):
                     team_hr[[
                         "Rank", "Player", "Lineup Spot", "Lineup Source", "Statcast Pass",
                         "Strict Statcast", "Recent Form Pass", "Pitcher Attackable", "HR Probability %",
-                        "HR Tier", "GroundBall%", "GB Rule", "GB Note", "WeatherNote", "HardHit%", "FlyBall%",
+                        "HR Tier", "GroundBall%", "GB Rule", "GB Note", "WeatherNote", "BullpenFatigueNote", "HardHit%", "FlyBall%",
                         "AIR%", "xSLG", "xwOBA", "Barrel%", "Why"
                     ]],
                     use_container_width=True,
