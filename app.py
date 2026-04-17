@@ -2469,16 +2469,15 @@ def sync_tracker_with_board(tracked_df: pd.DataFrame):
         return tracker
 
     existing_today = tracker[tracker["date"].astype(str) == date_key].copy()
-    existing_keys = set(
-        zip(existing_today["player"], existing_today["team"], existing_today["game"])
-    )
+
+    # Freeze the day's surfaced HR prediction pool once it has been created.
+    # This prevents the locked daily surfaced count from inflating later
+    # because of lineup changes, refreshes, or late board reshuffles.
+    if not existing_today.empty:
+        return tracker
 
     new_rows = []
     for _, row in tracked_df.iterrows():
-        key = (row["Player"], row["Team"], row["Game"])
-        if key in existing_keys:
-            continue
-
         new_rows.append({
             "date": date_key,
             "player": row["Player"],
