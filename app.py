@@ -68,40 +68,6 @@ PARK_FACTORS = {
     "STL": 1.00, "TB": 0.97, "TEX": 1.07, "TOR": 1.04, "WSH": 1.00,
 }
 
-PARK_COORDS = {
-    "ARI": (33.4455, -112.0667),
-    "ATL": (33.8907, -84.4677),
-    "BAL": (39.2840, -76.6217),
-    "BOS": (42.3467, -71.0972),
-    "CHC": (41.9484, -87.6553),
-    "CWS": (41.8300, -87.6339),
-    "CIN": (39.0979, -84.5082),
-    "CLE": (41.4962, -81.6852),
-    "COL": (39.7561, -104.9942),
-    "DET": (42.3390, -83.0485),
-    "HOU": (29.7573, -95.3555),
-    "KC": (39.0517, -94.4803),
-    "LAA": (33.8003, -117.8827),
-    "LAD": (34.0739, -118.2400),
-    "MIA": (25.7781, -80.2197),
-    "MIL": (43.0280, -87.9712),
-    "MIN": (44.9817, -93.2776),
-    "NYM": (40.7571, -73.8458),
-    "NYY": (40.8296, -73.9262),
-    "ATH": (38.2270, -107.6720),
-    "PHI": (39.9057, -75.1665),
-    "PIT": (40.4469, -80.0057),
-    "SD": (32.7073, -117.1573),
-    "SF": (37.7786, -122.3893),
-    "SEA": (47.5914, -122.3325),
-    "STL": (38.6226, -90.1928),
-    "TB": (27.7682, -82.6534),
-    "TEX": (32.7473, -97.0842),
-    "TOR": (43.6414, -79.3894),
-    "WSH": (38.8730, -77.0074),
-}
-
-
 
 def stable_float(key: str, low: float, high: float) -> float:
     digest = hashlib.md5(key.encode("utf-8")).hexdigest()
@@ -528,77 +494,6 @@ def get_gb_explanation(ground_ball: float, barrel: float, air_pct: float, xslg: 
             return "Borderline GB, but damage traits keep it alive"
         return "Borderline GB caution"
     return "Clean enough launch shape"
-
-
-def compute_weather_boost(temp_f: float, wind_mph: float) -> tuple[float, str]:
-    boost = 0.0
-    notes = []
-
-    if temp_f >= 85:
-        boost += 2.4
-        notes.append("hot carry weather")
-    elif temp_f >= 75:
-        boost += 1.4
-        notes.append("warm carry weather")
-    elif temp_f <= 50:
-        boost -= 1.8
-        notes.append("cold dense air")
-    elif temp_f <= 60:
-        boost -= 0.8
-        notes.append("cool air")
-
-    if wind_mph >= 15:
-        boost += 1.6
-        notes.append("strong wind")
-    elif wind_mph >= 10:
-        boost += 0.8
-        notes.append("live wind")
-    elif wind_mph <= 3:
-        notes.append("neutral wind")
-
-    if not notes:
-        notes.append("neutral weather")
-
-    return round(boost, 2), " | ".join(notes[:2])
-
-
-@st.cache_data(ttl=1800)
-def fetch_weather_for_park(home_team_abbr: str):
-    coords = PARK_COORDS.get(home_team_abbr)
-    if not coords:
-        return {
-            "TempF": 72.0,
-            "WindMPH": 7.0,
-            "WeatherBoost": 0.0,
-            "WeatherNote": "neutral weather",
-        }
-
-    lat, lon = coords
-    url = (
-        "https://api.open-meteo.com/v1/forecast"
-        f"?latitude={lat}&longitude={lon}"
-        "&current=temperature_2m,wind_speed_10m"
-        "&temperature_unit=fahrenheit&wind_speed_unit=mph"
-    )
-
-    try:
-        resp = requests.get(url, timeout=15)
-        resp.raise_for_status()
-        data = resp.json()
-        current = data.get("current", {}) or {}
-        temp_f = safe_float(current.get("temperature_2m"), 72.0)
-        wind_mph = safe_float(current.get("wind_speed_10m"), 7.0)
-    except Exception:
-        temp_f = 72.0
-        wind_mph = 7.0
-
-    boost, note = compute_weather_boost(temp_f, wind_mph)
-    return {
-        "TempF": round(temp_f, 1),
-        "WindMPH": round(wind_mph, 1),
-        "WeatherBoost": boost,
-        "WeatherNote": note,
-    }
 
 
 @st.cache_data(ttl=300)
@@ -1233,10 +1128,6 @@ def build_hitter_metrics(
     hitter_stats_map,
     pitcher_stats_map,
     savant_batter_map,
-    weather_boost: float = 0.0,
-    weather_note: str = "neutral weather",
-    temp_f: float = 72.0,
-    wind_mph: float = 7.0,
 ):
     live_hitter = compute_hitter_live_metrics_from_map(player_id, hitter_stats_map)
     live_pitcher = compute_pitcher_live_metrics_from_map(
@@ -1301,7 +1192,6 @@ def build_hitter_metrics(
 
     pullside_boost = stable_float(f"{player_id}-pull", -1, 3)
     park_boost = (park_factor - 1.0) * 20
-    weather_score_boost = weather_boost * 1.6
 
     pitch_mix_example = build_pitch_mix_profile(
         opp_pitcher,
@@ -1407,8 +1297,7 @@ def build_hitter_metrics(
         (recent_iso * 24.0) +
         (recent_damage_score * 0.22) +
         pullside_boost +
-        park_boost +
-        weather_score_boost
+        park_boost
     )
 
     if lineup_spot is not None:
@@ -1473,6 +1362,12 @@ def build_hitter_metrics(
         base_score -= 4.0
     if elite_override and ground_ball < 55:
         base_score += 2.5
+    if bullpen_fatigue_score >= 4.5:
+        base_score += 3.0
+    elif bullpen_fatigue_score >= 2.5:
+        base_score += 1.6
+    elif bullpen_fatigue_score <= 0.5:
+        base_score -= 0.4
 
     if not hr_eligible:
         hr_prob = 0.0
@@ -1487,8 +1382,7 @@ def build_hitter_metrics(
         park_boost +
         (recent_runs * 0.7) +
         (recent_rbi * 0.7) +
-        (recent_avg * 15) +
-        (weather_boost * 0.8)
+        (recent_avg * 15)
     )
     if lineup_spot is not None:
         hrr_score += max(0, 10 - lineup_spot) * 1.5
@@ -1519,13 +1413,6 @@ def build_hitter_metrics(
     else:
         reasons.append("Neutral recent trend")
 
-    if weather_boost >= 1.5:
-        reasons.append("Weather carry boost")
-    elif weather_boost <= -1.0:
-        reasons.append("Weather suppression")
-    else:
-        reasons.append("Neutral weather")
-
     if ground_ball >= 50:
         reasons.append("Heavy GB downgrade")
     elif ground_ball >= 45:
@@ -1554,8 +1441,7 @@ def build_hitter_metrics(
         (recent_iso * 24.0) +
         (recent_damage_score * 0.35) +
         (pitch_matchup_score * 2.4) +
-        (handedness_edge * 2.0) +
-        (weather_boost * 4.0)
+        (handedness_edge * 2.0)
     )
 
     if pitch_isolation_valid == "Yes":
@@ -1587,6 +1473,11 @@ def build_hitter_metrics(
             model_rank_score += 5.0
         elif lineup_spot <= 6:
             model_rank_score += 2.0
+
+    if bullpen_fatigue_score >= 4.5:
+        model_rank_score += 5.0
+    elif bullpen_fatigue_score >= 2.5:
+        model_rank_score += 2.5
 
     strict_flag = strict_statcast_ok(pd.Series({
         "Statcast Pass": "Yes" if statcast_pass else "No",
@@ -1634,10 +1525,6 @@ def build_hitter_metrics(
         "HR Probability %": round(hr_prob, 1),
         "HRR Score": round(hrr_score, 1),
         "Model Rank Score": round(model_rank_score, 2),
-        "TempF": round(temp_f, 1),
-        "WindMPH": round(wind_mph, 1),
-        "WeatherBoost": round(weather_boost, 2),
-        "WeatherNote": weather_note,
         "Why": " | ".join(reasons[:6]),
     }
 
@@ -1762,7 +1649,6 @@ def build_daily_dataset():
         home_abbr = team_abbr(game["home_team"])
         away_park = PARK_FACTORS.get(home_abbr, 1.00)
         home_park = PARK_FACTORS.get(home_abbr, 1.00)
-        weather = fetch_weather_for_park(home_abbr)
 
         away_candidates, away_source = candidate_map[(game["game_pk"], "away")]
         home_candidates, home_source = candidate_map[(game["game_pk"], "home")]
@@ -1780,10 +1666,6 @@ def build_daily_dataset():
                 hitter_stats_map=hitter_stats_map,
                 pitcher_stats_map=pitcher_stats_map,
                 savant_batter_map=savant_batter_map,
-                weather_boost=weather.get("WeatherBoost", 0.0),
-                weather_note=weather.get("WeatherNote", "neutral weather"),
-                temp_f=weather.get("TempF", 72.0),
-                wind_mph=weather.get("WindMPH", 7.0),
             )
             if metrics is not None:
                 rows.append({
@@ -1809,10 +1691,6 @@ def build_daily_dataset():
                 hitter_stats_map=hitter_stats_map,
                 pitcher_stats_map=pitcher_stats_map,
                 savant_batter_map=savant_batter_map,
-                weather_boost=weather.get("WeatherBoost", 0.0),
-                weather_note=weather.get("WeatherNote", "neutral weather"),
-                temp_f=weather.get("TempF", 72.0),
-                wind_mph=weather.get("WindMPH", 7.0),
             )
             if metrics is not None:
                 rows.append({
@@ -2090,7 +1968,7 @@ with tabs[0]:
         hr_df[[
             "Rank", "Player", "Team", "Game", "Pitcher", "Lineup Spot",
             "Lineup Source", "HR Probability %", "HR Tier", "GroundBall%",
-            "GB Rule", "GB Note", "WeatherNote", "HardHit%", "FlyBall%", "AIR%", "xSLG", "xwOBA", "Barrel%", "Why"
+            "GB Rule", "GB Note", "HardHit%", "FlyBall%", "AIR%", "xSLG", "xwOBA", "Barrel%", "Why"
         ]],
         use_container_width=True,
         hide_index=True
@@ -2104,7 +1982,7 @@ with tabs[1]:
         top12[[
             "Rank", "Player", "Team", "Game", "Pitcher", "Lineup Spot",
             "Lineup Source", "HR Probability %", "HR Tier", "GroundBall%",
-            "GB Rule", "GB Note", "WeatherNote", "HardHit%", "FlyBall%", "AIR%", "xSLG", "xwOBA", "Barrel%", "Why"
+            "GB Rule", "GB Note", "HardHit%", "FlyBall%", "AIR%", "xSLG", "xwOBA", "Barrel%", "Why"
         ]],
         use_container_width=True,
         hide_index=True
@@ -2138,7 +2016,7 @@ with tabs[3]:
             "xSLG", "xwOBA",
             "Pitcher_HR9_Last7", "Pitcher_Barrel_Allowed", "Pitcher_HardHit_Allowed",
             "Statcast Pass", "Strict Statcast", "Recent Form Pass", "Pitcher Attackable",
-            "Pitch_Isolation_Valid", "GB Rule", "GB Note", "WeatherNote", "TempF", "WindMPH", "HR Eligible",
+            "Pitch_Isolation_Valid", "GB Rule", "GB Note", "HR Eligible",
             "HR Probability %", "HRR Score", "Why"
         ]],
         use_container_width=True,
@@ -2292,7 +2170,7 @@ for idx, game in enumerate(schedule, start=5):
                     team_hr[[
                         "Rank", "Player", "Lineup Spot", "Lineup Source", "Statcast Pass",
                         "Strict Statcast", "Recent Form Pass", "Pitcher Attackable", "HR Probability %",
-                        "HR Tier", "GroundBall%", "GB Rule", "GB Note", "WeatherNote", "HardHit%", "FlyBall%",
+                        "HR Tier", "GroundBall%", "GB Rule", "GB Note", "HardHit%", "FlyBall%",
                         "AIR%", "xSLG", "xwOBA", "Barrel%", "Why"
                     ]],
                     use_container_width=True,
@@ -2325,7 +2203,7 @@ for idx, game in enumerate(schedule, start=5):
                     team_hr[[
                         "Rank", "Player", "Lineup Spot", "Lineup Source", "Statcast Pass",
                         "Strict Statcast", "Recent Form Pass", "Pitcher Attackable", "HR Probability %",
-                        "HR Tier", "GroundBall%", "GB Rule", "GB Note", "WeatherNote", "HardHit%", "FlyBall%",
+                        "HR Tier", "GroundBall%", "GB Rule", "GB Note", "HardHit%", "FlyBall%",
                         "AIR%", "xSLG", "xwOBA", "Barrel%", "Why"
                     ]],
                     use_container_width=True,
