@@ -561,6 +561,40 @@ def compute_relevant_pitch_matchup(
     }
 
 
+
+
+def compute_statcast_authority(
+    ev: float,
+    barrel: float,
+    hard_hit: float,
+    air_pct: float,
+    launch_angle: float,
+    xslg: float,
+    ground_ball: float,
+):
+    launch_window = max(0.0, 26.0 - abs(launch_angle - 18.0))
+
+    authority_score = (
+        max(0.0, barrel - 8.0) * 4.0 +
+        max(0.0, hard_hit - 38.0) * 1.8 +
+        max(0.0, air_pct - 50.0) * 1.0 +
+        max(0.0, ev - 88.0) * 1.25 +
+        max(0.0, xslg - 0.430) * 135.0 +
+        launch_window * 0.65 -
+        max(0.0, ground_ball - 46.0) * 1.4
+    )
+
+    if authority_score >= 36:
+        return round(authority_score, 2), 1.00, "ELITE"
+    if authority_score >= 26:
+        return round(authority_score, 2), 0.85, "STRONG"
+    if authority_score >= 17:
+        return round(authority_score, 2), 0.55, "MEDIUM"
+    if authority_score >= 9:
+        return round(authority_score, 2), 0.15, "WEAK"
+    return round(authority_score, 2), 0.00, "FAIL"
+
+
 def summarize_tracker(df: pd.DataFrame):
     if df.empty:
         return {
@@ -1632,6 +1666,16 @@ def build_hitter_metrics(
         barrel < 9 and hard_hit < 39 and xslg < 0.430 and air_pct < 52
     )
 
+    statcast_authority_score, statcast_authority_multiplier, statcast_authority_tier = compute_statcast_authority(
+        ev,
+        barrel,
+        hard_hit,
+        air_pct,
+        launch_angle,
+        xslg,
+        ground_ball,
+    )
+
     if pitch_mix_mode == "HARD" and primary_pitch is not None:
         pitch_isolation_valid = "Yes"
         pitch_isolation_bonus = pitch_matchup_score
@@ -1652,6 +1696,12 @@ def build_hitter_metrics(
     elif elite_statcast_profile:
         pitch_isolation_valid = "Elite Statcast Override"
         pitch_isolation_bonus = 2.25
+
+    if pitch_isolation_valid != "No":
+        if pitch_isolation_valid == "Elite Statcast Override":
+            pitch_isolation_bonus = pitch_isolation_bonus * max(statcast_authority_multiplier, 0.75)
+        else:
+            pitch_isolation_bonus = pitch_isolation_bonus * statcast_authority_multiplier
 
     gb_status = "PASS"
     if ground_ball >= 55:
@@ -1708,6 +1758,17 @@ def build_hitter_metrics(
         weather_score_boost +
         bullpen_fatigue_boost
     )
+
+    if statcast_authority_tier == "ELITE":
+        base_score += 4.5
+    elif statcast_authority_tier == "STRONG":
+        base_score += 2.0
+    elif statcast_authority_tier == "MEDIUM":
+        base_score -= 0.5
+    elif statcast_authority_tier == "WEAK":
+        base_score -= 4.0
+    else:
+        base_score -= 8.0
 
     if lineup_spot is not None:
         if lineup_spot <= 4:
@@ -1827,6 +1888,17 @@ def build_hitter_metrics(
     else:
         reasons.append("Neutral weather")
 
+    if statcast_authority_tier == "ELITE":
+        reasons.append("Elite Statcast authority")
+    elif statcast_authority_tier == "STRONG":
+        reasons.append("Strong Statcast authority")
+    elif statcast_authority_tier == "MEDIUM":
+        reasons.append("Moderate Statcast authority")
+    elif statcast_authority_tier == "WEAK":
+        reasons.append("Weak Statcast authority")
+    else:
+        reasons.append("Statcast authority fail")
+
     if bullpen_fatigue_score >= 2.0:
         reasons.append("Bullpen fatigue boost")
     elif bullpen_fatigue_score >= 0.8:
@@ -1864,7 +1936,8 @@ def build_hitter_metrics(
         (pitch_matchup_score * 2.4) +
         (handedness_edge * 2.0) +
         (weather_boost * 4.0) +
-        (bullpen_fatigue_score * 4.8)
+        (bullpen_fatigue_score * 4.8) +
+        (statcast_authority_score * 1.35)
     )
 
     if pitch_isolation_valid == "Yes":
@@ -1955,6 +2028,8 @@ def build_hitter_metrics(
         "BullpenFatigueNote": bullpen_fatigue_note,
         "BullpenIPPrev": round(bullpen_ip_prev, 1),
         "BullpenArmsPrev": int(bullpen_arms_prev),
+        "Statcast Authority Score": round(statcast_authority_score, 2),
+        "Statcast Authority Tier": statcast_authority_tier,
         "Why": " | ".join(reasons[:6]),
     }
 
