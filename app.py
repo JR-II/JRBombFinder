@@ -1060,7 +1060,6 @@ def build_hitter_metrics(
 
     pitch_isolation_bonus = -2.5
     pitch_isolation_valid = "No"
-    pitch_edge_label = "No pitch edge"
 
     elite_statcast_profile = (
         barrel >= 10
@@ -1070,23 +1069,15 @@ def build_hitter_metrics(
     )
 
     if primary_pitch is not None:
+        pitch_isolation_valid = "Yes"
         hitter_pitch_fit = stable_float(
             f"{player_name}-{primary_pitch}-fit",
             -2.0,
             4.5,
         )
         pitch_isolation_bonus = hitter_pitch_fit
-
-        if elite_statcast_profile:
-            pitch_isolation_valid = "Elite + Isolation"
-            pitch_edge_label = "Elite + isolation combo"
-            pitch_isolation_bonus += 1.25
-        else:
-            pitch_isolation_valid = "Yes"
-            pitch_edge_label = "Pitch isolation edge"
     elif elite_statcast_profile:
         pitch_isolation_valid = "Elite Statcast Override"
-        pitch_edge_label = "Elite Statcast override"
         pitch_isolation_bonus = 2.25
 
     gb_status = "PASS"
@@ -1151,11 +1142,11 @@ def build_hitter_metrics(
     if ground_ball < 40:
         base_score += 4.0
     elif 45 <= ground_ball < 50:
-        base_score -= 9.0
+        base_score -= 7.0
     elif 50 <= ground_ball < 55:
-        base_score -= 17.0
+        base_score -= 14.0
     elif ground_ball >= 55:
-        base_score -= 28.0
+        base_score -= 25.0
 
     if air_pct >= 65:
         base_score += 5.0
@@ -1184,12 +1175,6 @@ def build_hitter_metrics(
         base_score -= 4.0
     if elite_override and ground_ball < 55:
         base_score += 2.5
-    if elite_statcast_profile and pitch_isolation_valid == "Elite Statcast Override":
-        base_score += 1.0
-    if gb_status == "HEAVY DOWNGRADE" and not elite_override:
-        base_score -= 1.5
-    if gb_status == "CAUTION" and not elite_override:
-        base_score -= 0.5
 
     if not hr_eligible:
         hr_prob = 0.0
@@ -1216,13 +1201,22 @@ def build_hitter_metrics(
     reasons.append("Statcast damage pass" if statcast_pass else "Failed Statcast damage")
     reasons.append("Pitcher attackable" if pitcher_attackable else "Pitcher less attackable")
     reasons.append("Recent damage form" if recent_form_pass else "Weak recent form")
-    if gb_status == "HEAVY DOWNGRADE":
+
+    if pitch_isolation_valid == "Yes" and elite_statcast_profile:
+        reasons.append("Elite + isolation combo")
+    elif pitch_isolation_valid == "Yes":
+        reasons.append("Pitch isolation edge")
+    elif pitch_isolation_valid == "Elite Statcast Override":
+        reasons.append("Elite Statcast override")
+    else:
+        reasons.append("No pitch edge")
+
+    if ground_ball >= 50:
         reasons.append("Heavy GB downgrade")
-    elif gb_status == "CAUTION":
+    elif ground_ball >= 45:
         reasons.append("Borderline GB caution")
     else:
-        reasons.append(gb_note)
-    reasons.append(pitch_edge_label)
+        reasons.append("Clean launch shape")
 
     if barrel >= 12:
         reasons.append("Strong barrel")
@@ -1230,6 +1224,36 @@ def build_hitter_metrics(
         reasons.append("Hard-hit target")
     elif air_pct >= 55:
         reasons.append("Air-ball target")
+
+    model_rank_score = (
+        (barrel * 4.8) +
+        (hard_hit * 2.7) +
+        (air_pct * 1.3) +
+        (xslg * 130) +
+        (pitch_hr9 * 8.0) +
+        (pitch_barrel_allowed * 1.1) +
+        (recent_hr * 5.0) +
+        (recent_xbh * 1.8) +
+        (recent_iso * 24.0)
+    )
+
+    if pitch_isolation_valid == "Yes":
+        model_rank_score += 7.5
+    elif pitch_isolation_valid == "Elite Statcast Override":
+        model_rank_score += 5.0
+
+    if ground_ball >= 55:
+        model_rank_score -= 18.0
+    elif ground_ball >= 50:
+        model_rank_score -= 10.0
+    elif ground_ball >= 45:
+        model_rank_score -= 4.0
+
+    if lineup_spot is not None:
+        if lineup_spot <= 4:
+            model_rank_score += 5.0
+        elif lineup_spot <= 6:
+            model_rank_score += 2.0
 
     strict_flag = strict_statcast_ok(pd.Series({
         "Statcast Pass": "Yes" if statcast_pass else "No",
@@ -1268,10 +1292,16 @@ def build_hitter_metrics(
         "Strict Statcast": "Yes" if strict_flag else "No",
         "HR Probability %": round(hr_prob, 1),
         "HRR Score": round(hrr_score, 1),
-        "Model Rank Score": round(base_score, 2),
+        "Model Rank Score": round(model_rank_score, 2),
         "Why": " | ".join(reasons[:6]),
     }
 
+
+
+def safe_numeric_series(df: pd.DataFrame, col_name: str, default=0.0) -> pd.Series:
+    if col_name in df.columns:
+        return pd.to_numeric(df[col_name], errors="coerce").fillna(default)
+    return pd.Series([default] * len(df), index=df.index, dtype="float64")
 
 def classify_hr_tier(prob: float) -> str:
     if prob >= 20:
@@ -1285,39 +1315,47 @@ def classify_hr_tier(prob: float) -> str:
 
 def sort_for_hr(df: pd.DataFrame) -> pd.DataFrame:
     sortable = df.copy()
-    sortable["_lineup_sort"] = pd.to_numeric(sortable["Lineup Spot"], errors="coerce").fillna(99)
-    sortable["_pitch_edge_sort"] = sortable["Pitch_Isolation_Valid"].map({
-        "Elite + Isolation": 3,
-        "Yes": 2,
-        "Elite Statcast Override": 1,
-        "No": 0,
-    }).fillna(0)
-    sortable["_gb_sort"] = sortable["GB Rule"].map({
-        "PASS": 3,
-        "CAUTION": 2,
-        "HEAVY DOWNGRADE": 1,
-        "AUTO NO": 0,
-    }).fillna(0)
-    sortable["_model_rank_sort"] = pd.to_numeric(sortable.get("Model Rank Score", 0), errors="coerce").fillna(0)
+    sortable["_lineup_sort"] = safe_numeric_series(sortable, "Lineup Spot", 99)
+    sortable["_model_rank_sort"] = safe_numeric_series(sortable, "Model Rank Score", 0.0)
+    sortable["_hr_prob_sort"] = safe_numeric_series(sortable, "HR Probability %", 0.0)
+    sortable["_barrel_sort"] = safe_numeric_series(sortable, "Barrel%", 0.0)
+    sortable["_hh_sort"] = safe_numeric_series(sortable, "HardHit%", 0.0)
+    sortable["_air_sort"] = safe_numeric_series(sortable, "AIR%", 0.0)
+    sortable["_xslg_sort"] = safe_numeric_series(sortable, "xSLG", 0.0)
+    sortable["_gb_sort"] = safe_numeric_series(sortable, "GroundBall%", 999.0)
+    sortable["_pitch_hr9_sort"] = safe_numeric_series(sortable, "Pitcher_HR9_Last7", 0.0)
+    sortable["_pitch_barrel_sort"] = safe_numeric_series(sortable, "Pitcher_Barrel_Allowed", 0.0)
+    sortable["_hrr_sort"] = safe_numeric_series(sortable, "HRR Score", 0.0)
+
     sortable = sortable.sort_values(
         by=[
             "_model_rank_sort",
-            "HR Probability %",
-            "_pitch_edge_sort",
-            "_gb_sort",
-            "Barrel%",
-            "HardHit%",
-            "AIR%",
-            "xSLG",
-            "GroundBall%",
-            "Pitcher_HR9_Last7",
-            "Pitcher_Barrel_Allowed",
+            "_hr_prob_sort",
             "_lineup_sort",
-            "HRR Score",
+            "_barrel_sort",
+            "_hh_sort",
+            "_air_sort",
+            "_xslg_sort",
+            "_gb_sort",
+            "_pitch_hr9_sort",
+            "_pitch_barrel_sort",
+            "_hrr_sort",
         ],
-        ascending=[False, False, False, False, False, False, False, False, True, False, False, True, False],
+        ascending=[False, False, True, False, False, False, False, True, False, False, False],
     ).reset_index(drop=True)
-    return sortable.drop(columns=["_lineup_sort", "_pitch_edge_sort", "_gb_sort", "_model_rank_sort"], errors="ignore")
+    return sortable.drop(columns=[
+        "_lineup_sort",
+        "_model_rank_sort",
+        "_hr_prob_sort",
+        "_barrel_sort",
+        "_hh_sort",
+        "_air_sort",
+        "_xslg_sort",
+        "_gb_sort",
+        "_pitch_hr9_sort",
+        "_pitch_barrel_sort",
+        "_hrr_sort",
+    ])
 
 
 @st.cache_data(ttl=900)
