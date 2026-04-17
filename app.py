@@ -1589,9 +1589,9 @@ def auto_update_tracker_results(tracker: pd.DataFrame, schedule: list[dict]):
 c1, c2, c3, c4 = st.columns([1, 1, 1, 2])
 with c1:
     if st.button("Update Board", use_container_width=True):
-st.session_state.manual_refresh_trigger = True
-st.cache_data.clear()
-st.rerun()
+        st.session_state.manual_refresh_trigger = True
+        st.cache_data.clear()
+        st.rerun()
 
 
 live_df, schedule = build_daily_dataset()
