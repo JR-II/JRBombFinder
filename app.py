@@ -1601,9 +1601,11 @@ lineup_mode = get_lineup_mode(schedule) if schedule else "PROJECTED"
 
 tracked_df = build_visible_tracker_pool(locked_df, schedule)
 tracker = sync_tracker_with_board(tracked_df)
+
 if st.session_state.get("force_tracker_refresh", False) or st.session_state.get("manual_refresh_trigger", False):
-tracker = auto_update_tracker_results(tracker, schedule)
-st.session_state.manual_refresh_trigger = False
+    tracker = auto_update_tracker_results(tracker, schedule)
+    st.session_state.manual_refresh_trigger = False
+
 summary = summarize_tracker(tracker)
 daily_summary = summarize_tracker_by_day(tracker)
 
