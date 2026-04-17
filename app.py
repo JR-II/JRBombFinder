@@ -1061,6 +1061,13 @@ def build_hitter_metrics(
     pitch_isolation_bonus = -2.5
     pitch_isolation_valid = "No"
 
+    elite_statcast_profile = (
+        barrel >= 10
+        and hard_hit >= 45
+        and air_pct >= 55
+        and ground_ball <= 50
+    )
+
     if primary_pitch is not None:
         pitch_isolation_valid = "Yes"
         hitter_pitch_fit = stable_float(
@@ -1069,6 +1076,9 @@ def build_hitter_metrics(
             4.5,
         )
         pitch_isolation_bonus = hitter_pitch_fit
+    elif elite_statcast_profile:
+        pitch_isolation_valid = "Elite Statcast Override"
+        pitch_isolation_bonus = 2.25
 
     gb_status = "PASS"
     if ground_ball >= 55:
@@ -1192,7 +1202,12 @@ def build_hitter_metrics(
     reasons.append("Pitcher attackable" if pitcher_attackable else "Pitcher less attackable")
     reasons.append("Recent damage form" if recent_form_pass else "Weak recent form")
     reasons.append(gb_note)
-    reasons.append("Pitch isolated" if pitch_isolation_valid == "Yes" else "No isolated pitch edge")
+    if pitch_isolation_valid == "Yes":
+        reasons.append("Pitch isolated")
+    elif pitch_isolation_valid == "Elite Statcast Override":
+        reasons.append("Elite metrics override")
+    else:
+        reasons.append("No isolated pitch edge")
 
     if barrel >= 12:
         reasons.append("Strong barrel")
