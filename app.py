@@ -68,14 +68,14 @@ PARK_FACTORS = {
     "STL": 1.00, "TB": 0.97, "TEX": 1.07, "TOR": 1.04, "WSH": 1.00,
 }
 
-STADIUM_COORDS = {
+PARK_COORDS = {
     "ARI": (33.4455, -112.0667),
-    "ATL": (33.8908, -84.4677),
-    "BAL": (39.2838, -76.6217),
+    "ATL": (33.8907, -84.4677),
+    "BAL": (39.2840, -76.6217),
     "BOS": (42.3467, -71.0972),
     "CHC": (41.9484, -87.6553),
-    "CWS": (41.8300, -87.6338),
-    "CIN": (39.0979, -84.5081),
+    "CWS": (41.8300, -87.6339),
+    "CIN": (39.0979, -84.5082),
     "CLE": (41.4962, -81.6852),
     "COL": (39.7561, -104.9942),
     "DET": (42.3390, -83.0485),
@@ -88,18 +88,19 @@ STADIUM_COORDS = {
     "MIN": (44.9817, -93.2776),
     "NYM": (40.7571, -73.8458),
     "NYY": (40.8296, -73.9262),
-    "ATH": (38.2270, -121.4900),
-    "PHI": (39.9061, -75.1665),
+    "ATH": (38.2270, -107.6720),
+    "PHI": (39.9057, -75.1665),
     "PIT": (40.4469, -80.0057),
     "SD": (32.7073, -117.1573),
     "SF": (37.7786, -122.3893),
     "SEA": (47.5914, -122.3325),
     "STL": (38.6226, -90.1928),
     "TB": (27.7682, -82.6534),
-    "TEX": (32.7513, -97.0825),
+    "TEX": (32.7473, -97.0842),
     "TOR": (43.6414, -79.3894),
     "WSH": (38.8730, -77.0074),
 }
+
 
 
 def stable_float(key: str, low: float, high: float) -> float:
@@ -409,86 +410,6 @@ def compute_pitch_matchup_score(
     return round(final_score, 2), pitch_label, round(handedness_bonus, 2)
 
 
-
-@st.cache_data(ttl=900)
-def fetch_weather_context(team_code: str, game_time: str) -> dict:
-    lat_lon = STADIUM_COORDS.get(team_code)
-    if not lat_lon:
-        return {
-            "TempF": 72.0,
-            "WindMPH": 7.0,
-            "WindOut": 0.0,
-            "WeatherBoost": 0.0,
-            "WeatherNote": "Neutral weather",
-        }
-
-    lat, lon = lat_lon
-    try:
-        start = str(game_time)[:10] if game_time else today_str()
-        url = (
-            "https://api.open-meteo.com/v1/forecast"
-            f"?latitude={lat}&longitude={lon}"
-            "&hourly=temperature_2m,wind_speed_10m,wind_direction_10m"
-            f"&timezone=America%2FNew_York&start_date={start}&end_date={start}"
-        )
-        resp = requests.get(url, timeout=20)
-        resp.raise_for_status()
-        data = resp.json()
-        hourly = data.get("hourly", {}) or {}
-        temps = hourly.get("temperature_2m") or []
-        winds = hourly.get("wind_speed_10m") or []
-        dirs = hourly.get("wind_direction_10m") or []
-
-        idx = 18 if len(temps) > 18 else (len(temps) - 1)
-        if idx < 0:
-            raise ValueError("No weather rows")
-
-        temp_c = safe_float(temps[idx], 22.0)
-        wind_mph = safe_float(winds[idx], 7.0) * 0.621371
-        wind_dir = safe_float(dirs[idx], 180.0)
-        temp_f = (temp_c * 9 / 5) + 32
-
-        # crude carry signal: 160-250 degrees roughly out to OF for many parks
-        wind_out = 1.0 if 160 <= wind_dir <= 250 else (-1.0 if wind_dir <= 70 or wind_dir >= 300 else 0.0)
-        weather_boost = 0.0
-        if temp_f >= 82:
-            weather_boost += 2.2
-        elif temp_f >= 74:
-            weather_boost += 1.0
-        elif temp_f <= 52:
-            weather_boost -= 1.5
-
-        if wind_out > 0:
-            weather_boost += min(wind_mph, 16.0) * 0.22
-        elif wind_out < 0:
-            weather_boost -= min(wind_mph, 16.0) * 0.18
-
-        if weather_boost >= 3.0:
-            note = "Strong HR weather boost"
-        elif weather_boost >= 1.0:
-            note = "Mild HR weather boost"
-        elif weather_boost <= -2.0:
-            note = "Weather suppresses carry"
-        else:
-            note = "Neutral weather"
-
-        return {
-            "TempF": round(temp_f, 1),
-            "WindMPH": round(wind_mph, 1),
-            "WindOut": wind_out,
-            "WeatherBoost": round(weather_boost, 2),
-            "WeatherNote": note,
-        }
-    except Exception:
-        return {
-            "TempF": 72.0,
-            "WindMPH": 7.0,
-            "WindOut": 0.0,
-            "WeatherBoost": 0.0,
-            "WeatherNote": "Neutral weather",
-        }
-
-
 def summarize_tracker(df: pd.DataFrame):
     if df.empty:
         return {
@@ -598,8 +519,6 @@ def strict_statcast_ok(row: pd.Series) -> bool:
 def get_gb_explanation(ground_ball: float, barrel: float, air_pct: float, xslg: float) -> str:
     if ground_ball >= 55:
         return "Stay away: 55%+ GB"
-    reasons.append(weather_note)
-
     if ground_ball >= 50:
         if barrel >= 12 or xslg >= 0.500 or air_pct >= 60:
             return "Heavy GB, but real damage traits keep it in play"
@@ -609,6 +528,77 @@ def get_gb_explanation(ground_ball: float, barrel: float, air_pct: float, xslg: 
             return "Borderline GB, but damage traits keep it alive"
         return "Borderline GB caution"
     return "Clean enough launch shape"
+
+
+def compute_weather_boost(temp_f: float, wind_mph: float) -> tuple[float, str]:
+    boost = 0.0
+    notes = []
+
+    if temp_f >= 85:
+        boost += 2.4
+        notes.append("hot carry weather")
+    elif temp_f >= 75:
+        boost += 1.4
+        notes.append("warm carry weather")
+    elif temp_f <= 50:
+        boost -= 1.8
+        notes.append("cold dense air")
+    elif temp_f <= 60:
+        boost -= 0.8
+        notes.append("cool air")
+
+    if wind_mph >= 15:
+        boost += 1.6
+        notes.append("strong wind")
+    elif wind_mph >= 10:
+        boost += 0.8
+        notes.append("live wind")
+    elif wind_mph <= 3:
+        notes.append("neutral wind")
+
+    if not notes:
+        notes.append("neutral weather")
+
+    return round(boost, 2), " | ".join(notes[:2])
+
+
+@st.cache_data(ttl=1800)
+def fetch_weather_for_park(home_team_abbr: str):
+    coords = PARK_COORDS.get(home_team_abbr)
+    if not coords:
+        return {
+            "TempF": 72.0,
+            "WindMPH": 7.0,
+            "WeatherBoost": 0.0,
+            "WeatherNote": "neutral weather",
+        }
+
+    lat, lon = coords
+    url = (
+        "https://api.open-meteo.com/v1/forecast"
+        f"?latitude={lat}&longitude={lon}"
+        "&current=temperature_2m,wind_speed_10m"
+        "&temperature_unit=fahrenheit&wind_speed_unit=mph"
+    )
+
+    try:
+        resp = requests.get(url, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+        current = data.get("current", {}) or {}
+        temp_f = safe_float(current.get("temperature_2m"), 72.0)
+        wind_mph = safe_float(current.get("wind_speed_10m"), 7.0)
+    except Exception:
+        temp_f = 72.0
+        wind_mph = 7.0
+
+    boost, note = compute_weather_boost(temp_f, wind_mph)
+    return {
+        "TempF": round(temp_f, 1),
+        "WindMPH": round(wind_mph, 1),
+        "WeatherBoost": boost,
+        "WeatherNote": note,
+    }
 
 
 @st.cache_data(ttl=300)
@@ -1243,7 +1233,10 @@ def build_hitter_metrics(
     hitter_stats_map,
     pitcher_stats_map,
     savant_batter_map,
-    weather_context,
+    weather_boost: float = 0.0,
+    weather_note: str = "neutral weather",
+    temp_f: float = 72.0,
+    wind_mph: float = 7.0,
 ):
     live_hitter = compute_hitter_live_metrics_from_map(player_id, hitter_stats_map)
     live_pitcher = compute_pitcher_live_metrics_from_map(
@@ -1308,10 +1301,7 @@ def build_hitter_metrics(
 
     pullside_boost = stable_float(f"{player_id}-pull", -1, 3)
     park_boost = (park_factor - 1.0) * 20
-    weather_boost = safe_float((weather_context or {}).get("WeatherBoost"), 0.0)
-    weather_note = (weather_context or {}).get("WeatherNote", "Neutral weather")
-    weather_temp = safe_float((weather_context or {}).get("TempF"), 72.0)
-    weather_wind = safe_float((weather_context or {}).get("WindMPH"), 7.0)
+    weather_score_boost = weather_boost * 1.6
 
     pitch_mix_example = build_pitch_mix_profile(
         opp_pitcher,
@@ -1418,7 +1408,7 @@ def build_hitter_metrics(
         (recent_damage_score * 0.22) +
         pullside_boost +
         park_boost +
-        weather_boost
+        weather_score_boost
     )
 
     if lineup_spot is not None:
@@ -1497,7 +1487,8 @@ def build_hitter_metrics(
         park_boost +
         (recent_runs * 0.7) +
         (recent_rbi * 0.7) +
-        (recent_avg * 15)
+        (recent_avg * 15) +
+        (weather_boost * 0.8)
     )
     if lineup_spot is not None:
         hrr_score += max(0, 10 - lineup_spot) * 1.5
@@ -1528,6 +1519,13 @@ def build_hitter_metrics(
     else:
         reasons.append("Neutral recent trend")
 
+    if weather_boost >= 1.5:
+        reasons.append("Weather carry boost")
+    elif weather_boost <= -1.0:
+        reasons.append("Weather suppression")
+    else:
+        reasons.append("Neutral weather")
+
     if ground_ball >= 50:
         reasons.append("Heavy GB downgrade")
     elif ground_ball >= 45:
@@ -1557,7 +1555,7 @@ def build_hitter_metrics(
         (recent_damage_score * 0.35) +
         (pitch_matchup_score * 2.4) +
         (handedness_edge * 2.0) +
-        (weather_boost * 3.0)
+        (weather_boost * 4.0)
     )
 
     if pitch_isolation_valid == "Yes":
@@ -1608,10 +1606,6 @@ def build_hitter_metrics(
         "Pitch Gap": round(pitch_gap, 1),
         "Pitch Matchup Score": round(pitch_matchup_score, 2),
         "Handedness Edge": round(handedness_edge, 2),
-        "WeatherBoost": round(weather_boost, 2),
-        "WeatherNote": weather_note,
-        "TempF": round(weather_temp, 1),
-        "WindMPH": round(weather_wind, 1),
         "Lineup Spot": display_spot,
         "Lineup Source": lineup_source,
         "EV": round(ev, 1),
@@ -1640,6 +1634,10 @@ def build_hitter_metrics(
         "HR Probability %": round(hr_prob, 1),
         "HRR Score": round(hrr_score, 1),
         "Model Rank Score": round(model_rank_score, 2),
+        "TempF": round(temp_f, 1),
+        "WindMPH": round(wind_mph, 1),
+        "WeatherBoost": round(weather_boost, 2),
+        "WeatherNote": weather_note,
         "Why": " | ".join(reasons[:6]),
     }
 
@@ -1764,11 +1762,10 @@ def build_daily_dataset():
         home_abbr = team_abbr(game["home_team"])
         away_park = PARK_FACTORS.get(home_abbr, 1.00)
         home_park = PARK_FACTORS.get(home_abbr, 1.00)
+        weather = fetch_weather_for_park(home_abbr)
 
         away_candidates, away_source = candidate_map[(game["game_pk"], "away")]
         home_candidates, home_source = candidate_map[(game["game_pk"], "home")]
-
-        weather_context = fetch_weather_context(home_abbr, game.get("game_time", ""))
 
         for hitter in away_candidates:
             metrics = build_hitter_metrics(
@@ -1783,7 +1780,10 @@ def build_daily_dataset():
                 hitter_stats_map=hitter_stats_map,
                 pitcher_stats_map=pitcher_stats_map,
                 savant_batter_map=savant_batter_map,
-                weather_context=weather_context,
+                weather_boost=weather.get("WeatherBoost", 0.0),
+                weather_note=weather.get("WeatherNote", "neutral weather"),
+                temp_f=weather.get("TempF", 72.0),
+                wind_mph=weather.get("WindMPH", 7.0),
             )
             if metrics is not None:
                 rows.append({
@@ -1809,7 +1809,10 @@ def build_daily_dataset():
                 hitter_stats_map=hitter_stats_map,
                 pitcher_stats_map=pitcher_stats_map,
                 savant_batter_map=savant_batter_map,
-                weather_context=weather_context,
+                weather_boost=weather.get("WeatherBoost", 0.0),
+                weather_note=weather.get("WeatherNote", "neutral weather"),
+                temp_f=weather.get("TempF", 72.0),
+                wind_mph=weather.get("WindMPH", 7.0),
             )
             if metrics is not None:
                 rows.append({
@@ -2087,7 +2090,7 @@ with tabs[0]:
         hr_df[[
             "Rank", "Player", "Team", "Game", "Pitcher", "Lineup Spot",
             "Lineup Source", "HR Probability %", "HR Tier", "GroundBall%",
-            "GB Rule", "GB Note", "HardHit%", "FlyBall%", "AIR%", "xSLG", "xwOBA", "Barrel%", "Why", "WeatherNote"
+            "GB Rule", "GB Note", "WeatherNote", "HardHit%", "FlyBall%", "AIR%", "xSLG", "xwOBA", "Barrel%", "Why"
         ]],
         use_container_width=True,
         hide_index=True
@@ -2101,7 +2104,7 @@ with tabs[1]:
         top12[[
             "Rank", "Player", "Team", "Game", "Pitcher", "Lineup Spot",
             "Lineup Source", "HR Probability %", "HR Tier", "GroundBall%",
-            "GB Rule", "GB Note", "HardHit%", "FlyBall%", "AIR%", "xSLG", "xwOBA", "Barrel%", "Why", "WeatherNote"
+            "GB Rule", "GB Note", "WeatherNote", "HardHit%", "FlyBall%", "AIR%", "xSLG", "xwOBA", "Barrel%", "Why"
         ]],
         use_container_width=True,
         hide_index=True
@@ -2135,7 +2138,7 @@ with tabs[3]:
             "xSLG", "xwOBA",
             "Pitcher_HR9_Last7", "Pitcher_Barrel_Allowed", "Pitcher_HardHit_Allowed",
             "Statcast Pass", "Strict Statcast", "Recent Form Pass", "Pitcher Attackable",
-            "Pitch_Isolation_Valid", "GB Rule", "GB Note", "WeatherBoost", "WeatherNote", "HR Eligible",
+            "Pitch_Isolation_Valid", "GB Rule", "GB Note", "WeatherNote", "TempF", "WindMPH", "HR Eligible",
             "HR Probability %", "HRR Score", "Why"
         ]],
         use_container_width=True,
@@ -2289,8 +2292,8 @@ for idx, game in enumerate(schedule, start=5):
                     team_hr[[
                         "Rank", "Player", "Lineup Spot", "Lineup Source", "Statcast Pass",
                         "Strict Statcast", "Recent Form Pass", "Pitcher Attackable", "HR Probability %",
-                        "HR Tier", "GroundBall%", "GB Rule", "GB Note", "HardHit%", "FlyBall%",
-                        "AIR%", "xSLG", "xwOBA", "Barrel%", "Why", "WeatherNote"
+                        "HR Tier", "GroundBall%", "GB Rule", "GB Note", "WeatherNote", "HardHit%", "FlyBall%",
+                        "AIR%", "xSLG", "xwOBA", "Barrel%", "Why"
                     ]],
                     use_container_width=True,
                     hide_index=True
@@ -2322,8 +2325,8 @@ for idx, game in enumerate(schedule, start=5):
                     team_hr[[
                         "Rank", "Player", "Lineup Spot", "Lineup Source", "Statcast Pass",
                         "Strict Statcast", "Recent Form Pass", "Pitcher Attackable", "HR Probability %",
-                        "HR Tier", "GroundBall%", "GB Rule", "GB Note", "HardHit%", "FlyBall%",
-                        "AIR%", "xSLG", "xwOBA", "Barrel%", "Why", "WeatherNote"
+                        "HR Tier", "GroundBall%", "GB Rule", "GB Note", "WeatherNote", "HardHit%", "FlyBall%",
+                        "AIR%", "xSLG", "xwOBA", "Barrel%", "Why"
                     ]],
                     use_container_width=True,
                     hide_index=True
