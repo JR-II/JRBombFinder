@@ -7,12 +7,20 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import requests
 import streamlit as st
-
+import time 
 st.set_page_config(page_title="BF Data", layout="wide")
 
 st.title("BF Data")
 st.caption("Daily Home Run Probability Engine")
+if "last_refresh_time" not in st.session_state:
+st.session_state.last_refresh_time = time.time()
 
+if time.time() - st.session_state.last_refresh_time > AUTO_REFRESH_SECONDS:
+st.session_state.last_refresh_time = time.time()
+st.session_state.force_tracker_refresh = True
+else:
+st.session_state.force_tracker_refresh = False
+AUTO_REFRESH_SECONDS = 120
 TRACKER_FILE = "hr_tracker.csv"
 LOCK_FILE = "daily_hr_board_lock.csv"
 CURRENT_SEASON = datetime.now().year
@@ -1590,6 +1598,7 @@ lineup_mode = get_lineup_mode(schedule) if schedule else "PROJECTED"
 
 tracked_df = build_visible_tracker_pool(locked_df, schedule)
 tracker = sync_tracker_with_board(tracked_df)
+if st.session_state.get("force_tracker_refresh", False):
 tracker = auto_update_tracker_results(tracker, schedule)
 summary = summarize_tracker(tracker)
 daily_summary = summarize_tracker_by_day(tracker)
