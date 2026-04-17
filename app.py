@@ -823,12 +823,15 @@ def get_team_candidate_hitters(game_pk: int, team_id: int, side: str, savant_bat
         sav_hh = safe_float(sav.get("Savant_HardHit%"), metrics["HardHit%"])
         sav_air = safe_float(sav.get("Savant_AIR%"), 100 - metrics["GroundBall%"])
         sav_xslg = safe_float(sav.get("Savant_xSLG"), 0.0)
+        sav_xwoba = safe_float(sav.get("Savant_xwOBA"), 0.0)
+        sav_la = safe_float(sav.get("Savant_LA"), 14.0)
         sav_gb = safe_float(sav.get("Savant_GB%"), metrics["GroundBall%"])
 
         projected_statcast_pass = (
             sav_brl >= 10 or
             (sav_hh >= 40 and sav_air >= 55) or
-            sav_xslg >= 0.450
+            sav_xslg >= 0.450 or
+            sav_xwoba >= 0.340
         )
 
         projected_recent_pass = (
@@ -848,6 +851,13 @@ def get_team_candidate_hitters(game_pk: int, team_id: int, side: str, savant_bat
             )
         )
 
+        elite_projection_override = (
+            sav_brl >= 13
+            or sav_xslg >= 0.500
+            or (sav_xwoba >= 0.365 and sav_air >= 57)
+            or (sav_la >= 15 and sav_la <= 24 and sav_brl >= 11)
+        )
+
         strong_projected_candidate = (
             metrics["recent_pa"] >= 12 and
             metrics["season_games"] >= 3 and
@@ -855,8 +865,7 @@ def get_team_candidate_hitters(game_pk: int, team_id: int, side: str, savant_bat
             projected_statcast_pass and
             (
                 projected_recent_pass
-                or sav_brl >= 13
-                or sav_xslg >= 0.500
+                or elite_projection_override
             ) and
             gb_survival
         )
@@ -865,10 +874,12 @@ def get_team_candidate_hitters(game_pk: int, team_id: int, side: str, savant_bat
             continue
 
         lineup_likelihood = (
-            sav_brl * 2.4 +
-            sav_hh * 1.0 +
-            sav_air * 0.45 +
-            sav_xslg * 100 +
+            sav_brl * 2.8 +
+            sav_hh * 1.1 +
+            sav_air * 0.50 +
+            sav_xslg * 110 +
+            sav_xwoba * 70 +
+            max(0, 24 - abs(sav_la - 18)) * 0.6 +
             metrics["recent_hr"] * 5.5 +
             metrics["recent_xbh"] * 2.0 +
             metrics["recent_iso"] * 18
@@ -1023,6 +1034,7 @@ def build_hitter_metrics(
     ground_ball = safe_float(sav.get("Savant_GB%"), live_hitter["GroundBall%"])
     barrel = safe_float(sav.get("Savant_Barrel%"), live_hitter["Barrel%"])
     air_pct = safe_float(sav.get("Savant_AIR%"), max(0.0, 100 - ground_ball))
+    launch_angle = safe_float(sav.get("Savant_LA"), 14.0)
     xslg = safe_float(sav.get("Savant_xSLG"), 0.0)
     xwoba = safe_float(sav.get("Savant_xwOBA"), 0.0)
     xiso = safe_float(sav.get("Savant_xISO"), live_hitter["recent_iso"])
@@ -1034,6 +1046,22 @@ def build_hitter_metrics(
     recent_rbi = live_hitter["recent_rbi"]
     recent_runs = live_hitter["recent_runs"]
     recent_pa = live_hitter["recent_pa"]
+
+    recent_damage_score = (
+        (recent_hr * 9.0) +
+        (recent_xbh * 3.0) +
+        (recent_iso * 65.0) +
+        (recent_avg * 18.0)
+    )
+
+    if recent_hr >= 2 or recent_xbh >= 5 or recent_iso >= 0.260:
+        recent_trend = "HOT"
+    elif recent_hr >= 1 or recent_xbh >= 3 or recent_iso >= 0.180:
+        recent_trend = "LIVE"
+    elif recent_iso >= 0.120 or recent_avg >= 0.260:
+        recent_trend = "NEUTRAL"
+    else:
+        recent_trend = "COLD"
 
     display_spot = display_lineup_spot(lineup_spot)
     bats = "L" if int(stable_float(f"{player_id}-bat", 0, 10)) % 2 == 0 else "R"
@@ -1062,10 +1090,18 @@ def build_hitter_metrics(
     pitch_isolation_valid = "No"
 
     elite_statcast_profile = (
-        barrel >= 10
-        and hard_hit >= 45
-        and air_pct >= 55
-        and ground_ball <= 50
+        (
+            barrel >= 10
+            and hard_hit >= 45
+            and air_pct >= 55
+            and ground_ball <= 50
+        )
+        or (
+            barrel >= 11
+            and xslg >= 0.500
+            and xwoba >= 0.340
+            and 10 <= launch_angle <= 24
+        )
     )
 
     if primary_pitch is not None:
@@ -1120,6 +1156,7 @@ def build_hitter_metrics(
         (ev - 87) * 1.1 +
         (xslg * 100) * 1.2 +
         (xiso * 100) * 0.7 +
+        (xwoba * 100) * 0.45 +
         pitch_isolation_bonus +
         (pitch_hr9 - 0.7) * 10.0 +
         (pitch_barrel_allowed - 4) * 0.9 +
@@ -1127,6 +1164,7 @@ def build_hitter_metrics(
         (recent_hr * 3.2) +
         (recent_xbh * 1.5) +
         (recent_iso * 24.0) +
+        (recent_damage_score * 0.22) +
         pullside_boost +
         park_boost
     )
@@ -1155,6 +1193,13 @@ def build_hitter_metrics(
     elif air_pct < 45:
         base_score -= 7.0
 
+    if 12 <= launch_angle <= 22:
+        base_score += 3.0
+    elif 8 <= launch_angle < 12 or 22 < launch_angle <= 28:
+        base_score += 1.0
+    else:
+        base_score -= 2.0
+
     if barrel >= 14:
         base_score += 6.0
     elif barrel < 8:
@@ -1171,6 +1216,12 @@ def build_hitter_metrics(
         base_score -= 10.0
     if awful_hr_shape:
         base_score -= 14.0
+    if recent_trend == "HOT":
+        base_score += 4.0
+    elif recent_trend == "LIVE":
+        base_score += 2.0
+    elif recent_trend == "COLD":
+        base_score -= 4.0
     if lineup_source == "PROJECTED" and lineup_spot is None:
         base_score -= 4.0
     if elite_override and ground_ball < 55:
@@ -1211,6 +1262,15 @@ def build_hitter_metrics(
     else:
         reasons.append("No pitch edge")
 
+    if recent_trend == "HOT":
+        reasons.append("Hot recent trend")
+    elif recent_trend == "LIVE":
+        reasons.append("Live recent trend")
+    elif recent_trend == "COLD":
+        reasons.append("Cold recent trend")
+    else:
+        reasons.append("Neutral recent trend")
+
     if ground_ball >= 50:
         reasons.append("Heavy GB downgrade")
     elif ground_ball >= 45:
@@ -1230,17 +1290,27 @@ def build_hitter_metrics(
         (hard_hit * 2.7) +
         (air_pct * 1.3) +
         (xslg * 130) +
+        (xwoba * 65) +
+        (max(0, 24 - abs(launch_angle - 18)) * 1.4) +
         (pitch_hr9 * 8.0) +
         (pitch_barrel_allowed * 1.1) +
         (recent_hr * 5.0) +
         (recent_xbh * 1.8) +
-        (recent_iso * 24.0)
+        (recent_iso * 24.0) +
+        (recent_damage_score * 0.35)
     )
 
     if pitch_isolation_valid == "Yes":
         model_rank_score += 7.5
     elif pitch_isolation_valid == "Elite Statcast Override":
         model_rank_score += 5.0
+
+    if recent_trend == "HOT":
+        model_rank_score += 6.0
+    elif recent_trend == "LIVE":
+        model_rank_score += 3.0
+    elif recent_trend == "COLD":
+        model_rank_score -= 5.0
 
     if ground_ball >= 55:
         model_rank_score -= 18.0
@@ -1276,6 +1346,8 @@ def build_hitter_metrics(
         "GroundBall%": round(ground_ball, 1),
         "Barrel%": round(barrel, 1),
         "AIR%": round(air_pct, 1),
+        "LaunchAngle": round(launch_angle, 1),
+        "Recent Trend": recent_trend,
         "xSLG": round(xslg, 3) if xslg else 0.0,
         "xwOBA": round(xwoba, 3) if xwoba else 0.0,
         "Pitcher": opp_pitcher,
@@ -1325,6 +1397,8 @@ def sort_for_hr(df: pd.DataFrame) -> pd.DataFrame:
     sortable["_gb_sort"] = safe_numeric_series(sortable, "GroundBall%", 999.0)
     sortable["_pitch_hr9_sort"] = safe_numeric_series(sortable, "Pitcher_HR9_Last7", 0.0)
     sortable["_pitch_barrel_sort"] = safe_numeric_series(sortable, "Pitcher_Barrel_Allowed", 0.0)
+    sortable["_la_sort"] = safe_numeric_series(sortable, "LaunchAngle", 0.0)
+    sortable["_trend_sort"] = sortable.get("Recent Trend", pd.Series(["NEUTRAL"] * len(sortable), index=sortable.index)).map({"HOT": 3, "LIVE": 2, "NEUTRAL": 1, "COLD": 0}).fillna(1)
     sortable["_hrr_sort"] = safe_numeric_series(sortable, "HRR Score", 0.0)
 
     sortable = sortable.sort_values(
@@ -1339,9 +1413,11 @@ def sort_for_hr(df: pd.DataFrame) -> pd.DataFrame:
             "_gb_sort",
             "_pitch_hr9_sort",
             "_pitch_barrel_sort",
+            "_la_sort",
+            "_trend_sort",
             "_hrr_sort",
         ],
-        ascending=[False, False, True, False, False, False, False, True, False, False, False],
+        ascending=[False, False, True, False, False, False, False, True, False, False, False, False, False],
     ).reset_index(drop=True)
     return sortable.drop(columns=[
         "_lineup_sort",
@@ -1354,6 +1430,8 @@ def sort_for_hr(df: pd.DataFrame) -> pd.DataFrame:
         "_gb_sort",
         "_pitch_hr9_sort",
         "_pitch_barrel_sort",
+        "_la_sort",
+        "_trend_sort",
         "_hrr_sort",
     ])
 
@@ -1765,7 +1843,7 @@ with tabs[3]:
     st.dataframe(
         breakdown[[
             "Player", "Team", "Game", "Pitcher", "Lineup Spot", "Lineup Source",
-            "EV", "HardHit%", "FlyBall%", "AIR%", "LineDrive%", "GroundBall%", "Barrel%",
+            "EV", "HardHit%", "FlyBall%", "AIR%", "LaunchAngle", "Recent Trend", "LineDrive%", "GroundBall%", "Barrel%",
             "xSLG", "xwOBA",
             "Pitcher_HR9_Last7", "Pitcher_Barrel_Allowed", "Pitcher_HardHit_Allowed",
             "Statcast Pass", "Strict Statcast", "Recent Form Pass", "Pitcher Attackable",
