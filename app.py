@@ -1410,6 +1410,14 @@ def get_team_candidate_hitters(game_pk: int, team_id: int, side: str, savant_bat
             strong_projected_candidate = False
         elif projected_authority_tier == "WEAK" and not (elite_projection_override or projected_recent_pass):
             strong_projected_candidate = False
+        elif (
+            projected_authority_tier == "MEDIUM"
+            and sav_brl < 9
+            and sav_hh < 39
+            and sav_xslg < 0.440
+            and not (elite_projection_override or projected_recent_pass)
+        ):
+            strong_projected_candidate = False
 
         if not strong_projected_candidate:
             continue
@@ -1727,6 +1735,11 @@ def build_hitter_metrics(
             pitch_isolation_bonus = pitch_isolation_bonus * max(statcast_authority_multiplier, 0.75)
         else:
             pitch_isolation_bonus = pitch_isolation_bonus * statcast_authority_multiplier
+
+    if statcast_authority_tier == "FAIL" and pitch_mix_mode != "HARD" and not elite_statcast_profile:
+        pitch_isolation_bonus = min(pitch_isolation_bonus, -3.5)
+    elif statcast_authority_tier == "WEAK" and pitch_mix_mode == "BALANCED" and not elite_statcast_profile:
+        pitch_isolation_bonus = min(pitch_isolation_bonus, -2.0)
 
     gb_status = "PASS"
     if ground_ball >= 55:
@@ -2091,6 +2104,8 @@ def sort_for_hr(df: pd.DataFrame) -> pd.DataFrame:
     sortable["_handedness_sort"] = safe_numeric_series(sortable, "Handedness Edge", 0.0)
     sortable["_usage_sort"] = safe_numeric_series(sortable, "Primary Pitch Usage", 0.0)
     sortable["_mix_mode_sort"] = sortable.get("Pitch Mix Mode", pd.Series(["BALANCED"] * len(sortable), index=sortable.index)).map({"HARD": 3, "SOFT": 2, "BALANCED": 1}).fillna(1)
+    sortable["_authority_sort"] = safe_numeric_series(sortable, "Statcast Authority Score", 0.0)
+    sortable["_authority_tier_sort"] = sortable.get("Statcast Authority Tier", pd.Series(["MEDIUM"] * len(sortable), index=sortable.index)).map({"ELITE": 4, "STRONG": 3, "MEDIUM": 2, "WEAK": 1, "FAIL": 0}).fillna(2)
     sortable["_la_sort"] = safe_numeric_series(sortable, "LaunchAngle", 0.0)
     sortable["_trend_sort"] = sortable.get("Recent Trend", pd.Series(["NEUTRAL"] * len(sortable), index=sortable.index)).map({"HOT": 3, "LIVE": 2, "NEUTRAL": 1, "COLD": 0}).fillna(1)
     sortable["_hrr_sort"] = safe_numeric_series(sortable, "HRR Score", 0.0)
@@ -2103,6 +2118,8 @@ def sort_for_hr(df: pd.DataFrame) -> pd.DataFrame:
             "_lineup_sort",
             "_usage_sort",
             "_mix_mode_sort",
+            "_authority_tier_sort",
+            "_authority_sort",
             "_barrel_sort",
             "_hh_sort",
             "_air_sort",
@@ -2115,7 +2132,7 @@ def sort_for_hr(df: pd.DataFrame) -> pd.DataFrame:
             "_trend_sort",
             "_hrr_sort",
         ],
-        ascending=[False, False, False, True, False, False, False, False, False, False, True, False, False, False, False, False, False],
+        ascending=[False, False, False, True, False, False, False, False, False, False, False, True, False, False, False, False, False, False, False],
     ).reset_index(drop=True)
     return sortable.drop(columns=[
         "_lineup_sort",
@@ -2132,6 +2149,8 @@ def sort_for_hr(df: pd.DataFrame) -> pd.DataFrame:
         "_handedness_sort",
         "_usage_sort",
         "_mix_mode_sort",
+        "_authority_sort",
+        "_authority_tier_sort",
         "_la_sort",
         "_trend_sort",
         "_hrr_sort",
@@ -2502,9 +2521,9 @@ with c4:
     if not locked_df.empty and "lock_scope" in locked_df.columns:
         confirmed_locked = int((locked_df["lock_scope"].astype(str) == "CONFIRMED_TEAM").sum())
     if confirmed_locked > 0:
-        st.caption(f"Confirmed-team locks live: {confirmed_locked} rows")
+        st.caption(f"Projected teams stay live • confirmed teams locked: {confirmed_locked} rows")
     else:
-        st.caption(f"Last refresh: {datetime.now().strftime('%Y-%m-%d %I:%M %p')}")
+        st.caption(f"Projected teams live • last refresh: {datetime.now().strftime('%Y-%m-%d %I:%M %p')}")
 
 if locked_df.empty:
     st.warning("No games or hitter data loaded.")
