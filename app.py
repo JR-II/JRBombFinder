@@ -12,6 +12,8 @@ st.set_page_config(page_title="BF Data", layout="wide")
 
 st.title("BF Data")
 st.caption("Daily Home Run Probability Engine")
+AUTO_REFRESH_SECONDS = 120
+
 if "last_refresh_time" not in st.session_state:
 st.session_state.last_refresh_time = time.time()
 
@@ -21,7 +23,6 @@ st.session_state.force_tracker_refresh = True
 else:
 st.session_state.force_tracker_refresh = False
 
-AUTO_REFRESH_SECONDS = 120
 TRACKER_FILE = "hr_tracker.csv"
 LOCK_FILE = "daily_hr_board_lock.csv"
 CURRENT_SEASON = datetime.now().year
@@ -1589,8 +1590,10 @@ def auto_update_tracker_results(tracker: pd.DataFrame, schedule: list[dict]):
 c1, c2, c3, c4 = st.columns([1, 1, 1, 2])
 with c1:
     if st.button("Update Board", use_container_width=True):
-        st.cache_data.clear()
-        st.rerun()
+st.session_state.manual_refresh_trigger = True
+st.cache_data.clear()
+st.rerun()
+
 
 live_df, schedule = build_daily_dataset()
 locked_df = ensure_daily_board_lock(live_df)
@@ -1599,8 +1602,9 @@ lineup_mode = get_lineup_mode(schedule) if schedule else "PROJECTED"
 
 tracked_df = build_visible_tracker_pool(locked_df, schedule)
 tracker = sync_tracker_with_board(tracked_df)
-if st.session_state.get("force_tracker_refresh", False):
+if st.session_state.get("force_tracker_refresh", False) or st.session_state.get("manual_refresh_trigger", False):
 tracker = auto_update_tracker_results(tracker, schedule)
+st.session_state.manual_refresh_trigger = False
 summary = summarize_tracker(tracker)
 daily_summary = summarize_tracker_by_day(tracker)
 
