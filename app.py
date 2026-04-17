@@ -20,6 +20,7 @@ st.session_state.last_refresh_time = time.time()
 st.session_state.force_tracker_refresh = True
 else:
 st.session_state.force_tracker_refresh = False
+
 AUTO_REFRESH_SECONDS = 120
 TRACKER_FILE = "hr_tracker.csv"
 LOCK_FILE = "daily_hr_board_lock.csv"
