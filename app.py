@@ -1060,6 +1060,7 @@ def build_hitter_metrics(
 
     pitch_isolation_bonus = -2.5
     pitch_isolation_valid = "No"
+    pitch_edge_label = "No pitch edge"
 
     elite_statcast_profile = (
         barrel >= 10
@@ -1069,15 +1070,23 @@ def build_hitter_metrics(
     )
 
     if primary_pitch is not None:
-        pitch_isolation_valid = "Yes"
         hitter_pitch_fit = stable_float(
             f"{player_name}-{primary_pitch}-fit",
             -2.0,
             4.5,
         )
         pitch_isolation_bonus = hitter_pitch_fit
+
+        if elite_statcast_profile:
+            pitch_isolation_valid = "Elite + Isolation"
+            pitch_edge_label = "Elite + isolation combo"
+            pitch_isolation_bonus += 1.25
+        else:
+            pitch_isolation_valid = "Yes"
+            pitch_edge_label = "Pitch isolation edge"
     elif elite_statcast_profile:
         pitch_isolation_valid = "Elite Statcast Override"
+        pitch_edge_label = "Elite Statcast override"
         pitch_isolation_bonus = 2.25
 
     gb_status = "PASS"
@@ -1142,11 +1151,11 @@ def build_hitter_metrics(
     if ground_ball < 40:
         base_score += 4.0
     elif 45 <= ground_ball < 50:
-        base_score -= 7.0
+        base_score -= 9.0
     elif 50 <= ground_ball < 55:
-        base_score -= 14.0
+        base_score -= 17.0
     elif ground_ball >= 55:
-        base_score -= 25.0
+        base_score -= 28.0
 
     if air_pct >= 65:
         base_score += 5.0
@@ -1175,6 +1184,12 @@ def build_hitter_metrics(
         base_score -= 4.0
     if elite_override and ground_ball < 55:
         base_score += 2.5
+    if elite_statcast_profile and pitch_isolation_valid == "Elite Statcast Override":
+        base_score += 1.0
+    if gb_status == "HEAVY DOWNGRADE" and not elite_override:
+        base_score -= 1.5
+    if gb_status == "CAUTION" and not elite_override:
+        base_score -= 0.5
 
     if not hr_eligible:
         hr_prob = 0.0
@@ -1201,13 +1216,13 @@ def build_hitter_metrics(
     reasons.append("Statcast damage pass" if statcast_pass else "Failed Statcast damage")
     reasons.append("Pitcher attackable" if pitcher_attackable else "Pitcher less attackable")
     reasons.append("Recent damage form" if recent_form_pass else "Weak recent form")
-    reasons.append(gb_note)
-    if pitch_isolation_valid == "Yes":
-        reasons.append("Pitch isolated")
-    elif pitch_isolation_valid == "Elite Statcast Override":
-        reasons.append("Elite metrics override")
+    if gb_status == "HEAVY DOWNGRADE":
+        reasons.append("Heavy GB downgrade")
+    elif gb_status == "CAUTION":
+        reasons.append("Borderline GB caution")
     else:
-        reasons.append("No isolated pitch edge")
+        reasons.append(gb_note)
+    reasons.append(pitch_edge_label)
 
     if barrel >= 12:
         reasons.append("Strong barrel")
@@ -1253,6 +1268,7 @@ def build_hitter_metrics(
         "Strict Statcast": "Yes" if strict_flag else "No",
         "HR Probability %": round(hr_prob, 1),
         "HRR Score": round(hrr_score, 1),
+        "Model Rank Score": round(base_score, 2),
         "Why": " | ".join(reasons[:6]),
     }
 
@@ -1270,10 +1286,25 @@ def classify_hr_tier(prob: float) -> str:
 def sort_for_hr(df: pd.DataFrame) -> pd.DataFrame:
     sortable = df.copy()
     sortable["_lineup_sort"] = pd.to_numeric(sortable["Lineup Spot"], errors="coerce").fillna(99)
+    sortable["_pitch_edge_sort"] = sortable["Pitch_Isolation_Valid"].map({
+        "Elite + Isolation": 3,
+        "Yes": 2,
+        "Elite Statcast Override": 1,
+        "No": 0,
+    }).fillna(0)
+    sortable["_gb_sort"] = sortable["GB Rule"].map({
+        "PASS": 3,
+        "CAUTION": 2,
+        "HEAVY DOWNGRADE": 1,
+        "AUTO NO": 0,
+    }).fillna(0)
+    sortable["_model_rank_sort"] = pd.to_numeric(sortable.get("Model Rank Score", 0), errors="coerce").fillna(0)
     sortable = sortable.sort_values(
         by=[
+            "_model_rank_sort",
             "HR Probability %",
-            "_lineup_sort",
+            "_pitch_edge_sort",
+            "_gb_sort",
             "Barrel%",
             "HardHit%",
             "AIR%",
@@ -1281,11 +1312,12 @@ def sort_for_hr(df: pd.DataFrame) -> pd.DataFrame:
             "GroundBall%",
             "Pitcher_HR9_Last7",
             "Pitcher_Barrel_Allowed",
+            "_lineup_sort",
             "HRR Score",
         ],
-        ascending=[False, True, False, False, False, False, True, False, False, False],
+        ascending=[False, False, False, False, False, False, False, False, True, False, False, True, False],
     ).reset_index(drop=True)
-    return sortable.drop(columns=["_lineup_sort"])
+    return sortable.drop(columns=["_lineup_sort", "_pitch_edge_sort", "_gb_sort", "_model_rank_sort"], errors="ignore")
 
 
 @st.cache_data(ttl=900)
