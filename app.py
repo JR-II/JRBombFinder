@@ -256,28 +256,52 @@ def get_locked_board_for_date(date_key: str) -> pd.DataFrame:
 
 
 def ensure_daily_board_lock(live_df: pd.DataFrame, schedule: list[dict]) -> pd.DataFrame:
-    """Keep projected teams live, but freeze teams once their lineup confirms."""
+    """Keep projected teams live, but freeze teams once their lineup confirms.
+    Manual pregame refresh may rebuild confirmed-team locks before first pitch.
+    """
     if live_df.empty:
         return live_df.copy()
 
     date_key = today_str()
     locks = load_board_locks()
 
-    # Ignore legacy full-day lock files from older builds.
     if not locks.empty and "lock_scope" in locks.columns:
         locks_today = locks[locks["date"].astype(str) == str(date_key)].copy()
     else:
         locks_today = pd.DataFrame(columns=list(live_df.columns) + ["lock_created_at", "lock_scope"])
 
     confirmed_team_keys = set()
+    pregame_confirmed_keys = set()
     for game in schedule:
         game_key = game["game_key"]
         away_team = team_abbr(game["away_team"])
         home_team = team_abbr(game["home_team"])
+        game_state = str(game.get("game_state", "Preview"))
+
         if game.get("away_confirmed_count", 0) >= 9:
             confirmed_team_keys.add((game_key, away_team))
+            if game_state == "Preview":
+                pregame_confirmed_keys.add((game_key, away_team))
         if game.get("home_confirmed_count", 0) >= 9:
             confirmed_team_keys.add((game_key, home_team))
+            if game_state == "Preview":
+                pregame_confirmed_keys.add((game_key, home_team))
+
+    rebuild_confirmed = bool(st.session_state.get("manual_refresh_trigger", False))
+
+    if rebuild_confirmed and not locks_today.empty and {"Game", "Team"}.issubset(locks_today.columns):
+        drop_mask_today = locks_today.apply(
+            lambda r: (r.get("Game"), r.get("Team")) in pregame_confirmed_keys,
+            axis=1
+        )
+        locks_today = locks_today[~drop_mask_today].copy()
+
+        if not locks.empty and {"Game", "Team", "date"}.issubset(locks.columns):
+            drop_mask_all = (
+                (locks["date"].astype(str) == str(date_key))
+                & locks.apply(lambda r: (r.get("Game"), r.get("Team")) in pregame_confirmed_keys, axis=1)
+            )
+            locks = locks[~drop_mask_all].copy()
 
     existing_locked_keys = set()
     if not locks_today.empty and {"Game", "Team"}.issubset(locks_today.columns):
@@ -299,6 +323,8 @@ def ensure_daily_board_lock(live_df: pd.DataFrame, schedule: list[dict]) -> pd.D
         locks = pd.concat([locks, append_df], ignore_index=True)
         save_board_locks(locks)
         locks_today = pd.concat([locks_today, append_df], ignore_index=True)
+    elif rebuild_confirmed:
+        save_board_locks(locks)
 
     output_frames = []
     used_locked_keys = set()
@@ -1774,6 +1800,38 @@ def build_hitter_metrics(
     awful_hr_shape = qual["awful_hr_shape"]
     weak_recent_profile = qual["weak_recent_profile"]
 
+    confirmed_keep_override = bool(
+        lineup_source == "CONFIRMED"
+        and lineup_spot is not None
+        and lineup_spot <= 4
+        and pitch_mix_mode == "HARD"
+        and pitch_matchup_score >= 5.0
+    )
+
+    confirmed_authority_fail = bool(
+        lineup_source == "CONFIRMED"
+        and statcast_authority_tier in {"FAIL", "WEAK"}
+        and ev < 90.0
+        and barrel < 12.0
+        and hard_hit < 40.0
+        and xslg < 0.450
+        and not elite_override
+    )
+
+    confirmed_blend_fail = bool(
+        lineup_source == "CONFIRMED"
+        and pitch_mix_mode != "HARD"
+        and ev < 90.0
+        and barrel < 11.0
+        and hard_hit < 41.0
+        and xslg < 0.455
+        and air_pct < 55.0
+        and not elite_override
+    )
+
+    if (confirmed_authority_fail or confirmed_blend_fail) and not confirmed_keep_override:
+        hr_eligible = False
+
     base_score = (
         (barrel - 4) * 4.2 +
         (hard_hit - 28) * 2.5 +
@@ -2521,9 +2579,9 @@ with c4:
     if not locked_df.empty and "lock_scope" in locked_df.columns:
         confirmed_locked = int((locked_df["lock_scope"].astype(str) == "CONFIRMED_TEAM").sum())
     if confirmed_locked > 0:
-        st.caption(f"Projected teams stay live • confirmed teams locked: {confirmed_locked} rows")
+        st.caption(f"Projected teams stay live • confirmed teams pregame-rebuild on update • locked confirmed rows: {confirmed_locked}")
     else:
-        st.caption(f"Projected teams live • last refresh: {datetime.now().strftime('%Y-%m-%d %I:%M %p')}")
+        st.caption(f"Projected teams live • update rebuilds pregame confirmed locks • last refresh: {datetime.now().strftime('%Y-%m-%d %I:%M %p')}")
 
 if locked_df.empty:
     st.warning("No games or hitter data loaded.")
