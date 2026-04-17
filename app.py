@@ -1056,34 +1056,20 @@ def build_hitter_metrics(
         "CH": stable_float(f"{opp_pitcher}-ch", 5, 25),
     }
 
-        primary_pitch = isolate_primary_pitch(pitch_mix_example)
+    primary_pitch = isolate_primary_pitch(pitch_mix_example)
 
     pitch_isolation_bonus = -2.5
     pitch_isolation_valid = "No"
 
-    # --- Elite Statcast Override Layer ---
-    elite_statcast_profile = (
-        barrel >= 10
-        and hard_hit >= 45
-        and air_pct >= 55
-        and ground_ball <= 50
-    )
-
     if primary_pitch is not None:
         pitch_isolation_valid = "Yes"
-
         hitter_pitch_fit = stable_float(
             f"{player_name}-{primary_pitch}-fit",
             -2.0,
             4.5,
         )
-
         pitch_isolation_bonus = hitter_pitch_fit
 
-    elif elite_statcast_profile:
-        pitch_isolation_valid = "Elite Statcast Override"
-        pitch_isolation_bonus = 2.25
-       
     gb_status = "PASS"
     if ground_ball >= 55:
         gb_status = "AUTO NO"
