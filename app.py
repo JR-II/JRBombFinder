@@ -14,6 +14,7 @@ st.title("BF Data")
 st.caption("Daily Home Run Probability Engine")
 
 TRACKER_FILE = "hr_tracker.csv"
+LOCK_FILE = "daily_hr_board_lock.csv"
 CURRENT_SEASON = datetime.now().year
 
 TEAM_ABBR = {
@@ -106,8 +107,11 @@ def team_abbr(name: str) -> str:
 
 
 def today_str() -> str:
-    # Lock tracker + schedule logic to MLB Eastern Time
     return datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d")
+
+
+def now_et_string() -> str:
+    return datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def chunked(items, size):
@@ -186,6 +190,46 @@ def load_tracker() -> pd.DataFrame:
 def save_tracker(df: pd.DataFrame):
     df.to_csv(TRACKER_FILE, index=False)
 
+
+def load_board_locks() -> pd.DataFrame:
+    if os.path.exists(LOCK_FILE):
+        try:
+            return pd.read_csv(LOCK_FILE)
+        except Exception:
+            pass
+    return pd.DataFrame()
+
+
+def save_board_locks(df: pd.DataFrame):
+    df.to_csv(LOCK_FILE, index=False)
+
+
+def get_locked_board_for_date(date_key: str) -> pd.DataFrame:
+    locks = load_board_locks()
+    if locks.empty or "date" not in locks.columns:
+        return pd.DataFrame()
+    locked = locks[locks["date"].astype(str) == str(date_key)].copy()
+    return locked.reset_index(drop=True)
+
+
+def ensure_daily_board_lock(live_df: pd.DataFrame) -> pd.DataFrame:
+    date_key = today_str()
+    locked_today = get_locked_board_for_date(date_key)
+    if not locked_today.empty:
+        return locked_today
+
+    if live_df.empty:
+        return live_df.copy()
+
+    snapshot = live_df.copy()
+    snapshot["lock_created_at"] = now_et_string()
+
+    locks = load_board_locks()
+    merged = pd.concat([locks, snapshot], ignore_index=True)
+    save_board_locks(merged)
+    return snapshot.reset_index(drop=True)
+
+
 def isolate_primary_pitch(pitch_mix: dict):
     if not pitch_mix:
         return None
@@ -203,12 +247,12 @@ def isolate_primary_pitch(pitch_mix: dict):
 
     if len(sorted_mix) > 1:
         second_usage = sorted_mix[1][1]
-
         if (top_usage - second_usage) >= 20:
             return top_pitch
 
     return None
-    
+
+
 def summarize_tracker(df: pd.DataFrame):
     if df.empty:
         return {
@@ -252,10 +296,7 @@ def summarize_tracker_by_day(df: pd.DataFrame) -> pd.DataFrame:
         ])
 
     work = df.copy()
-    work["result_num"] = pd.to_numeric(
-        work["result"],
-        errors="coerce"
-    ).fillna(0).astype(int)
+    work["result_num"] = pd.to_numeric(work["result"], errors="coerce").fillna(0).astype(int)
 
     daily = (
         work.groupby("date", as_index=False)
@@ -273,11 +314,7 @@ def summarize_tracker_by_day(df: pd.DataFrame) -> pd.DataFrame:
         axis=1
     )
 
-    daily = daily.sort_values(
-        "date",
-        ascending=False
-    ).reset_index(drop=True)
-
+    daily = daily.sort_values("date", ascending=False).reset_index(drop=True)
     return daily
 
 
@@ -803,17 +840,17 @@ def get_team_candidate_hitters(game_pk: int, team_id: int, side: str, savant_bat
         )
 
         strong_projected_candidate = (
-    metrics["recent_pa"] >= 12 and
-    metrics["season_games"] >= 3 and
-    metrics["season_ab"] >= 8 and
-    projected_statcast_pass and
-    (
-        projected_recent_pass
-        or sav_brl >= 13
-        or sav_xslg >= 0.500
-    ) and
-    gb_survival
-)
+            metrics["recent_pa"] >= 12 and
+            metrics["season_games"] >= 3 and
+            metrics["season_ab"] >= 8 and
+            projected_statcast_pass and
+            (
+                projected_recent_pass
+                or sav_brl >= 13
+                or sav_xslg >= 0.500
+            ) and
+            gb_survival
+        )
 
         if not strong_projected_candidate:
             continue
@@ -1458,18 +1495,21 @@ def sync_tracker_with_board(tracked_df: pd.DataFrame):
     tracker = load_tracker()
     date_key = today_str()
 
-    existing_today = tracker[tracker["date"].astype(str) == date_key].copy()
-    existing_map = {
-        (row["player"], row["team"], row["game"]): row
-        for _, row in existing_today.iterrows()
-    }
+    if tracked_df.empty:
+        return tracker
 
-    snapshot_rows = []
+    existing_today = tracker[tracker["date"].astype(str) == date_key].copy()
+    existing_keys = set(
+        zip(existing_today["player"], existing_today["team"], existing_today["game"])
+    )
+
+    new_rows = []
     for _, row in tracked_df.iterrows():
         key = (row["Player"], row["Team"], row["Game"])
-        existing = existing_map.get(key, {})
+        if key in existing_keys:
+            continue
 
-        snapshot_rows.append({
+        new_rows.append({
             "date": date_key,
             "player": row["Player"],
             "team": row["Team"],
@@ -1478,16 +1518,17 @@ def sync_tracker_with_board(tracked_df: pd.DataFrame):
             "hr_probability": row["HR Probability %"],
             "hr_tier": row["HR Tier"],
             "hr_eligible": int(bool(row["HR Eligible"])),
-            "result": existing.get("result", pd.NA),
-            "result_state": existing.get("result_state", "PENDING"),
+            "result": pd.NA,
+            "result_state": "PENDING",
             "game_state": row["game_state"],
-            "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "updated_at": now_et_string(),
         })
 
-    keep_old = tracker[tracker["date"].astype(str) != date_key].copy()
-    merged = pd.concat([keep_old, pd.DataFrame(snapshot_rows)], ignore_index=True)
-    save_tracker(merged)
-    return merged
+    if new_rows:
+        tracker = pd.concat([tracker, pd.DataFrame(new_rows)], ignore_index=True)
+        save_tracker(tracker)
+
+    return tracker
 
 
 def auto_update_tracker_results(tracker: pd.DataFrame, schedule: list[dict]):
@@ -1510,6 +1551,7 @@ def auto_update_tracker_results(tracker: pd.DataFrame, schedule: list[dict]):
         if game_state == "Preview":
             tracker.loc[rows_mask, "result_state"] = "PREGAME"
             tracker.loc[rows_mask, "game_state"] = detailed_state
+            tracker.loc[rows_mask, "updated_at"] = now_et_string()
             continue
 
         homer_map = get_boxscore_homers(game_pk)
@@ -1529,7 +1571,7 @@ def auto_update_tracker_results(tracker: pd.DataFrame, schedule: list[dict]):
                     tracker.at[idx, "result_state"] = "LIVE"
 
             tracker.at[idx, "game_state"] = detailed_state
-            tracker.at[idx, "updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            tracker.at[idx, "updated_at"] = now_et_string()
 
     save_tracker(tracker)
     return tracker
@@ -1541,22 +1583,29 @@ with c1:
         st.cache_data.clear()
         st.rerun()
 
-df, schedule = build_daily_dataset()
+live_df, schedule = build_daily_dataset()
+locked_df = ensure_daily_board_lock(live_df)
+
 lineup_mode = get_lineup_mode(schedule) if schedule else "PROJECTED"
 
-tracked_df = build_visible_tracker_pool(df, schedule)
+tracked_df = build_visible_tracker_pool(locked_df, schedule)
 tracker = sync_tracker_with_board(tracked_df)
 tracker = auto_update_tracker_results(tracker, schedule)
 summary = summarize_tracker(tracker)
 daily_summary = summarize_tracker_by_day(tracker)
+
 with c2:
     st.metric("Games On Slate", len(schedule))
 with c3:
     st.metric("Lineup Mode", lineup_mode)
 with c4:
-    st.caption(f"Last refresh: {datetime.now().strftime('%Y-%m-%d %I:%M %p')}")
+    if not locked_df.empty and "lock_created_at" in locked_df.columns:
+        lock_time = str(locked_df["lock_created_at"].iloc[0])
+        st.caption(f"Slate locked: {lock_time} ET")
+    else:
+        st.caption(f"Last refresh: {datetime.now().strftime('%Y-%m-%d %I:%M %p')}")
 
-if df.empty:
+if locked_df.empty:
     st.warning("No games or hitter data loaded.")
     st.stop()
 
@@ -1566,7 +1615,8 @@ tabs = st.tabs(base_tabs + game_tabs)
 
 with tabs[0]:
     st.subheader("HR Probability Board")
-    hr_df = get_strict_hr_pool(df)
+    st.caption("Locked slate board. Rankings do not mutate after lock.")
+    hr_df = get_strict_hr_pool(locked_df)
     st.dataframe(
         hr_df[[
             "Rank", "Player", "Team", "Game", "Pitcher", "Lineup Spot",
@@ -1579,8 +1629,8 @@ with tabs[0]:
 
 with tabs[1]:
     st.subheader("Top 12 HR Candidates")
-    st.caption("Strict Statcast first, then best remaining eligible bats")
-    top12 = get_top12_hybrid(df)
+    st.caption("Locked slate board. Strict Statcast first, then best remaining eligible bats.")
+    top12 = get_top12_hybrid(locked_df)
     st.dataframe(
         top12[[
             "Rank", "Player", "Team", "Game", "Pitcher", "Lineup Spot",
@@ -1593,7 +1643,8 @@ with tabs[1]:
 
 with tabs[2]:
     st.subheader("Hits + Runs + RBIs Board")
-    hrr = df.copy().sort_values(
+    st.caption("Locked slate board. This list stays fixed after lock.")
+    hrr = locked_df.copy().sort_values(
         by=["HRR Score", "LineDrive%", "HardHit%", "GroundBall%"],
         ascending=[False, False, False, True]
     ).reset_index(drop=True)
@@ -1609,8 +1660,8 @@ with tabs[2]:
 
 with tabs[3]:
     st.subheader("Engine Breakdown")
-    st.caption("Per-game and full HR lists are ranked best to last. Heavy GB bats are downgraded, not blindly erased unless the profile is truly bad.")
-    breakdown = sort_for_hr(df.copy())
+    st.caption("Locked slate board. Heavy GB bats are downgraded, not blindly erased unless the profile is truly bad.")
+    breakdown = sort_for_hr(locked_df.copy())
     st.dataframe(
         breakdown[[
             "Player", "Team", "Game", "Pitcher", "Lineup Spot", "Lineup Source",
@@ -1627,7 +1678,7 @@ with tabs[3]:
 
 with tabs[4]:
     st.subheader("Accuracy Tracker")
-    st.caption("Only tracks hitters BF Data actually surfaced on visible HR boards.")
+    st.caption("Only tracks hitters BF Data actually surfaced on the locked visible HR boards.")
 
     a1, a2, a3 = st.columns(3)
     a1.metric("Today's Surfaced HR Picks", summary["today_total"])
@@ -1641,112 +1692,110 @@ with tabs[4]:
 
     st.divider()
 
-today_tracker = tracker[
-    tracker["date"].astype("string").fillna("") == str(today_str)
-].copy()
+    today_tracker = tracker[
+        tracker["date"].astype("string").fillna("") == str(today_str())
+    ].copy()
 
-if not today_tracker.empty:
-    st.caption("Today's tracked surfaced picks")
-    st.dataframe(
-        today_tracker.sort_values(
-            by=["hr_probability", "player"],
-            ascending=[False, True]
-        )[[
-            "player",
-            "team",
-            "game",
-            "hr_probability",
-            "hr_tier",
-            "hr_eligible",
-            "result",
-            "result_state",
-            "game_state",
-            "updated_at"
-        ]],
-        use_container_width=True,
-        hide_index=True
-    )
+    if not today_tracker.empty:
+        st.caption("Today's tracked surfaced picks")
+        st.dataframe(
+            today_tracker.sort_values(
+                by=["hr_probability", "player"],
+                ascending=[False, True]
+            )[[
+                "player",
+                "team",
+                "game",
+                "hr_probability",
+                "hr_tier",
+                "hr_eligible",
+                "result",
+                "result_state",
+                "game_state",
+                "updated_at"
+            ]],
+            use_container_width=True,
+            hide_index=True
+        )
 
-if not tracker.empty:
-    st.divider()
-    st.caption("Full tracker history")
-    st.dataframe(
-        tracker.sort_values(
-            by=["date", "hr_probability", "player"],
-            ascending=[False, False, True]
-        ),
-        use_container_width=True,
-        hide_index=True
-    )
+    if not tracker.empty:
+        st.divider()
+        st.caption("Full tracker history")
+        st.dataframe(
+            tracker.sort_values(
+                by=["date", "hr_probability", "player"],
+                ascending=[False, False, True]
+            ),
+            use_container_width=True,
+            hide_index=True
+        )
 
-if not daily_summary.empty:
-    st.divider()
-    st.caption("Daily HR prediction accuracy history")
-    st.dataframe(
-        daily_summary,
-        use_container_width=True,
-        hide_index=True
-    )
+    if not daily_summary.empty:
+        st.divider()
+        st.caption("Daily HR prediction accuracy history")
+        st.dataframe(
+            daily_summary,
+            use_container_width=True,
+            hide_index=True
+        )
 
-if not tracker.empty:
-    st.divider()
-    st.subheader("Historical Day Review")
+    if not tracker.empty:
+        st.divider()
+        st.subheader("Historical Day Review")
 
-    available_dates = sorted(
-        tracker["date"].dropna().astype(str).unique().tolist(),
-        reverse=True
-    )
+        available_dates = sorted(
+            tracker["date"].dropna().astype(str).unique().tolist(),
+            reverse=True
+        )
 
-    selected_date = st.selectbox(
-        "Select a saved tracker date to review",
-        available_dates,
-        index=0
-    )
+        selected_date = st.selectbox(
+            "Select a saved tracker date to review",
+            available_dates,
+            index=0
+        )
 
-    selected_day_df = tracker[
-    tracker["date"].astype("string").fillna("") == str(selected_date)
-].copy()
+        selected_day_df = tracker[
+            tracker["date"].astype("string").fillna("") == str(selected_date)
+        ].copy()
 
-    selected_day_df["result_num"] = pd.to_numeric(
-        selected_day_df["result"],
-        errors="coerce"
-    ).fillna(0).astype(int)
+        selected_day_df["result_num"] = pd.to_numeric(
+            selected_day_df["result"],
+            errors="coerce"
+        ).fillna(0).astype(int)
 
-    selected_total = len(selected_day_df)
-    selected_hits = int(selected_day_df["result_num"].sum())
+        selected_total = len(selected_day_df)
+        selected_hits = int(selected_day_df["result_num"].sum())
+        selected_pct = round(
+            (selected_hits / selected_total) * 100,
+            2
+        ) if selected_total else 0.0
 
-    selected_pct = round(
-        (selected_hits / selected_total) * 100,
-        2
-    ) if selected_total else 0.0
+        d1, d2, d3 = st.columns(3)
+        d1.metric("Selected Day Surfaced HR Picks", selected_total)
+        d2.metric("Selected Day Correct HR", selected_hits)
+        d3.metric("Selected Day Hit Rate %", selected_pct)
 
-    c1, c2, c3 = st.columns(3)
+        st.caption(f"Tracked surfaced picks for {selected_date}")
+        st.dataframe(
+            selected_day_df.sort_values(
+                by=["hr_probability", "player"],
+                ascending=[False, True]
+            )[[
+                "player",
+                "team",
+                "game",
+                "hr_probability",
+                "hr_tier",
+                "hr_eligible",
+                "result",
+                "result_state",
+                "game_state",
+                "updated_at"
+            ]],
+            use_container_width=True,
+            hide_index=True
+        )
 
-    c1.metric("Selected Day Surfaced HR Picks", selected_total)
-    c2.metric("Selected Day Correct HR", selected_hits)
-    c3.metric("Selected Day Hit Rate %", selected_pct)
-
-    st.caption(f"Tracked surfaced picks for {selected_date}")
-
-    st.dataframe(
-        selected_day_df.sort_values(
-            by=["hr_probability", "player"],
-            ascending=[False, True]
-        )[[
-            "player",
-            "team",
-            "game",
-            "hr_probability",
-            "hr_tier",
-            "hr_eligible",
-            "result",
-            "result_state",
-            "game_state",
-            "updated_at"
-        ]],
-        use_container_width=True,
-        hide_index=True
-    )
 for idx, game in enumerate(schedule, start=5):
     with tabs[idx]:
         st.subheader(game["game_key"])
@@ -1757,7 +1806,7 @@ for idx, game in enumerate(schedule, start=5):
             f"Home starter: {game['home_pitcher']}"
         )
 
-        gdf = df[df["Game"] == game["game_key"]].copy()
+        gdf = locked_df[locked_df["Game"] == game["game_key"]].copy()
         away_team = team_abbr(game["away_team"])
         home_team = team_abbr(game["home_team"])
 
@@ -1766,7 +1815,7 @@ for idx, game in enumerate(schedule, start=5):
         with left:
             st.markdown(f"### {away_team}")
             away_source = gdf[gdf["Team"] == away_team]["Lineup Source"].iloc[0] if not gdf[gdf["Team"] == away_team].empty else "N/A"
-            st.caption(f"Confirmed hitters: {game.get('away_confirmed_count', 0)}/9 | Pool: {away_source}")
+            st.caption(f"Confirmed hitters: {game.get('away_confirmed_count', 0)}/9 | Pool locked as: {away_source}")
             team_hr, team_hrr = get_team_game_view(gdf, game["game_key"], away_team)
             if not team_hr.empty:
                 st.markdown("**Best HR hitters**")
@@ -1782,20 +1831,24 @@ for idx, game in enumerate(schedule, start=5):
                 )
             else:
                 st.caption("No HR-qualified bats surfaced.")
+
             st.markdown("**Best Hits + Runs + RBIs**")
-            st.dataframe(
-                team_hrr[[
-                    "Player", "Lineup Spot", "Lineup Source", "HRR Score",
-                    "GroundBall%", "LineDrive%", "Why"
-                ]].head(5),
-                use_container_width=True,
-                hide_index=True
-            )
+            if not team_hrr.empty:
+                st.dataframe(
+                    team_hrr[[
+                        "Player", "Lineup Spot", "Lineup Source", "HRR Score",
+                        "GroundBall%", "LineDrive%", "Why"
+                    ]].head(5),
+                    use_container_width=True,
+                    hide_index=True
+                )
+            else:
+                st.caption("No HRR bats surfaced.")
 
         with right:
             st.markdown(f"### {home_team}")
             home_source = gdf[gdf["Team"] == home_team]["Lineup Source"].iloc[0] if not gdf[gdf["Team"] == home_team].empty else "N/A"
-            st.caption(f"Confirmed hitters: {game.get('home_confirmed_count', 0)}/9 | Pool: {home_source}")
+            st.caption(f"Confirmed hitters: {game.get('home_confirmed_count', 0)}/9 | Pool locked as: {home_source}")
             team_hr, team_hrr = get_team_game_view(gdf, game["game_key"], home_team)
             if not team_hr.empty:
                 st.markdown("**Best HR hitters**")
@@ -1811,12 +1864,16 @@ for idx, game in enumerate(schedule, start=5):
                 )
             else:
                 st.caption("No HR-qualified bats surfaced.")
+
             st.markdown("**Best Hits + Runs + RBIs**")
-            st.dataframe(
-                team_hrr[[
-                    "Player", "Lineup Spot", "Lineup Source", "HRR Score",
-                    "GroundBall%", "LineDrive%", "Why"
-                ]].head(5),
-                use_container_width=True,
-                hide_index=True
-            )
+            if not team_hrr.empty:
+                st.dataframe(
+                    team_hrr[[
+                        "Player", "Lineup Spot", "Lineup Source", "HRR Score",
+                        "GroundBall%", "LineDrive%", "Why"
+                    ]].head(5),
+                    use_container_width=True,
+                    hide_index=True
+                )
+            else:
+                st.caption("No HRR bats surfaced.")
