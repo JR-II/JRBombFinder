@@ -262,6 +262,120 @@ def isolate_primary_pitch(pitch_mix: dict):
     return None
 
 
+def estimate_handedness_from_name(name: str, role: str = "batter") -> str:
+    seed = stable_float(f"{role}-{normalize_name(name)}-hand", 0, 100)
+    if role == "pitcher":
+        return "L" if seed < 32 else "R"
+    return "L" if seed < 45 else "R"
+
+
+def build_pitch_mix_profile(
+    pitcher_name: str,
+    pitcher_id,
+    pitcher_hr9: float,
+    pitcher_barrel_allowed: float,
+    pitcher_hard_hit_allowed: float,
+    pitcher_throws: str,
+) -> dict:
+    seed_key = f"{pitcher_id}-{pitcher_name}-{pitcher_throws}"
+    ff_base = stable_float(f"{seed_key}-ff", 24, 50)
+    sl_base = stable_float(f"{seed_key}-sl", 12, 34)
+    ch_base = stable_float(f"{seed_key}-ch", 6, 24)
+    cu_base = stable_float(f"{seed_key}-cu", 4, 20)
+
+    if pitcher_throws == "L":
+        ch_base += 1.5
+        ff_base -= 1.0
+    else:
+        sl_base += 1.0
+
+    if pitcher_hr9 >= 1.45:
+        ff_base += 4.0
+    if pitcher_barrel_allowed >= 9.0:
+        sl_base += 2.0
+    if pitcher_hard_hit_allowed >= 42.0:
+        ch_base += 1.5
+
+    mix = {
+        "FF": max(ff_base, 5.0),
+        "SL": max(sl_base, 5.0),
+        "CH": max(ch_base, 3.0),
+        "CU": max(cu_base, 2.0),
+    }
+
+    total = sum(mix.values())
+    if total <= 0:
+        return {"FF": 40.0, "SL": 30.0, "CH": 20.0, "CU": 10.0}
+
+    return {
+        pitch: round((usage / total) * 100, 1)
+        for pitch, usage in mix.items()
+    }
+
+
+def compute_pitch_matchup_score(
+    primary_pitch: str | None,
+    primary_pitch_usage: float,
+    bats: str,
+    pitcher_throws: str,
+    barrel: float,
+    hard_hit: float,
+    air_pct: float,
+    launch_angle: float,
+    xslg: float,
+    xwoba: float,
+    ground_ball: float,
+):
+    if primary_pitch is None:
+        return 0.0, "No pitch edge", 0.0
+
+    opposite_hand = bats != pitcher_throws
+    shape_bonus = max(0.0, (barrel - 8) * 0.35) + max(0.0, (hard_hit - 38) * 0.12)
+    lift_bonus = max(0.0, (air_pct - 52) * 0.08) + max(0.0, (18 - abs(launch_angle - 18)) * 0.18)
+    contact_quality_bonus = max(0.0, (xslg - 0.430) * 20) + max(0.0, (xwoba - 0.320) * 12)
+    gb_penalty = max(0.0, (ground_ball - 48) * 0.16)
+
+    pitch_type_score = 0.0
+    pitch_label = "Neutral pitch fit"
+
+    if primary_pitch == "FF":
+        pitch_type_score = shape_bonus + lift_bonus + contact_quality_bonus
+        if barrel >= 11 and air_pct >= 55:
+            pitch_label = "Fastball lift edge"
+        else:
+            pitch_label = "Fastball contact look"
+    elif primary_pitch == "SL":
+        pitch_type_score = (shape_bonus * 0.85) + (contact_quality_bonus * 0.85) + (2.0 if opposite_hand else 0.8)
+        if opposite_hand and hard_hit >= 42:
+            pitch_label = "Opposite-hand slider edge"
+        else:
+            pitch_label = "Slider damage path"
+    elif primary_pitch == "CH":
+        pitch_type_score = (contact_quality_bonus * 0.90) + (1.8 if opposite_hand else 0.5) + max(0.0, (launch_angle - 10) * 0.10)
+        if opposite_hand and xwoba >= 0.340:
+            pitch_label = "Changeup split edge"
+        else:
+            pitch_label = "Changeup contact path"
+    elif primary_pitch == "CU":
+        pitch_type_score = (shape_bonus * 0.75) + lift_bonus + max(0.0, (barrel - 9) * 0.22)
+        if launch_angle >= 14 and barrel >= 10:
+            pitch_label = "Curveball loft edge"
+        else:
+            pitch_label = "Curveball lift look"
+
+    usage_multiplier = 0.85 + min(primary_pitch_usage, 65.0) / 100.0
+    handedness_bonus = 1.4 if opposite_hand else -0.4
+
+    final_score = (pitch_type_score * usage_multiplier) + handedness_bonus - gb_penalty
+
+    if final_score >= 8.0:
+        pitch_label = f"Strong {pitch_label.lower()}"
+    elif final_score <= 1.5:
+        pitch_label = "Weak pitch edge"
+
+    return round(final_score, 2), pitch_label, round(handedness_bonus, 2)
+
+
 def summarize_tracker(df: pd.DataFrame):
     if df.empty:
         return {
@@ -1064,7 +1178,8 @@ def build_hitter_metrics(
         recent_trend = "COLD"
 
     display_spot = display_lineup_spot(lineup_spot)
-    bats = "L" if int(stable_float(f"{player_id}-bat", 0, 10)) % 2 == 0 else "R"
+    bats = estimate_handedness_from_name(player_name, "batter")
+    pitcher_throws = estimate_handedness_from_name(opp_pitcher, "pitcher")
 
     if live_pitcher is None:
         pitch_hr9 = stable_float(f"{opp_pitcher}-hr9", 0.7, 1.9)
@@ -1078,13 +1193,33 @@ def build_hitter_metrics(
     pullside_boost = stable_float(f"{player_id}-pull", -1, 3)
     park_boost = (park_factor - 1.0) * 20
 
-    pitch_mix_example = {
-        "FF": stable_float(f"{opp_pitcher}-ff", 25, 55),
-        "SL": stable_float(f"{opp_pitcher}-sl", 10, 40),
-        "CH": stable_float(f"{opp_pitcher}-ch", 5, 25),
-    }
-
+    pitch_mix_example = build_pitch_mix_profile(
+        opp_pitcher,
+        opp_pitcher_id,
+        pitch_hr9,
+        pitch_barrel_allowed,
+        pitch_hard_hit_allowed,
+        pitcher_throws,
+    )
+    sorted_pitch_mix = sorted(pitch_mix_example.items(), key=lambda x: x[1], reverse=True)
     primary_pitch = isolate_primary_pitch(pitch_mix_example)
+    primary_pitch_usage = sorted_pitch_mix[0][1] if sorted_pitch_mix else 0.0
+    secondary_pitch_usage = sorted_pitch_mix[1][1] if len(sorted_pitch_mix) > 1 else 0.0
+    pitch_gap = round(primary_pitch_usage - secondary_pitch_usage, 1)
+
+    pitch_matchup_score, pitch_matchup_label, handedness_edge = compute_pitch_matchup_score(
+        primary_pitch,
+        primary_pitch_usage,
+        bats,
+        pitcher_throws,
+        barrel,
+        hard_hit,
+        air_pct,
+        launch_angle,
+        xslg,
+        xwoba,
+        ground_ball,
+    )
 
     pitch_isolation_bonus = -2.5
     pitch_isolation_valid = "No"
@@ -1106,12 +1241,7 @@ def build_hitter_metrics(
 
     if primary_pitch is not None:
         pitch_isolation_valid = "Yes"
-        hitter_pitch_fit = stable_float(
-            f"{player_name}-{primary_pitch}-fit",
-            -2.0,
-            4.5,
-        )
-        pitch_isolation_bonus = hitter_pitch_fit
+        pitch_isolation_bonus = pitch_matchup_score
     elif elite_statcast_profile:
         pitch_isolation_valid = "Elite Statcast Override"
         pitch_isolation_bonus = 2.25
@@ -1158,6 +1288,7 @@ def build_hitter_metrics(
         (xiso * 100) * 0.7 +
         (xwoba * 100) * 0.45 +
         pitch_isolation_bonus +
+        handedness_edge +
         (pitch_hr9 - 0.7) * 10.0 +
         (pitch_barrel_allowed - 4) * 0.9 +
         (pitch_hard_hit_allowed - 30) * 0.4 +
@@ -1210,6 +1341,11 @@ def build_hitter_metrics(
     elif hard_hit < 35:
         base_score -= 7.0
 
+    if primary_pitch is not None and primary_pitch_usage >= 50:
+        base_score += 2.8
+    elif primary_pitch is not None and pitch_gap >= 20:
+        base_score += 1.8
+
     if not pitcher_attackable:
         base_score -= 4.0
     if weak_recent_profile:
@@ -1256,7 +1392,7 @@ def build_hitter_metrics(
     if pitch_isolation_valid == "Yes" and elite_statcast_profile:
         reasons.append("Elite + isolation combo")
     elif pitch_isolation_valid == "Yes":
-        reasons.append("Pitch isolation edge")
+        reasons.append(pitch_matchup_label)
     elif pitch_isolation_valid == "Elite Statcast Override":
         reasons.append("Elite Statcast override")
     else:
@@ -1297,13 +1433,20 @@ def build_hitter_metrics(
         (recent_hr * 5.0) +
         (recent_xbh * 1.8) +
         (recent_iso * 24.0) +
-        (recent_damage_score * 0.35)
+        (recent_damage_score * 0.35) +
+        (pitch_matchup_score * 2.4) +
+        (handedness_edge * 2.0)
     )
 
     if pitch_isolation_valid == "Yes":
         model_rank_score += 7.5
     elif pitch_isolation_valid == "Elite Statcast Override":
         model_rank_score += 5.0
+
+    if primary_pitch is not None and primary_pitch_usage >= 50:
+        model_rank_score += 4.0
+    elif primary_pitch is not None and pitch_gap >= 20:
+        model_rank_score += 2.0
 
     if recent_trend == "HOT":
         model_rank_score += 6.0
@@ -1337,6 +1480,12 @@ def build_hitter_metrics(
         "Player": player_name,
         "Team": team,
         "Bats": bats,
+        "Pitcher Throws": pitcher_throws,
+        "Primary Pitch": primary_pitch if primary_pitch is not None else "Mix",
+        "Primary Pitch Usage": round(primary_pitch_usage, 1),
+        "Pitch Gap": round(pitch_gap, 1),
+        "Pitch Matchup Score": round(pitch_matchup_score, 2),
+        "Handedness Edge": round(handedness_edge, 2),
         "Lineup Spot": display_spot,
         "Lineup Source": lineup_source,
         "EV": round(ev, 1),
@@ -1397,6 +1546,9 @@ def sort_for_hr(df: pd.DataFrame) -> pd.DataFrame:
     sortable["_gb_sort"] = safe_numeric_series(sortable, "GroundBall%", 999.0)
     sortable["_pitch_hr9_sort"] = safe_numeric_series(sortable, "Pitcher_HR9_Last7", 0.0)
     sortable["_pitch_barrel_sort"] = safe_numeric_series(sortable, "Pitcher_Barrel_Allowed", 0.0)
+    sortable["_pitch_matchup_sort"] = safe_numeric_series(sortable, "Pitch Matchup Score", 0.0)
+    sortable["_handedness_sort"] = safe_numeric_series(sortable, "Handedness Edge", 0.0)
+    sortable["_usage_sort"] = safe_numeric_series(sortable, "Primary Pitch Usage", 0.0)
     sortable["_la_sort"] = safe_numeric_series(sortable, "LaunchAngle", 0.0)
     sortable["_trend_sort"] = sortable.get("Recent Trend", pd.Series(["NEUTRAL"] * len(sortable), index=sortable.index)).map({"HOT": 3, "LIVE": 2, "NEUTRAL": 1, "COLD": 0}).fillna(1)
     sortable["_hrr_sort"] = safe_numeric_series(sortable, "HRR Score", 0.0)
@@ -1404,8 +1556,10 @@ def sort_for_hr(df: pd.DataFrame) -> pd.DataFrame:
     sortable = sortable.sort_values(
         by=[
             "_model_rank_sort",
+            "_pitch_matchup_sort",
             "_hr_prob_sort",
             "_lineup_sort",
+            "_usage_sort",
             "_barrel_sort",
             "_hh_sort",
             "_air_sort",
@@ -1413,11 +1567,12 @@ def sort_for_hr(df: pd.DataFrame) -> pd.DataFrame:
             "_gb_sort",
             "_pitch_hr9_sort",
             "_pitch_barrel_sort",
+            "_handedness_sort",
             "_la_sort",
             "_trend_sort",
             "_hrr_sort",
         ],
-        ascending=[False, False, True, False, False, False, False, True, False, False, False, False, False],
+        ascending=[False, False, False, True, False, False, False, False, False, True, False, False, False, False, False, False],
     ).reset_index(drop=True)
     return sortable.drop(columns=[
         "_lineup_sort",
@@ -1430,6 +1585,9 @@ def sort_for_hr(df: pd.DataFrame) -> pd.DataFrame:
         "_gb_sort",
         "_pitch_hr9_sort",
         "_pitch_barrel_sort",
+        "_pitch_matchup_sort",
+        "_handedness_sort",
+        "_usage_sort",
         "_la_sort",
         "_trend_sort",
         "_hrr_sort",
