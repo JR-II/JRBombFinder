@@ -26,6 +26,28 @@ TRACKER_FILE = "hr_tracker.csv"
 LOCK_FILE = "daily_hr_board_lock.csv"
 CURRENT_SEASON = datetime.now().year
 
+SNAPSHOT_DIR = "tracker_snapshots"
+
+
+def ensure_snapshot_folder():
+    os.makedirs(SNAPSHOT_DIR, exist_ok=True)
+
+
+def save_daily_tracker_snapshot(tracker_df: pd.DataFrame, snapshot_date: str):
+    """Persist the day's tracker state so historical results never disappear."""
+    ensure_snapshot_folder()
+    tracker_path = os.path.join(SNAPSHOT_DIR, f"hr_tracker_{snapshot_date}.csv")
+    tracker_df.to_csv(tracker_path, index=False)
+
+
+def save_daily_board_snapshot(board_df: pd.DataFrame, snapshot_date: str):
+    """Persist the surfaced HR board once per day so surfaced counts cannot be lost."""
+    ensure_snapshot_folder()
+    board_path = os.path.join(SNAPSHOT_DIR, f"hr_board_{snapshot_date}.csv")
+    if not os.path.exists(board_path):
+        board_df.to_csv(board_path, index=False)
+
+
 TEAM_ABBR = {
     "Arizona Diamondbacks": "ARI",
     "Atlanta Braves": "ATL",
@@ -2561,10 +2583,13 @@ lineup_mode = get_lineup_mode(schedule) if schedule else "PROJECTED"
 
 tracked_df = build_visible_tracker_pool(locked_df, schedule)
 tracker = sync_tracker_with_board(tracked_df)
+save_daily_board_snapshot(tracked_df, today_str())
 
 if st.session_state.get("force_tracker_refresh", False) or st.session_state.get("manual_refresh_trigger", False):
     tracker = auto_update_tracker_results(tracker, schedule)
     st.session_state.manual_refresh_trigger = False
+
+save_daily_tracker_snapshot(tracker, today_str())
 
 summary = summarize_tracker(tracker)
 daily_summary = summarize_tracker_by_day(tracker)
