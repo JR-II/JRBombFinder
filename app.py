@@ -15,7 +15,7 @@ st.caption("Daily Home Run Probability Engine")
 AUTO_REFRESH_SECONDS = 120
 
 if "last_refresh_time" not in st.session_state:
-st.session_state.last_refresh_time = time.time()
+    st.session_state.last_refresh_time = time.time()
 
 if time.time() - st.session_state.last_refresh_time > AUTO_REFRESH_SECONDS:
 st.session_state.last_refresh_time = time.time()
