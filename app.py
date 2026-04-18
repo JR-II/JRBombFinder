@@ -469,7 +469,7 @@ def get_today_schedule():
                 "detailed_state": detailed_state,
             })
 
-    return games
+    return sort_schedule_rows(games)
 
 
 @st.cache_data(ttl=300)
@@ -1500,7 +1500,7 @@ def get_boxscore_homers(game_pk: int):
     return homer_map
 
 
-def sync_tracker_with_board(tracked_df: pd.DataFrame, schedule: list[dict]):
+def sync_tracker_with_board(tracked_df: pd.DataFrame):
     tracker = load_tracker()
     date_key = today_str()
 
@@ -1508,20 +1508,14 @@ def sync_tracker_with_board(tracked_df: pd.DataFrame, schedule: list[dict]):
         return tracker
 
     existing_today = tracker[tracker["date"].astype(str) == date_key].copy()
-    existing_keys = set(
-        zip(existing_today["player"], existing_today["team"], existing_today["game"])
-    )
 
-    slate_started = any(str(g.get("game_state", "Preview")) != "Preview" for g in schedule)
-    if slate_started and not existing_today.empty:
+    # Freeze the day's surfaced pool once it has been created.
+    # This prevents the surfaced count from climbing later in the slate.
+    if not existing_today.empty:
         return tracker
 
     new_rows = []
     for _, row in tracked_df.iterrows():
-        key = (row["Player"], row["Team"], row["Game"])
-        if key in existing_keys:
-            continue
-
         new_rows.append({
             "date": date_key,
             "player": row["Player"],
@@ -1604,11 +1598,14 @@ locked_df = ensure_daily_board_lock(live_df)
 lineup_mode = get_lineup_mode(schedule) if schedule else "PROJECTED"
 
 tracked_df = build_visible_tracker_pool(locked_df, schedule)
-tracker = sync_tracker_with_board(tracked_df, schedule)
+save_daily_board_snapshot(tracked_df, today_str())
+tracker = sync_tracker_with_board(tracked_df)
 
 if st.session_state.get("force_tracker_refresh", False) or st.session_state.get("manual_refresh_trigger", False):
     tracker = auto_update_tracker_results(tracker, schedule)
     st.session_state.manual_refresh_trigger = False
+
+save_daily_tracker_snapshot(tracker, today_str())
 
 summary = summarize_tracker(tracker)
 daily_summary = summarize_tracker_by_day(tracker)
@@ -1629,7 +1626,7 @@ if locked_df.empty:
     st.stop()
 
 base_tabs = ["HR Probability", "Top 12", "Hits + Runs + RBIs", "Engine Breakdown", "Accuracy Tracker"]
-game_tabs = [g["game_key"] for g in schedule]
+game_tabs = [f"{g['game_key']} — {format_game_time_et(g.get('game_time', ''))}" for g in schedule]
 tabs = st.tabs(base_tabs + game_tabs)
 
 with tabs[0]:
@@ -1820,7 +1817,6 @@ for idx, game in enumerate(schedule, start=5):
         st.caption(format_game_time_et(game.get("game_time", "")))
         st.subheader(game["game_key"])
         st.caption(
-            f"{game['away_team']} @ {game['home_team']}  |  "
             f"Venue: {game['venue']}  |  "
             f"Away starter: {game['away_pitcher']}  |  "
             f"Home starter: {game['home_pitcher']}"
