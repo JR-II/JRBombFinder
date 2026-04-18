@@ -1931,12 +1931,14 @@ def build_hitter_metrics(
         base_score -= 8.0
 
     if lineup_spot is not None:
-        if lineup_spot <= 4:
-            base_score += 3.5
-        elif lineup_spot <= 6:
-            base_score += 1.5
+        if lineup_spot <= 2:
+            base_score += 0.5
+        elif lineup_spot <= 5:
+            base_score += 1.2
+        elif lineup_spot <= 7:
+            base_score -= 0.4
         else:
-            base_score -= 1.0
+            base_score -= 1.1
 
     if ground_ball < 40:
         base_score += 4.0
@@ -2127,10 +2129,14 @@ def build_hitter_metrics(
         model_rank_score -= 4.0
 
     if lineup_spot is not None:
-        if lineup_spot <= 4:
-            model_rank_score += 5.0
-        elif lineup_spot <= 6:
-            model_rank_score += 2.0
+        if lineup_spot <= 2:
+            model_rank_score += 1.5
+        elif lineup_spot <= 5:
+            model_rank_score += 4.0
+        elif lineup_spot <= 7:
+            model_rank_score -= 1.0
+        else:
+            model_rank_score -= 3.0
 
     strict_flag = strict_statcast_ok(pd.Series({
         "Statcast Pass": "Yes" if statcast_pass else "No",
@@ -2139,6 +2145,12 @@ def build_hitter_metrics(
         "AIR%": air_pct,
         "xSLG": xslg,
     }))
+
+    elite_hr_look = bool(
+        statcast_authority_tier == "ELITE"
+        and pitch_matchup_score >= 4.0
+        and pitch_hr9 >= 1.2
+    )
 
     return {
         "Player": player_name,
@@ -2190,6 +2202,7 @@ def build_hitter_metrics(
         "BullpenArmsPrev": int(bullpen_arms_prev),
         "Statcast Authority Score": round(statcast_authority_score, 2),
         "Statcast Authority Tier": statcast_authority_tier,
+        "Elite HR Look": "Yes" if elite_hr_look else "No",
         "Why": " | ".join(reasons[:6]),
     }
 
@@ -2226,6 +2239,7 @@ def sort_for_hr(df: pd.DataFrame) -> pd.DataFrame:
     sortable["_handedness_sort"] = safe_numeric_series(sortable, "Handedness Edge", 0.0)
     sortable["_usage_sort"] = safe_numeric_series(sortable, "Primary Pitch Usage", 0.0)
     sortable["_mix_mode_sort"] = sortable.get("Pitch Mix Mode", pd.Series(["BALANCED"] * len(sortable), index=sortable.index)).map({"HARD": 3, "SOFT": 2, "BALANCED": 1}).fillna(1)
+    sortable["_elite_hr_sort"] = sortable.get("Elite HR Look", pd.Series(["No"] * len(sortable), index=sortable.index)).map({"Yes": 1, "No": 0}).fillna(0)
     sortable["_authority_sort"] = safe_numeric_series(sortable, "Statcast Authority Score", 0.0)
     sortable["_authority_tier_sort"] = sortable.get("Statcast Authority Tier", pd.Series(["MEDIUM"] * len(sortable), index=sortable.index)).map({"ELITE": 4, "STRONG": 3, "MEDIUM": 2, "WEAK": 1, "FAIL": 0}).fillna(2)
     sortable["_la_sort"] = safe_numeric_series(sortable, "LaunchAngle", 0.0)
@@ -2240,6 +2254,7 @@ def sort_for_hr(df: pd.DataFrame) -> pd.DataFrame:
             "_lineup_sort",
             "_usage_sort",
             "_mix_mode_sort",
+            "_elite_hr_sort",
             "_authority_tier_sort",
             "_authority_sort",
             "_barrel_sort",
@@ -2254,7 +2269,7 @@ def sort_for_hr(df: pd.DataFrame) -> pd.DataFrame:
             "_trend_sort",
             "_hrr_sort",
         ],
-        ascending=[False, False, False, True, False, False, False, False, False, False, False, True, False, False, False, False, False, False, False],
+        ascending=[False, False, False, True, False, False, False, False, False, False, False, False, True, False, False, False, False, False, False, False],
     ).reset_index(drop=True)
     return sortable.drop(columns=[
         "_lineup_sort",
@@ -2271,6 +2286,7 @@ def sort_for_hr(df: pd.DataFrame) -> pd.DataFrame:
         "_handedness_sort",
         "_usage_sort",
         "_mix_mode_sort",
+        "_elite_hr_sort",
         "_authority_sort",
         "_authority_tier_sort",
         "_la_sort",
@@ -2432,14 +2448,14 @@ def get_research_shortlist_pool(df: pd.DataFrame) -> pd.DataFrame:
             recent_trend.isin(["HOT", "LIVE"])
             | (barrel >= 10.5)
             | (xslg >= 0.470)
-            | ((lineup_num <= 4) & (pitch_score >= 3.0))
+            | ((lineup_num <= 4) & (pitch_score >= 3.5))
         )
     )
 
     gb_keep = (
         (gb <= 47.5)
-        | (barrel >= 11.5)
-        | (xslg >= 0.490)
+        | (barrel >= 12.0)
+        | (xslg >= 0.495)
         | authority_keep
     )
 
@@ -2450,17 +2466,18 @@ def get_research_shortlist_pool(df: pd.DataFrame) -> pd.DataFrame:
             mix_mode.eq("SOFT")
             & (
                 recent_trend.isin(["HOT", "LIVE"])
-                | (pitch_score >= 4.5)
+                | (pitch_score >= 4.8)
                 | ((lineup_num <= 4) & authority_tier.eq("MEDIUM"))
             )
         )
         | (
             mix_mode.eq("BALANCED")
             & (
-                (barrel >= 11.5)
-                | (xslg >= 0.485)
+                authority_tier.eq("STRONG")
+                | (barrel >= 12.0)
+                | (xslg >= 0.490)
                 | recent_trend.eq("HOT")
-                | (authority_tier.eq("MEDIUM") & (lineup_num <= 3) & (hard_hit >= 42.0))
+                | (authority_tier.eq("MEDIUM") & (lineup_num <= 3) & (hard_hit >= 43.0) & (air_pct >= 56.0))
             )
         )
     )
@@ -2482,7 +2499,7 @@ def get_research_shortlist_pool(df: pd.DataFrame) -> pd.DataFrame:
         shortlist = pool.copy()
 
     shortlist = sort_for_hr(shortlist)
-    shortlist = shortlist.head(50).reset_index(drop=True)
+    shortlist = shortlist.head(45).reset_index(drop=True)
     return shortlist
 
 
