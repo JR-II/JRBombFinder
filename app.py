@@ -685,6 +685,47 @@ def compute_statcast_authority(
     return round(authority_score, 2), 0.00, "FAIL"
 
 
+def compute_recent_contact_score(
+    recent_hr: int,
+    recent_xbh: int,
+    recent_iso: float,
+    recent_avg: float,
+    hard_hit: float,
+    barrel: float,
+    air_pct: float,
+):
+    score = (
+        (recent_hr * 2.8) +
+        (recent_xbh * 1.15) +
+        (recent_iso * 28.0) +
+        (recent_avg * 12.0) +
+        max(0.0, hard_hit - 40.0) * 0.22 +
+        max(0.0, barrel - 9.0) * 0.55 +
+        max(0.0, air_pct - 52.0) * 0.12
+    )
+    return round(score, 2)
+
+
+def compute_authority_alignment_bonus(
+    barrel: float,
+    hard_hit: float,
+    air_pct: float,
+    xslg: float,
+    ground_ball: float,
+    pitch_matchup_score: float,
+):
+    bonus = 0.0
+    if barrel >= 11 and hard_hit >= 43 and air_pct >= 55 and ground_ball <= 50:
+        bonus += 4.0
+    elif barrel >= 10 and hard_hit >= 40 and xslg >= 0.450:
+        bonus += 2.0
+    elif barrel < 8 and hard_hit < 38 and xslg < 0.430 and pitch_matchup_score < 5.0:
+        bonus -= 3.5
+    elif ground_ball >= 50 and barrel < 10 and xslg < 0.450:
+        bonus -= 2.0
+    return round(bonus, 2)
+
+
 def summarize_tracker(df: pd.DataFrame):
     if df.empty:
         return {
@@ -1720,6 +1761,16 @@ def build_hitter_metrics(
     else:
         recent_trend = "COLD"
 
+    recent_contact_score = compute_recent_contact_score(
+        recent_hr,
+        recent_xbh,
+        recent_iso,
+        recent_avg,
+        hard_hit,
+        barrel,
+        air_pct,
+    )
+
     display_spot = display_lineup_spot(lineup_spot)
     bats = estimate_handedness_from_name(player_name, "batter")
     pitcher_throws = estimate_handedness_from_name(opp_pitcher, "pitcher")
@@ -2082,6 +2133,20 @@ def build_hitter_metrics(
     elif air_pct >= 55:
         reasons.append("Air-ball target")
 
+    if recent_contact_score >= 12:
+        reasons.append("Recent contact surge")
+    elif recent_contact_score >= 8:
+        reasons.append("Recent contact support")
+
+    authority_alignment_bonus = compute_authority_alignment_bonus(
+        barrel,
+        hard_hit,
+        air_pct,
+        xslg,
+        ground_ball,
+        pitch_matchup_score,
+    )
+
     model_rank_score = (
         (barrel * 4.8) +
         (hard_hit * 2.7) +
@@ -2099,7 +2164,9 @@ def build_hitter_metrics(
         (handedness_edge * 2.0) +
         (weather_boost * 4.0) +
         (bullpen_fatigue_score * 4.8) +
-        (statcast_authority_score * 1.35)
+        (statcast_authority_score * 1.35) +
+        (recent_contact_score * 1.45) +
+        authority_alignment_bonus
     )
 
     if pitch_isolation_valid == "Yes":
@@ -2130,13 +2197,15 @@ def build_hitter_metrics(
 
     if lineup_spot is not None:
         if lineup_spot <= 2:
-            model_rank_score += 1.5
+            model_rank_score += 2.5
         elif lineup_spot <= 5:
-            model_rank_score += 4.0
-        elif lineup_spot <= 7:
-            model_rank_score -= 1.0
+            model_rank_score += 5.0
+        elif lineup_spot == 6:
+            model_rank_score += 0.5
+        elif lineup_spot == 7:
+            model_rank_score -= 1.5
         else:
-            model_rank_score -= 3.0
+            model_rank_score -= 4.0
 
     strict_flag = strict_statcast_ok(pd.Series({
         "Statcast Pass": "Yes" if statcast_pass else "No",
@@ -2202,6 +2271,8 @@ def build_hitter_metrics(
         "BullpenArmsPrev": int(bullpen_arms_prev),
         "Statcast Authority Score": round(statcast_authority_score, 2),
         "Statcast Authority Tier": statcast_authority_tier,
+        "Recent Contact Score": round(recent_contact_score, 2),
+        "Authority Alignment Bonus": round(authority_alignment_bonus, 2),
         "Elite HR Look": "Yes" if elite_hr_look else "No",
         "Why": " | ".join(reasons[:6]),
     }
@@ -2242,6 +2313,8 @@ def sort_for_hr(df: pd.DataFrame) -> pd.DataFrame:
     sortable["_elite_hr_sort"] = sortable.get("Elite HR Look", pd.Series(["No"] * len(sortable), index=sortable.index)).map({"Yes": 1, "No": 0}).fillna(0)
     sortable["_authority_sort"] = safe_numeric_series(sortable, "Statcast Authority Score", 0.0)
     sortable["_authority_tier_sort"] = sortable.get("Statcast Authority Tier", pd.Series(["MEDIUM"] * len(sortable), index=sortable.index)).map({"ELITE": 4, "STRONG": 3, "MEDIUM": 2, "WEAK": 1, "FAIL": 0}).fillna(2)
+    sortable["_recent_contact_sort"] = safe_numeric_series(sortable, "Recent Contact Score", 0.0)
+    sortable["_authority_bonus_sort"] = safe_numeric_series(sortable, "Authority Alignment Bonus", 0.0)
     sortable["_la_sort"] = safe_numeric_series(sortable, "LaunchAngle", 0.0)
     sortable["_trend_sort"] = sortable.get("Recent Trend", pd.Series(["NEUTRAL"] * len(sortable), index=sortable.index)).map({"HOT": 3, "LIVE": 2, "NEUTRAL": 1, "COLD": 0}).fillna(1)
     sortable["_hrr_sort"] = safe_numeric_series(sortable, "HRR Score", 0.0)
@@ -2437,49 +2510,49 @@ def get_research_shortlist_pool(df: pd.DataFrame) -> pd.DataFrame:
     gb = safe_numeric_series(pool, "GroundBall%", 999.0)
     pitch_score = safe_numeric_series(pool, "Pitch Matchup Score", 0.0)
     hr_prob = safe_numeric_series(pool, "HR Probability %", 0.0)
+    recent_contact_score = safe_numeric_series(pool, "Recent Contact Score", 0.0)
+    authority_bonus = safe_numeric_series(pool, "Authority Alignment Bonus", 0.0)
     recent_trend = pool.get("Recent Trend", pd.Series(["NEUTRAL"] * len(pool), index=pool.index)).astype(str)
     authority_tier = pool.get("Statcast Authority Tier", pd.Series(["MEDIUM"] * len(pool), index=pool.index)).astype(str)
     mix_mode = pool.get("Pitch Mix Mode", pd.Series(["BALANCED"] * len(pool), index=pool.index)).astype(str)
-    elite_hr = pool.get("Elite HR Look", pd.Series(["No"] * len(pool), index=pool.index)).astype(str).eq("Yes")
 
     authority_keep = authority_tier.isin(["ELITE", "STRONG"])
     medium_keep = (
         authority_tier.eq("MEDIUM")
         & (
-            elite_hr
-            | ((recent_trend.isin(["HOT", "LIVE"])) & ((barrel >= 10.5) | (hard_hit >= 42.0)))
-            | (xslg >= 0.485)
-            | (air_pct >= 58.0)
-            | ((lineup_num <= 5) & (pitch_score >= 5.0) & (barrel >= 10.0))
+            recent_trend.isin(["HOT", "LIVE"])
+            | (barrel >= 10.5)
+            | (xslg >= 0.470)
+            | ((lineup_num <= 4) & (pitch_score >= 3.5))
         )
     )
 
     gb_keep = (
-        (gb <= 46.5)
-        | (barrel >= 12.5)
-        | (xslg >= 0.500)
-        | elite_hr
-        | (authority_keep & (air_pct >= 56.0))
+        (gb <= 47.5)
+        | (barrel >= 12.0)
+        | (xslg >= 0.495)
+        | authority_keep
     )
 
     mix_keep = (
         mix_mode.eq("HARD")
         | authority_keep
-        | elite_hr
         | (
             mix_mode.eq("SOFT")
             & (
-                (recent_trend.isin(["HOT", "LIVE"]) & (pitch_score >= 4.8))
-                | ((lineup_num <= 4) & authority_tier.eq("MEDIUM") & (hard_hit >= 43.0) & (air_pct >= 55.0) & (xslg >= 0.455))
+                recent_trend.isin(["HOT", "LIVE"])
+                | (pitch_score >= 4.8)
+                | ((lineup_num <= 4) & authority_tier.eq("MEDIUM"))
             )
         )
         | (
             mix_mode.eq("BALANCED")
             & (
                 authority_tier.eq("STRONG")
-                | elite_hr
-                | (recent_trend.eq("HOT") & (barrel >= 11.5))
-                | (authority_tier.eq("MEDIUM") & (lineup_num <= 3) & (hard_hit >= 44.0) & (air_pct >= 57.0) & (xslg >= 0.470))
+                | (barrel >= 12.0)
+                | (xslg >= 0.490)
+                | recent_trend.eq("HOT")
+                | (authority_tier.eq("MEDIUM") & (lineup_num <= 3) & (hard_hit >= 43.0) & (air_pct >= 56.0))
             )
         )
     )
@@ -2487,23 +2560,21 @@ def get_research_shortlist_pool(df: pd.DataFrame) -> pd.DataFrame:
     lineup_keep = (
         (lineup_num <= 6)
         | authority_keep
-        | elite_hr
-        | ((lineup_num == 7) & (barrel >= 12.0) & (hard_hit >= 44.0))
+        | ((lineup_num <= 7) & (barrel >= 12.0))
     )
 
     score_keep = (
-        (hr_prob >= 9.5)
+        (hr_prob >= 8.5)
         | authority_keep
-        | elite_hr
-        | ((barrel >= 12.0) & (hard_hit >= 44.0) & (air_pct >= 56.0))
+        | ((barrel >= 11.5) & (hard_hit >= 43.0) & (air_pct >= 54.0))
     )
 
-    shortlist = pool[gb_keep & mix_keep & lineup_keep & score_keep & (authority_keep | medium_keep | elite_hr)].copy()
+    shortlist = pool[gb_keep & mix_keep & lineup_keep & score_keep & (authority_keep | medium_keep)].copy()
     if shortlist.empty:
         shortlist = pool.copy()
 
     shortlist = sort_for_hr(shortlist)
-    shortlist = shortlist.head(40).reset_index(drop=True)
+    shortlist = shortlist.head(45).reset_index(drop=True)
     return shortlist
 
 
