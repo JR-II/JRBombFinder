@@ -205,10 +205,7 @@ def format_game_time_et(game_time_value: str) -> str:
 def sort_schedule_rows(schedule_rows: list[dict]) -> list[dict]:
     def _key(game: dict):
         dt = parse_game_time_et(game.get("game_time", ""))
-        if dt is None:
-            fallback = datetime.max.replace(tzinfo=ZoneInfo("America/New_York"))
-            return (1, fallback, game.get("game_key", ""))
-        return (0, dt, game.get("game_key", ""))
+        return (dt is None, dt or datetime.max.replace(tzinfo=ZoneInfo("America/New_York")), game.get("game_key", ""))
     return sorted(schedule_rows, key=_key)
 
 
@@ -2272,7 +2269,7 @@ def sort_for_hr(df: pd.DataFrame) -> pd.DataFrame:
 
 @st.cache_data(ttl=900)
 def build_daily_dataset():
-    schedule = get_today_schedule()
+    schedule = sort_schedule_rows(get_today_schedule())
     rows = []
 
     savant_batter_map = fetch_savant_batter_map(CURRENT_SEASON)
@@ -2646,7 +2643,7 @@ if locked_df.empty:
 
 base_tabs = ["HR Probability", "Top 12", "Hits + Runs + RBIs", "Engine Breakdown", "Accuracy Tracker"]
 schedule = sort_schedule_rows(schedule)
-game_tabs = [f"{g['game_key']} • {format_game_time_et(g.get('game_time', ''))}" for g in schedule]
+game_tabs = [f"{format_game_time_et(g.get('game_time', ''))} | {g['game_key']}" for g in schedule]
 tabs = st.tabs(base_tabs + game_tabs)
 
 with tabs[0]:
@@ -2834,8 +2831,8 @@ with tabs[4]:
 
 for idx, game in enumerate(schedule, start=5):
     with tabs[idx]:
-        st.caption(format_game_time_et(game.get("game_time", "")))
-        st.subheader(game["game_key"])
+        st.caption(f"Start: {format_game_time_et(game.get('game_time', ''))}")
+        st.subheader(game['game_key'])
         st.caption(
             f"Venue: {game['venue']}  |  "
             f"Away starter: {game['away_pitcher']}  |  "
