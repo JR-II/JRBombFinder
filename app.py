@@ -48,6 +48,18 @@ def save_daily_board_snapshot(board_df: pd.DataFrame, snapshot_date: str):
         board_df.to_csv(board_path, index=False)
 
 
+def load_daily_board_snapshot(snapshot_date: str) -> pd.DataFrame:
+    """Load the frozen surfaced HR board for the day if it already exists."""
+    ensure_snapshot_folder()
+    board_path = os.path.join(SNAPSHOT_DIR, f"hr_board_{snapshot_date}.csv")
+    if not os.path.exists(board_path):
+        return pd.DataFrame()
+    try:
+        return pd.read_csv(board_path)
+    except Exception:
+        return pd.DataFrame()
+
+
 TEAM_ABBR = {
     "Arizona Diamondbacks": "ARI",
     "Atlanta Braves": "ATL",
@@ -2692,9 +2704,16 @@ locked_df = ensure_daily_board_lock(live_df, schedule)
 
 lineup_mode = get_lineup_mode(schedule) if schedule else "PROJECTED"
 
-tracked_df = build_visible_tracker_pool(locked_df, schedule)
+snapshot_date = today_str()
+snapshot_tracked_df = load_daily_board_snapshot(snapshot_date)
+
+if snapshot_tracked_df.empty:
+    tracked_df = build_visible_tracker_pool(locked_df, schedule)
+    save_daily_board_snapshot(tracked_df, snapshot_date)
+else:
+    tracked_df = snapshot_tracked_df.copy()
+
 tracker = sync_tracker_with_board(tracked_df)
-save_daily_board_snapshot(tracked_df, today_str())
 
 if st.session_state.get("force_tracker_refresh", False) or st.session_state.get("manual_refresh_trigger", False):
     tracker = auto_update_tracker_results(tracker, schedule)
