@@ -2188,113 +2188,6 @@ def safe_numeric_series(df: pd.DataFrame, col_name: str, default=0.0) -> pd.Seri
         return pd.to_numeric(df[col_name], errors="coerce").fillna(default)
     return pd.Series([default] * len(df), index=df.index, dtype="float64")
 
-
-def lineup_spot_to_num(value) -> int:
-    if value is None:
-        return 99
-    text = str(value).strip()
-    if text in {"", "—", "-", "None", "nan"}:
-        return 99
-    try:
-        return int(float(text))
-    except Exception:
-        return 99
-
-
-def lineup_slot_hr_boost(slot_value) -> float:
-    slot = lineup_spot_to_num(slot_value)
-    slot_weights = {
-        1: 1.4,
-        2: 1.4,
-        3: 1.35,
-        4: 1.5,
-        5: 1.15,
-        6: 0.35,
-        7: -0.8,
-        8: -1.0,
-        9: -1.2,
-    }
-    return slot_weights.get(slot, -0.25 if slot >= 7 else 0.0)
-
-
-def research_shortlist_pass(row: pd.Series) -> bool:
-    if not bool(row.get("HR Eligible", False)):
-        return False
-
-    barrel = safe_float(row.get("Barrel%"), 0.0)
-    hard_hit = safe_float(row.get("HardHit%"), 0.0)
-    air_pct = safe_float(row.get("AIR%"), 0.0)
-    launch_angle = safe_float(row.get("LaunchAngle"), 14.0)
-    xslg = safe_float(row.get("xSLG"), 0.0)
-    ground_ball = safe_float(row.get("GroundBall%"), 100.0)
-    ev = safe_float(row.get("EV"), 0.0)
-    hr_prob = safe_float(row.get("HR Probability %"), 0.0)
-    pitch_mode = str(row.get("Pitch Mix Mode", "BALANCED")).upper()
-    recent_trend = str(row.get("Recent Trend", "NEUTRAL")).upper()
-    recent_form_pass = str(row.get("Recent Form Pass", "No")) == "Yes"
-    strict_statcast = str(row.get("Strict Statcast", "No")) == "Yes"
-    lineup_source = str(row.get("Lineup Source", "PROJECTED")).upper()
-    lineup_spot = lineup_spot_to_num(row.get("Lineup Spot"))
-    pitch_valid = str(row.get("Pitch_Isolation_Valid", "No"))
-    authority_score, _, authority_tier = compute_statcast_authority(
-        ev,
-        barrel,
-        hard_hit,
-        air_pct,
-        launch_angle,
-        xslg,
-        ground_ball,
-    )
-
-    strong_authority = authority_tier in {"ELITE", "STRONG"}
-    medium_authority_live = authority_tier == "MEDIUM" and (
-        recent_form_pass or recent_trend in {"HOT", "LIVE"} or barrel >= 11 or xslg >= 0.480
-    )
-
-    if not (strong_authority or medium_authority_live or hr_prob >= 18):
-        return False
-
-    if pitch_mode == "SOFT" and not (strong_authority or recent_trend in {"HOT", "LIVE"}):
-        return False
-
-    if pitch_mode == "BALANCED" and authority_tier not in {"ELITE", "STRONG"} and not strict_statcast:
-        return False
-
-    if ground_ball > 48 and barrel < 11 and xslg < 0.480:
-        return False
-
-    if hard_hit < 40 and barrel < 9 and xslg < 0.450:
-        return False
-
-    if pitch_valid in {"Soft No Edge", "Balanced No Edge"} and not strong_authority:
-        return False
-
-    if lineup_spot >= 7 and lineup_source == "CONFIRMED" and not (strong_authority and recent_trend in {"HOT", "LIVE"}):
-        return False
-
-    if lineup_spot == 99 and lineup_source == "PROJECTED" and authority_tier not in {"ELITE", "STRONG"}:
-        return False
-
-    if hr_prob < 10 and authority_tier not in {"ELITE", "STRONG"}:
-        return False
-
-    return True
-
-
-def get_research_shortlist_pool(df: pd.DataFrame) -> pd.DataFrame:
-    hr_pool = df[df["HR Eligible"]].copy()
-    if hr_pool.empty:
-        return hr_pool
-
-    shortlist_mask = hr_pool.apply(research_shortlist_pass, axis=1)
-    shortlist = hr_pool[shortlist_mask].copy()
-
-    if shortlist.empty:
-        shortlist = hr_pool.copy()
-
-    shortlist = sort_for_hr(shortlist).reset_index(drop=True)
-    return shortlist
-
 def classify_hr_tier(prob: float) -> str:
     if prob >= 20:
         return "CORE TARGET"
@@ -2308,7 +2201,6 @@ def classify_hr_tier(prob: float) -> str:
 def sort_for_hr(df: pd.DataFrame) -> pd.DataFrame:
     sortable = df.copy()
     sortable["_lineup_sort"] = safe_numeric_series(sortable, "Lineup Spot", 99)
-    sortable["_slot_weight_sort"] = sortable.get("Lineup Spot", pd.Series([99] * len(sortable), index=sortable.index)).apply(lineup_slot_hr_boost)
     sortable["_model_rank_sort"] = safe_numeric_series(sortable, "Model Rank Score", 0.0)
     sortable["_hr_prob_sort"] = safe_numeric_series(sortable, "HR Probability %", 0.0)
     sortable["_barrel_sort"] = safe_numeric_series(sortable, "Barrel%", 0.0)
@@ -2331,7 +2223,6 @@ def sort_for_hr(df: pd.DataFrame) -> pd.DataFrame:
     sortable = sortable.sort_values(
         by=[
             "_model_rank_sort",
-            "_slot_weight_sort",
             "_pitch_matchup_sort",
             "_hr_prob_sort",
             "_lineup_sort",
@@ -2355,7 +2246,6 @@ def sort_for_hr(df: pd.DataFrame) -> pd.DataFrame:
     ).reset_index(drop=True)
     return sortable.drop(columns=[
         "_lineup_sort",
-        "_slot_weight_sort",
         "_model_rank_sort",
         "_hr_prob_sort",
         "_barrel_sort",
@@ -2499,33 +2389,90 @@ def build_daily_dataset():
         return pd.DataFrame(), schedule
 
     df["HR Tier"] = df["HR Probability %"].apply(classify_hr_tier)
-    df["Authority Score"] = df.apply(
-        lambda row: compute_statcast_authority(
-            safe_float(row.get("EV"), 0.0),
-            safe_float(row.get("Barrel%"), 0.0),
-            safe_float(row.get("HardHit%"), 0.0),
-            safe_float(row.get("AIR%"), 0.0),
-            safe_float(row.get("LaunchAngle"), 14.0),
-            safe_float(row.get("xSLG"), 0.0),
-            safe_float(row.get("GroundBall%"), 100.0),
-        )[0],
-        axis=1,
-    )
-    df["Authority Tier"] = df.apply(
-        lambda row: compute_statcast_authority(
-            safe_float(row.get("EV"), 0.0),
-            safe_float(row.get("Barrel%"), 0.0),
-            safe_float(row.get("HardHit%"), 0.0),
-            safe_float(row.get("AIR%"), 0.0),
-            safe_float(row.get("LaunchAngle"), 14.0),
-            safe_float(row.get("xSLG"), 0.0),
-            safe_float(row.get("GroundBall%"), 100.0),
-        )[2],
-        axis=1,
-    )
-    df["Research Shortlist"] = df.apply(lambda row: "Yes" if research_shortlist_pass(row) else "No", axis=1)
     df = sort_for_hr(df)
     return df, schedule
+
+
+def get_research_shortlist_pool(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return df.copy()
+
+    pool = df[df["HR Eligible"]].copy()
+    if pool.empty:
+        return pool
+
+    lineup_num = safe_numeric_series(pool, "Lineup Spot", 99)
+    authority_score = safe_numeric_series(pool, "Statcast Authority Score", 0.0)
+    barrel = safe_numeric_series(pool, "Barrel%", 0.0)
+    hard_hit = safe_numeric_series(pool, "HardHit%", 0.0)
+    air_pct = safe_numeric_series(pool, "AIR%", 0.0)
+    xslg = safe_numeric_series(pool, "xSLG", 0.0)
+    gb = safe_numeric_series(pool, "GroundBall%", 999.0)
+    pitch_score = safe_numeric_series(pool, "Pitch Matchup Score", 0.0)
+    hr_prob = safe_numeric_series(pool, "HR Probability %", 0.0)
+    recent_trend = pool.get("Recent Trend", pd.Series(["NEUTRAL"] * len(pool), index=pool.index)).astype(str)
+    authority_tier = pool.get("Statcast Authority Tier", pd.Series(["MEDIUM"] * len(pool), index=pool.index)).astype(str)
+    mix_mode = pool.get("Pitch Mix Mode", pd.Series(["BALANCED"] * len(pool), index=pool.index)).astype(str)
+
+    authority_keep = authority_tier.isin(["ELITE", "STRONG"])
+    medium_keep = (
+        authority_tier.eq("MEDIUM")
+        & (
+            recent_trend.isin(["HOT", "LIVE"])
+            | (barrel >= 10.0)
+            | (xslg >= 0.455)
+            | (lineup_num <= 5)
+        )
+    )
+
+    gb_keep = (
+        (gb <= 48.0)
+        | (barrel >= 11.0)
+        | (xslg >= 0.480)
+        | authority_keep
+    )
+
+    mix_keep = (
+        mix_mode.eq("HARD")
+        | authority_keep
+        | (
+            mix_mode.eq("SOFT")
+            & (
+                recent_trend.isin(["HOT", "LIVE"])
+                | (pitch_score >= 4.0)
+                | (lineup_num <= 5)
+            )
+        )
+        | (
+            mix_mode.eq("BALANCED")
+            & (
+                (barrel >= 11.0)
+                | (xslg >= 0.470)
+                | recent_trend.eq("HOT")
+                | authority_tier.eq("MEDIUM") & (lineup_num <= 4)
+            )
+        )
+    )
+
+    lineup_keep = (
+        (lineup_num <= 6)
+        | authority_keep
+        | ((lineup_num <= 7) & (barrel >= 11.0))
+    )
+
+    score_keep = (
+        (hr_prob >= 8.0)
+        | authority_keep
+        | ((barrel >= 11.0) & (hard_hit >= 42.0))
+    )
+
+    shortlist = pool[gb_keep & mix_keep & lineup_keep & score_keep & (authority_keep | medium_keep)].copy()
+    if shortlist.empty:
+        shortlist = pool.copy()
+
+    shortlist = sort_for_hr(shortlist)
+    shortlist = shortlist.head(60).reset_index(drop=True)
+    return shortlist
 
 
 def get_strict_hr_pool(df: pd.DataFrame) -> pd.DataFrame:
@@ -2539,6 +2486,8 @@ def get_top12_hybrid(df: pd.DataFrame) -> pd.DataFrame:
     hr_pool = get_research_shortlist_pool(df)
     if hr_pool.empty:
         return hr_pool
+
+    hr_pool = sort_for_hr(hr_pool)
     strict_pool = hr_pool[hr_pool["Strict Statcast"] == "Yes"].copy()
     strict_pool = sort_for_hr(strict_pool)
 
@@ -2565,7 +2514,7 @@ def get_team_game_view(df: pd.DataFrame, game_key: str, team: str):
         return team_df, team_df
 
     hr_pool = get_research_shortlist_pool(team_df)
-    hr_pool = sort_for_hr(hr_pool).head(3)
+    hr_pool = sort_for_hr(hr_pool).head(4)
     if not hr_pool.empty:
         hr_pool = add_rank_column(hr_pool)
 
@@ -2833,7 +2782,7 @@ with tabs[3]:
             "EV", "HardHit%", "FlyBall%", "AIR%", "LaunchAngle", "Recent Trend", "LineDrive%", "GroundBall%", "Barrel%",
             "xSLG", "xwOBA",
             "Pitcher_HR9_Last7", "Pitcher_Barrel_Allowed", "Pitcher_HardHit_Allowed",
-            "Statcast Pass", "Strict Statcast", "Authority Tier", "Research Shortlist", "Recent Form Pass", "Pitcher Attackable",
+            "Statcast Pass", "Strict Statcast", "Recent Form Pass", "Pitcher Attackable",
             "Pitch_Isolation_Valid", "GB Rule", "GB Note", "WeatherNote", "BullpenFatigueNote", "BullpenFatigueScore", "TempF", "WindMPH", "HR Eligible",
             "HR Probability %", "HRR Score", "Why"
         ]],
