@@ -179,6 +179,36 @@ def now_et_string() -> str:
     return datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d %H:%M:%S")
 
 
+def parse_game_time_et(game_time_value: str):
+    if not game_time_value:
+        return None
+    try:
+        raw = str(game_time_value).replace("Z", "+00:00")
+        dt = datetime.fromisoformat(raw)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=ZoneInfo("UTC"))
+        return dt.astimezone(ZoneInfo("America/New_York"))
+    except Exception:
+        return None
+
+
+def format_game_time_et(game_time_value: str) -> str:
+    dt = parse_game_time_et(game_time_value)
+    if dt is None:
+        return "TBD ET"
+    try:
+        return dt.strftime("%-I:%M %p ET")
+    except Exception:
+        return dt.strftime("%I:%M %p ET").lstrip("0")
+
+
+def sort_schedule_rows(schedule_rows: list[dict]) -> list[dict]:
+    def _key(game: dict):
+        dt = parse_game_time_et(game.get("game_time", ""))
+        return (dt is None, dt or datetime.max.replace(tzinfo=ZoneInfo("America/New_York")), game.get("game_key", ""))
+    return sorted(schedule_rows, key=_key)
+
+
 def chunked(items, size):
     items = list(items)
     for i in range(0, len(items), size):
@@ -1043,7 +1073,7 @@ def get_today_schedule():
                 "detailed_state": detailed_state,
             })
 
-    return games
+    return sort_schedule_rows(games)
 
 
 @st.cache_data(ttl=300)
@@ -2239,7 +2269,7 @@ def sort_for_hr(df: pd.DataFrame) -> pd.DataFrame:
 
 @st.cache_data(ttl=900)
 def build_daily_dataset():
-    schedule = get_today_schedule()
+    schedule = sort_schedule_rows(get_today_schedule())
     rows = []
 
     savant_batter_map = fetch_savant_batter_map(CURRENT_SEASON)
@@ -2612,7 +2642,8 @@ if locked_df.empty:
     st.stop()
 
 base_tabs = ["HR Probability", "Top 12", "Hits + Runs + RBIs", "Engine Breakdown", "Accuracy Tracker"]
-game_tabs = [g["game_key"] for g in schedule]
+schedule = sort_schedule_rows(schedule)
+game_tabs = [f"{format_game_time_et(g.get('game_time', ''))} | {g['game_key']}" for g in schedule]
 tabs = st.tabs(base_tabs + game_tabs)
 
 with tabs[0]:
@@ -2800,9 +2831,9 @@ with tabs[4]:
 
 for idx, game in enumerate(schedule, start=5):
     with tabs[idx]:
-        st.subheader(game["game_key"])
+        st.subheader(f"{game['game_key']} — {format_game_time_et(game.get('game_time', ''))}")
         st.caption(
-            f"{game['away_team']} @ {game['home_team']}  |  "
+            f"Start: {format_game_time_et(game.get('game_time', ''))}  |  "
             f"Venue: {game['venue']}  |  "
             f"Away starter: {game['away_pitcher']}  |  "
             f"Home starter: {game['home_pitcher']}"
