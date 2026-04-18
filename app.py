@@ -2414,7 +2414,6 @@ def get_research_shortlist_pool(df: pd.DataFrame) -> pd.DataFrame:
         return pool
 
     lineup_num = safe_numeric_series(pool, "Lineup Spot", 99)
-    authority_score = safe_numeric_series(pool, "Statcast Authority Score", 0.0)
     barrel = safe_numeric_series(pool, "Barrel%", 0.0)
     hard_hit = safe_numeric_series(pool, "HardHit%", 0.0)
     air_pct = safe_numeric_series(pool, "AIR%", 0.0)
@@ -2431,16 +2430,16 @@ def get_research_shortlist_pool(df: pd.DataFrame) -> pd.DataFrame:
         authority_tier.eq("MEDIUM")
         & (
             recent_trend.isin(["HOT", "LIVE"])
-            | (barrel >= 10.0)
-            | (xslg >= 0.455)
-            | (lineup_num <= 5)
+            | (barrel >= 10.5)
+            | (xslg >= 0.470)
+            | ((lineup_num <= 4) & (pitch_score >= 3.0))
         )
     )
 
     gb_keep = (
-        (gb <= 48.0)
-        | (barrel >= 11.0)
-        | (xslg >= 0.480)
+        (gb <= 47.5)
+        | (barrel >= 11.5)
+        | (xslg >= 0.490)
         | authority_keep
     )
 
@@ -2451,17 +2450,17 @@ def get_research_shortlist_pool(df: pd.DataFrame) -> pd.DataFrame:
             mix_mode.eq("SOFT")
             & (
                 recent_trend.isin(["HOT", "LIVE"])
-                | (pitch_score >= 4.0)
-                | (lineup_num <= 5)
+                | (pitch_score >= 4.5)
+                | ((lineup_num <= 4) & authority_tier.eq("MEDIUM"))
             )
         )
         | (
             mix_mode.eq("BALANCED")
             & (
-                (barrel >= 11.0)
-                | (xslg >= 0.470)
+                (barrel >= 11.5)
+                | (xslg >= 0.485)
                 | recent_trend.eq("HOT")
-                | authority_tier.eq("MEDIUM") & (lineup_num <= 4)
+                | (authority_tier.eq("MEDIUM") & (lineup_num <= 3) & (hard_hit >= 42.0))
             )
         )
     )
@@ -2469,13 +2468,13 @@ def get_research_shortlist_pool(df: pd.DataFrame) -> pd.DataFrame:
     lineup_keep = (
         (lineup_num <= 6)
         | authority_keep
-        | ((lineup_num <= 7) & (barrel >= 11.0))
+        | ((lineup_num <= 7) & (barrel >= 12.0))
     )
 
     score_keep = (
-        (hr_prob >= 8.0)
+        (hr_prob >= 8.5)
         | authority_keep
-        | ((barrel >= 11.0) & (hard_hit >= 42.0))
+        | ((barrel >= 11.5) & (hard_hit >= 43.0) & (air_pct >= 54.0))
     )
 
     shortlist = pool[gb_keep & mix_keep & lineup_keep & score_keep & (authority_keep | medium_keep)].copy()
@@ -2483,7 +2482,7 @@ def get_research_shortlist_pool(df: pd.DataFrame) -> pd.DataFrame:
         shortlist = pool.copy()
 
     shortlist = sort_for_hr(shortlist)
-    shortlist = shortlist.head(60).reset_index(drop=True)
+    shortlist = shortlist.head(50).reset_index(drop=True)
     return shortlist
 
 
