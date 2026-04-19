@@ -779,6 +779,63 @@ def strict_statcast_ok(row: pd.Series) -> bool:
     )
 
 
+
+
+def elite_hr_look(row: pd.Series) -> bool:
+    barrel = safe_float(row.get("Barrel%", 0), 0)
+    hard_hit = safe_float(row.get("HardHit%", 0), 0)
+    air_pct = safe_float(row.get("AIR%", 0), 0)
+    xslg = safe_float(row.get("xSLG", 0), 0)
+    ev = safe_float(row.get("EV", 0), 0)
+    gb = safe_float(row.get("GroundBall%", 999), 999)
+    return bool(
+        (
+            barrel >= 10 and hard_hit >= 45 and air_pct >= 55 and ev >= 91 and gb <= 52
+        ) or (
+            barrel >= 12 and xslg >= 0.490 and air_pct >= 50 and gb <= 54
+        ) or (
+            hard_hit >= 48 and xslg >= 0.470 and air_pct >= 52 and gb <= 52
+        )
+    )
+
+
+def compute_multi_pitch_authority_score(
+    pitch_mix_mode: str,
+    pitch_matchup_score: float,
+    barrel: float,
+    hard_hit: float,
+    air_pct: float,
+    xslg: float,
+    ev: float,
+    lineup_spot,
+    recent_trend: str,
+) -> float:
+    score = 0.0
+
+    elite_like = (
+        (barrel >= 10 and hard_hit >= 45 and air_pct >= 55 and ev >= 91)
+        or (barrel >= 12 and xslg >= 0.490)
+        or (hard_hit >= 48 and xslg >= 0.470)
+    )
+
+    if pitch_mix_mode == "BALANCED":
+        if elite_like:
+            score += 4.0
+        if pitch_matchup_score >= 3.0:
+            score += 1.8
+        if recent_trend in ["HOT", "LIVE"]:
+            score += 1.0
+        if lineup_spot is not None and lineup_spot <= 5:
+            score += 0.8
+
+    elif pitch_mix_mode == "SOFT":
+        if elite_like:
+            score += 2.6
+        if pitch_matchup_score >= 3.0:
+            score += 1.2
+
+    return round(score, 2)
+
 def get_gb_explanation(ground_ball: float, barrel: float, air_pct: float, xslg: float) -> str:
     if ground_ball >= 55:
         return "Stay away: 55%+ GB"
@@ -1480,6 +1537,8 @@ def get_team_candidate_hitters(game_pk: int, team_id: int, side: str, savant_bat
             (
                 projected_recent_pass
                 or elite_projection_override
+                or projected_authority_tier in ["ELITE", "STRONG"]
+                or (projected_authority_tier == "MEDIUM" and sav_brl >= 10)
             ) and
             gb_survival
         )
@@ -1527,7 +1586,7 @@ def get_team_candidate_hitters(game_pk: int, team_id: int, side: str, savant_bat
             "lineup_likelihood": lineup_likelihood
         })
 
-    scored = sorted(scored, key=lambda x: x["lineup_likelihood"], reverse=True)[:6]
+    scored = sorted(scored, key=lambda x: x["lineup_likelihood"], reverse=True)[:8]
 
     for hitter in scored:
         hitter["lineup_spot"] = None
@@ -1799,6 +1858,26 @@ def build_hitter_metrics(
         ground_ball,
     )
 
+    multi_pitch_authority_score = compute_multi_pitch_authority_score(
+        pitch_mix_mode,
+        pitch_matchup_score,
+        barrel,
+        hard_hit,
+        air_pct,
+        xslg,
+        ev,
+        lineup_spot,
+        recent_trend,
+    )
+    elite_hr_flag = elite_hr_look(pd.Series({
+        "Barrel%": barrel,
+        "HardHit%": hard_hit,
+        "AIR%": air_pct,
+        "xSLG": xslg,
+        "EV": ev,
+        "GroundBall%": ground_ball,
+    }))
+
     if pitch_mix_mode == "HARD" and primary_pitch is not None:
         pitch_isolation_valid = "Yes"
         pitch_isolation_bonus = pitch_matchup_score
@@ -2006,10 +2085,15 @@ def build_hitter_metrics(
     if elite_override and ground_ball < 55:
         base_score += 2.5
 
-    if not hr_eligible:
+    if not hr_eligible and elite_hr_flag and lineup_source == "PROJECTED":
+        hr_prob = max(7.5, min(18.0, base_score / 7.0))
+    elif not hr_eligible:
         hr_prob = 0.0
     else:
-        hr_prob = max(3.0, min(28.0, base_score / 6.8))
+        hr_prob = max(3.0, min(28.0, (base_score + multi_pitch_authority_score * 2.2) / 6.6))
+
+    if elite_hr_flag and hr_prob < 10.5:
+        hr_prob = 10.5
 
     hrr_score = (
         (ev - 87) * 1.1 +
@@ -2038,6 +2122,8 @@ def build_hitter_metrics(
         reasons.append("Elite + isolation combo")
     elif pitch_isolation_valid in ["Yes", "Soft Isolate", "Balanced Mix"]:
         reasons.append(pitch_matchup_label)
+    elif multi_pitch_authority_score >= 3.5:
+        reasons.append("Multi-pitch authority path")
     elif pitch_isolation_valid == "Elite Statcast Override":
         reasons.append("Elite Statcast override")
     else:
@@ -2092,23 +2178,24 @@ def build_hitter_metrics(
         reasons.append("Air-ball target")
 
     model_rank_score = (
-        (barrel * 4.8) +
-        (hard_hit * 2.7) +
-        (air_pct * 1.3) +
-        (xslg * 130) +
-        (xwoba * 65) +
-        (max(0, 24 - abs(launch_angle - 18)) * 1.4) +
+        (barrel * 5.6) +
+        (hard_hit * 3.0) +
+        (air_pct * 1.5) +
+        (xslg * 145) +
+        (xwoba * 72) +
+        (max(0, 24 - abs(launch_angle - 18)) * 1.5) +
         (pitch_hr9 * 8.0) +
         (pitch_barrel_allowed * 1.1) +
         (recent_hr * 5.0) +
         (recent_xbh * 1.8) +
         (recent_iso * 24.0) +
         (recent_damage_score * 0.35) +
-        (pitch_matchup_score * 2.4) +
-        (handedness_edge * 2.0) +
+        (pitch_matchup_score * 2.1) +
+        (handedness_edge * 1.7) +
         (weather_boost * 4.0) +
         (bullpen_fatigue_score * 4.8) +
-        (statcast_authority_score * 1.35)
+        (statcast_authority_score * 1.55) +
+        (multi_pitch_authority_score * 3.0)
     )
 
     if pitch_isolation_valid == "Yes":
@@ -2122,6 +2209,8 @@ def build_hitter_metrics(
         model_rank_score += 2.0
     elif pitch_mix_mode == "SOFT":
         model_rank_score += 1.5
+    elif pitch_mix_mode == "BALANCED" and elite_hr_flag:
+        model_rank_score += 3.0
 
     if recent_trend == "HOT":
         model_rank_score += 6.0
@@ -2188,6 +2277,8 @@ def build_hitter_metrics(
         "GB Note": gb_note,
         "HR Eligible": hr_eligible,
         "Strict Statcast": "Yes" if strict_flag else "No",
+        "Elite HR Look": "Yes" if elite_hr_flag else "No",
+        "Multi Pitch Authority Score": round(multi_pitch_authority_score, 2),
         "HR Probability %": round(hr_prob, 1),
         "HRR Score": round(hrr_score, 1),
         "Model Rank Score": round(model_rank_score, 2),
@@ -2242,21 +2333,25 @@ def sort_for_hr(df: pd.DataFrame) -> pd.DataFrame:
     sortable["_la_sort"] = safe_numeric_series(sortable, "LaunchAngle", 0.0)
     sortable["_trend_sort"] = sortable.get("Recent Trend", pd.Series(["NEUTRAL"] * len(sortable), index=sortable.index)).map({"HOT": 3, "LIVE": 2, "NEUTRAL": 1, "COLD": 0}).fillna(1)
     sortable["_hrr_sort"] = safe_numeric_series(sortable, "HRR Score", 0.0)
+    sortable["_multi_pitch_sort"] = safe_numeric_series(sortable, "Multi Pitch Authority Score", 0.0)
+    sortable["_elite_hr_sort"] = sortable.get("Elite HR Look", pd.Series(["No"] * len(sortable), index=sortable.index)).map({"Yes": 1, "No": 0}).fillna(0)
 
     sortable = sortable.sort_values(
         by=[
-            "_model_rank_sort",
-            "_pitch_matchup_sort",
-            "_hr_prob_sort",
-            "_lineup_sort",
-            "_usage_sort",
-            "_mix_mode_sort",
+            "_elite_hr_sort",
             "_authority_tier_sort",
             "_authority_sort",
+            "_multi_pitch_sort",
             "_barrel_sort",
             "_hh_sort",
             "_air_sort",
             "_xslg_sort",
+            "_pitch_matchup_sort",
+            "_hr_prob_sort",
+            "_model_rank_sort",
+            "_lineup_sort",
+            "_usage_sort",
+            "_mix_mode_sort",
             "_gb_sort",
             "_pitch_hr9_sort",
             "_pitch_barrel_sort",
@@ -2265,7 +2360,7 @@ def sort_for_hr(df: pd.DataFrame) -> pd.DataFrame:
             "_trend_sort",
             "_hrr_sort",
         ],
-        ascending=[False, False, False, True, False, False, False, False, False, False, False, True, False, False, False, False, False, False, False],
+        ascending=[False, False, False, False, False, False, False, False, False, False, False, True, False, False, True, False, False, False, False, False, False],
     ).reset_index(drop=True)
     return sortable.drop(columns=[
         "_lineup_sort",
@@ -2287,6 +2382,8 @@ def sort_for_hr(df: pd.DataFrame) -> pd.DataFrame:
         "_la_sort",
         "_trend_sort",
         "_hrr_sort",
+        "_multi_pitch_sort",
+        "_elite_hr_sort",
     ])
 
 
