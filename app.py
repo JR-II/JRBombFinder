@@ -2451,7 +2451,7 @@ def sort_for_hr(df: pd.DataFrame) -> pd.DataFrame:
             "_trend_sort",
             "_hrr_sort",
         ],
-        ascending=[False, False, False, False, False, False, False, False, False, False, False, False, False, True, False, False, True, False, False, False, False, False, False],
+        ascending=[False, False, False, False, False, False, False, False, False, False, False, False, False, False, True, False, False, True, False, False, False, False, False, False],
     ).reset_index(drop=True)
     return sortable.drop(columns=[
         "_lineup_sort",
