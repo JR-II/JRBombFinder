@@ -779,6 +779,46 @@ def strict_statcast_ok(row: pd.Series) -> bool:
     )
 
 
+def passes_air_authority_profile(
+    hard_hit: float,
+    fly_ball: float,
+    line_drive: float,
+    ground_ball: float,
+    barrel: float,
+    ev: float,
+    xslg: float,
+    recent_hr: int,
+    recent_xbh: int,
+    recent_iso: float,
+) -> dict:
+    air_total = fly_ball + line_drive
+    air_authority_core = (
+        hard_hit >= 40
+        and air_total >= 48
+        and ground_ball < 50
+        and air_total > ground_ball
+    )
+
+    authority_override = (
+        barrel >= 10
+        or ev >= 91
+        or xslg >= 0.470
+        or recent_hr >= 1
+        or recent_xbh >= 3
+        or recent_iso >= 0.180
+        or (hard_hit >= 45 and air_total >= 45)
+    )
+
+    hard_reject = ground_ball >= 55 and not authority_override
+    survives = (air_authority_core or authority_override) and not hard_reject
+
+    return {
+        "air_authority_core": air_authority_core,
+        "authority_override": authority_override,
+        "hard_reject": hard_reject,
+        "survives": survives,
+        "air_total": round(air_total, 1),
+    }
 
 
 def elite_hr_look(row: pd.Series) -> bool:
@@ -1482,17 +1522,34 @@ def get_team_candidate_hitters(game_pk: int, team_id: int, side: str, savant_bat
         sav = savant_batter_map.get(normalize_name(h["player_name"]), {})
         sav_brl = safe_float(sav.get("Savant_Barrel%"), metrics["Barrel%"])
         sav_hh = safe_float(sav.get("Savant_HardHit%"), metrics["HardHit%"])
-        sav_air = safe_float(sav.get("Savant_AIR%"), 100 - metrics["GroundBall%"])
+        sav_fb = safe_float(sav.get("Savant_FB%"), metrics["FlyBall%"])
+        sav_ld = safe_float(sav.get("Savant_LD%"), metrics["LineDrive%"])
+        sav_air = safe_float(sav.get("Savant_AIR%"), max(0.0, sav_fb + sav_ld))
         sav_xslg = safe_float(sav.get("Savant_xSLG"), 0.0)
         sav_xwoba = safe_float(sav.get("Savant_xwOBA"), 0.0)
         sav_la = safe_float(sav.get("Savant_LA"), 14.0)
+        sav_ev = safe_float(sav.get("Savant_EV"), metrics["EV"])
         sav_gb = safe_float(sav.get("Savant_GB%"), metrics["GroundBall%"])
+
+        profile_gate = passes_air_authority_profile(
+            hard_hit=sav_hh,
+            fly_ball=sav_fb,
+            line_drive=sav_ld,
+            ground_ball=sav_gb,
+            barrel=sav_brl,
+            ev=sav_ev,
+            xslg=sav_xslg,
+            recent_hr=metrics["recent_hr"],
+            recent_xbh=metrics["recent_xbh"],
+            recent_iso=metrics["recent_iso"],
+        )
 
         projected_statcast_pass = (
             sav_brl >= 10 or
-            (sav_hh >= 40 and sav_air >= 55) or
+            (sav_hh >= 40 and (sav_air >= 55 or (sav_fb + sav_ld) >= 48)) or
             sav_xslg >= 0.450 or
-            sav_xwoba >= 0.340
+            sav_xwoba >= 0.340 or
+            profile_gate["survives"]
         )
 
         projected_recent_pass = (
@@ -1502,7 +1559,8 @@ def get_team_candidate_hitters(game_pk: int, team_id: int, side: str, savant_bat
         )
 
         gb_survival = (
-            sav_gb < 50
+            profile_gate["survives"]
+            or sav_gb < 50
             or (
                 sav_gb < 54 and (
                     sav_brl >= 11 or
@@ -1515,8 +1573,10 @@ def get_team_candidate_hitters(game_pk: int, team_id: int, side: str, savant_bat
         elite_projection_override = (
             sav_brl >= 13
             or sav_xslg >= 0.500
+            or sav_ev >= 91
             or (sav_xwoba >= 0.365 and sav_air >= 57)
             or (sav_la >= 15 and sav_la <= 24 and sav_brl >= 11)
+            or profile_gate["authority_override"]
         )
 
         projected_authority_score, projected_authority_multiplier, projected_authority_tier = compute_statcast_authority(
@@ -1537,6 +1597,7 @@ def get_team_candidate_hitters(game_pk: int, team_id: int, side: str, savant_bat
             (
                 projected_recent_pass
                 or elite_projection_override
+                or profile_gate["survives"]
                 or projected_authority_tier in ["ELITE", "STRONG"]
                 or (projected_authority_tier == "MEDIUM" and sav_brl >= 10)
             ) and
@@ -1552,7 +1613,7 @@ def get_team_candidate_hitters(game_pk: int, team_id: int, side: str, savant_bat
             and sav_brl < 9
             and sav_hh < 39
             and sav_xslg < 0.440
-            and not (elite_projection_override or projected_recent_pass)
+            and not (elite_projection_override or projected_recent_pass or profile_gate["survives"])
         ):
             strong_projected_candidate = False
 
@@ -1609,20 +1670,38 @@ def qualifies_hr_profile(
     pitch_barrel_allowed: float,
     pitch_hard_hit_allowed: float,
     lineup_source: str,
+    fly_ball: float = 0.0,
+    line_drive: float = 0.0,
+    ev: float = 0.0,
 ):
+    profile_gate = passes_air_authority_profile(
+        hard_hit=hard_hit,
+        fly_ball=fly_ball,
+        line_drive=line_drive,
+        ground_ball=ground_ball,
+        barrel=barrel,
+        ev=ev,
+        xslg=xslg,
+        recent_hr=recent_hr,
+        recent_xbh=recent_xbh,
+        recent_iso=recent_iso,
+    )
+
     elite_override = (
         barrel >= 14 or
         hard_hit >= 48 or
         (air_pct >= 65 and hard_hit >= 42) or
-        xslg >= 0.520
+        xslg >= 0.520 or
+        profile_gate["authority_override"]
     )
 
     statcast_pass = (
         barrel >= 10 or
-        (hard_hit >= 40 and air_pct >= 55) or
+        (hard_hit >= 40 and (air_pct >= 55 or profile_gate["air_total"] >= 48)) or
         xslg >= 0.450 or
         xwoba >= 0.340 or
-        elite_override
+        elite_override or
+        profile_gate["survives"]
     )
 
     recent_form_pass = (
@@ -1639,7 +1718,7 @@ def qualifies_hr_profile(
 
     awful_hr_shape = (
         ground_ball >= 58 or
-        (ground_ball >= 55 and air_pct <= 35) or
+        (ground_ball >= 55 and air_pct <= 35 and not profile_gate["authority_override"]) or
         (barrel < 5 and hard_hit < 30 and recent_hr == 0)
     )
 
@@ -1648,7 +1727,8 @@ def qualifies_hr_profile(
         recent_xbh <= 1 and
         hard_hit < 35 and
         barrel < 8 and
-        air_pct < 50
+        air_pct < 50 and
+        not profile_gate["survives"]
     )
 
     projected_damage_profile = (
@@ -1657,6 +1737,7 @@ def qualifies_hr_profile(
             or recent_xbh >= 2
             or recent_iso >= 0.150
             or elite_override
+            or profile_gate["survives"]
             or (barrel >= 10 and hard_hit >= 40)
             or (hard_hit >= 42 and air_pct >= 55)
             or xslg >= 0.470
@@ -1669,9 +1750,10 @@ def qualifies_hr_profile(
     )
 
     borderline_gb_survival = (
-        ground_ball < 50 or
-        elite_override or
-        (
+        profile_gate["survives"]
+        or ground_ball < 50
+        or elite_override
+        or (
             ground_ball < 55 and pitcher_attackable and (
                 barrel >= 11 or
                 air_pct >= 58 or
@@ -1684,15 +1766,17 @@ def qualifies_hr_profile(
 
     if recent_pa < 8:
         hr_eligible = False
+    elif profile_gate["hard_reject"] and not elite_override:
+        hr_eligible = False
     elif awful_hr_shape and not elite_override:
         hr_eligible = False
-    elif ground_ball >= 55 and not elite_override:
+    elif ground_ball >= 55 and not elite_override and not profile_gate["survives"]:
         hr_eligible = False
     elif not borderline_gb_survival:
         hr_eligible = False
     elif not statcast_pass:
         hr_eligible = False
-    elif not recent_form_pass and not elite_override:
+    elif not recent_form_pass and not elite_override and not profile_gate["survives"]:
         hr_eligible = False
     elif weak_recent_profile:
         hr_eligible = False
@@ -1707,6 +1791,7 @@ def qualifies_hr_profile(
         "pitcher_attackable": pitcher_attackable,
         "awful_hr_shape": awful_hr_shape,
         "weak_recent_profile": weak_recent_profile,
+        "air_authority_survival": profile_gate["survives"],
     }
 
 
@@ -2320,6 +2405,9 @@ def sort_for_hr(df: pd.DataFrame) -> pd.DataFrame:
     sortable["_barrel_sort"] = safe_numeric_series(sortable, "Barrel%", 0.0)
     sortable["_hh_sort"] = safe_numeric_series(sortable, "HardHit%", 0.0)
     sortable["_air_sort"] = safe_numeric_series(sortable, "AIR%", 0.0)
+    sortable["_fb_sort"] = safe_numeric_series(sortable, "FlyBall%", 0.0)
+    sortable["_ld_sort"] = safe_numeric_series(sortable, "LineDrive%", 0.0)
+    sortable["_air_edge_sort"] = sortable["_fb_sort"] + sortable["_ld_sort"] - safe_numeric_series(sortable, "GroundBall%", 999.0)
     sortable["_xslg_sort"] = safe_numeric_series(sortable, "xSLG", 0.0)
     sortable["_gb_sort"] = safe_numeric_series(sortable, "GroundBall%", 999.0)
     sortable["_pitch_hr9_sort"] = safe_numeric_series(sortable, "Pitcher_HR9_Last7", 0.0)
@@ -2344,6 +2432,9 @@ def sort_for_hr(df: pd.DataFrame) -> pd.DataFrame:
             "_multi_pitch_sort",
             "_barrel_sort",
             "_hh_sort",
+            "_air_edge_sort",
+            "_fb_sort",
+            "_ld_sort",
             "_air_sort",
             "_xslg_sort",
             "_pitch_matchup_sort",
@@ -2360,7 +2451,7 @@ def sort_for_hr(df: pd.DataFrame) -> pd.DataFrame:
             "_trend_sort",
             "_hrr_sort",
         ],
-        ascending=[False, False, False, False, False, False, False, False, False, False, False, True, False, False, True, False, False, False, False, False, False],
+        ascending=[False, False, False, False, False, False, False, False, False, False, False, False, False, True, False, False, True, False, False, False, False, False, False],
     ).reset_index(drop=True)
     return sortable.drop(columns=[
         "_lineup_sort",
@@ -2369,6 +2460,9 @@ def sort_for_hr(df: pd.DataFrame) -> pd.DataFrame:
         "_barrel_sort",
         "_hh_sort",
         "_air_sort",
+        "_fb_sort",
+        "_ld_sort",
+        "_air_edge_sort",
         "_xslg_sort",
         "_gb_sort",
         "_pitch_hr9_sort",
