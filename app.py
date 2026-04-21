@@ -216,7 +216,7 @@ def chunked(items, size):
 
 
 def display_lineup_spot(value):
-    return value if value is not None else "Ã¢ÂÂ"
+    return value if value is not None else "—"
 
 
 def normalize_name(name: str) -> str:
@@ -2962,9 +2962,9 @@ with c4:
     if not locked_df.empty and "lock_scope" in locked_df.columns:
         confirmed_locked = int((locked_df["lock_scope"].astype(str) == "CONFIRMED_TEAM").sum())
     if confirmed_locked > 0:
-        st.caption(f"Projected teams stay live Ã¢ÂÂ¢ confirmed teams pregame-rebuild on update Ã¢ÂÂ¢ locked confirmed rows: {confirmed_locked}")
+        st.caption(f"Projected teams stay live • confirmed teams pregame-rebuild on update • locked confirmed rows: {confirmed_locked}")
     else:
-        st.caption(f"Projected teams live Ã¢ÂÂ¢ update rebuilds pregame confirmed locks Ã¢ÂÂ¢ last refresh: {datetime.now().strftime('%Y-%m-%d %I:%M %p')}")
+        st.caption(f"Projected teams live • update rebuilds pregame confirmed locks • last refresh: {datetime.now().strftime('%Y-%m-%d %I:%M %p')}")
 
 if locked_df.empty:
     st.warning("No games or hitter data loaded.")
@@ -3160,7 +3160,7 @@ with tabs[4]:
 
 for idx, game in enumerate(schedule, start=5):
     with tabs[idx]:
-        st.subheader(f"{game['game_key']} Ã¢ÂÂ {format_game_time_et(game.get('game_time', ''))}")
+        st.subheader(f"{game['game_key']} — {format_game_time_et(game.get('game_time', ''))}")
         st.caption(
             f"Start: {format_game_time_et(game.get('game_time', ''))}  |  "
             f"Venue: {game['venue']}  |  "
