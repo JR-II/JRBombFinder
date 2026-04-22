@@ -1253,6 +1253,7 @@ def fetch_people_stats(person_ids_tuple: tuple, group: str):
 
 
 @st.cache_data(ttl=21600)
+
 def fetch_savant_batter_map(year: int):
     expected_urls = [
         f"https://baseballsavant.mlb.com/leaderboard/expected_statistics?type=batter&year={year}",
@@ -1285,13 +1286,14 @@ def fetch_savant_batter_map(year: int):
         xwoba_col = find_col(df, ["xwoba"])
         xiso_col = find_col(df, ["xiso"])
         brl_col = find_col(df, ["brl%"])
-        ev_col = find_col(df, [" max ev", " ev "])
+        ev_col = find_col(df, [" max ev", " avg hit speed", " exit velocity", " ev "])
         hardhit_col = find_col(df, ["hardhit", "hard hit"])
         la_col = find_col(df, [" la ", "launch angle"])
         gb_col = find_col(df, ["gb%"])
         fb_col = find_col(df, ["fb%"])
         ld_col = find_col(df, ["ld%"])
         air_col = find_col(df, ["air%"])
+        pull_col = find_col(df, ["pull air%", "pull%", "pull "])
 
         for _, row in df.iterrows():
             raw_name = row.get(player_col)
@@ -1312,6 +1314,7 @@ def fetch_savant_batter_map(year: int):
                     "Savant_FB%": pd.NA,
                     "Savant_LD%": pd.NA,
                     "Savant_AIR%": pd.NA,
+                    "Savant_Pull%": pd.NA,
                 }
 
             if xslg_col is not None and pd.notna(row.get(xslg_col)):
@@ -1336,11 +1339,14 @@ def fetch_savant_batter_map(year: int):
                 result[name]["Savant_LD%"] = safe_float(row.get(ld_col), pd.NA)
             if air_col is not None and pd.notna(row.get(air_col)):
                 result[name]["Savant_AIR%"] = safe_float(row.get(air_col), pd.NA)
+            if pull_col is not None and pd.notna(row.get(pull_col)):
+                result[name]["Savant_Pull%"] = safe_float(row.get(pull_col), pd.NA)
 
     upsert_row(expected_df, "expected")
     upsert_row(percentile_df, "percentile")
     upsert_row(batted_df, "batted")
     return result
+
 
 
 def compute_hitter_live_metrics_from_map(player_id: int, stats_map: dict):
@@ -1369,6 +1375,20 @@ def compute_hitter_live_metrics_from_map(player_id: int, stats_map: dict):
     iso = max(slg - avg, 0.0)
     xbh = doubles + triples + hrs
 
+    season_games = safe_int(season_stat.get("gamesPlayed", 0))
+    season_ab = safe_int(season_stat.get("atBats", 0))
+    season_hits = safe_int(season_stat.get("hits", 0))
+    season_doubles = safe_int(season_stat.get("doubles", 0))
+    season_triples = safe_int(season_stat.get("triples", 0))
+    season_hr = safe_int(season_stat.get("homeRuns", 0))
+    season_walks = safe_int(season_stat.get("baseOnBalls", 0))
+    season_tb = safe_int(season_stat.get("totalBases", 0))
+    season_pa_proxy = max(season_ab + season_walks, 1)
+    season_avg = season_hits / season_ab if season_ab else 0.0
+    season_slg = season_tb / season_ab if season_ab else 0.0
+    season_iso = max(season_slg - season_avg, 0.0)
+    season_xbh = season_doubles + season_triples + season_hr
+
     ground_outs = safe_int(season_stat.get("groundOuts", 0))
     air_outs = safe_int(season_stat.get("airOuts", 0))
     out_total = ground_outs + air_outs
@@ -1377,17 +1397,32 @@ def compute_hitter_live_metrics_from_map(player_id: int, stats_map: dict):
         gb = clip((ground_outs / out_total) * 100, 20, 65)
         fb = clip((air_outs / out_total) * 100, 15, 55)
     else:
-        gb = stable_float(f"{player_id}-gb-fallback", 32, 48)
-        fb = stable_float(f"{player_id}-fb-fallback", 22, 38)
+        gb = clip(47 - (season_iso * 42) - (hrs / max(pa_proxy, 1)) * 120, 28, 52)
+        fb = clip(26 + (season_iso * 34) + (xbh / max(pa_proxy, 1)) * 90, 22, 44)
 
     ld = clip(100 - gb - fb, 12, 30)
 
-    ev = clip(86 + iso * 18 + (xbh / max(ab, 1)) * 45 + (hits / pa_proxy) * 8, 84, 99)
-    hard_hit = clip(26 + iso * 85 + (xbh / pa_proxy) * 140 - (strikeouts / pa_proxy) * 10, 20, 60)
-    barrel = clip(2 + iso * 35 + (hrs / pa_proxy) * 160, 1, 20)
+    recent_xbh_rate = xbh / pa_proxy
+    season_xbh_rate = season_xbh / season_pa_proxy
+    recent_hr_rate = hrs / pa_proxy
+    season_hr_rate = season_hr / season_pa_proxy
 
-    season_games = safe_int(season_stat.get("gamesPlayed", 0))
-    season_ab = safe_int(season_stat.get("atBats", 0))
+    ev = clip(85.5 + season_iso * 10 + iso * 10 + recent_xbh_rate * 35 + recent_hr_rate * 55, 84, 98.5)
+    hard_hit = clip(28 + season_iso * 55 + iso * 35 + recent_xbh_rate * 95 - (strikeouts / pa_proxy) * 8, 22, 60)
+    barrel = clip(3.0 + season_hr_rate * 120 + recent_hr_rate * 95 + season_iso * 10 + iso * 7, 2, 22)
+
+    recent_form_score = (
+        (hrs * 8.0)
+        + (xbh * 2.8)
+        + (iso * 70.0)
+        + (avg * 15.0)
+    )
+    season_form_score = (
+        (season_hr_rate * 550.0)
+        + (season_xbh_rate * 160.0)
+        + (season_iso * 85.0)
+    )
+    trend_delta = round(recent_form_score - season_form_score, 2)
 
     return {
         "EV": round(ev, 1),
@@ -1406,6 +1441,14 @@ def compute_hitter_live_metrics_from_map(player_id: int, stats_map: dict):
         "recent_games": games_played_recent,
         "season_games": season_games,
         "season_ab": season_ab,
+        "season_hr": season_hr,
+        "season_iso": round(season_iso, 3),
+        "season_avg": round(season_avg, 3),
+        "season_xbh_rate": round(season_xbh_rate, 4),
+        "season_hr_rate": round(season_hr_rate, 4),
+        "recent_xbh_rate": round(recent_xbh_rate, 4),
+        "recent_hr_rate": round(recent_hr_rate, 4),
+        "trend_delta": trend_delta,
     }
 
 
@@ -1828,17 +1871,23 @@ def build_hitter_metrics(
 
     sav = savant_batter_map.get(normalize_name(player_name), {})
 
-    ev = safe_float(sav.get("Savant_EV"), live_hitter["EV"])
-    hard_hit = safe_float(sav.get("Savant_HardHit%"), live_hitter["HardHit%"])
-    fly_ball = safe_float(sav.get("Savant_FB%"), live_hitter["FlyBall%"])
-    line_drive = safe_float(sav.get("Savant_LD%"), live_hitter["LineDrive%"])
-    ground_ball = safe_float(sav.get("Savant_GB%"), live_hitter["GroundBall%"])
-    barrel = safe_float(sav.get("Savant_Barrel%"), live_hitter["Barrel%"])
-    air_pct = safe_float(sav.get("Savant_AIR%"), max(0.0, 100 - ground_ball))
-    launch_angle = safe_float(sav.get("Savant_LA"), 14.0)
-    xslg = safe_float(sav.get("Savant_xSLG"), 0.0)
-    xwoba = safe_float(sav.get("Savant_xwOBA"), 0.0)
-    xiso = safe_float(sav.get("Savant_xISO"), live_hitter["recent_iso"])
+    season_iso = safe_float(live_hitter.get("season_iso"), 0.0)
+    season_hr_rate = safe_float(live_hitter.get("season_hr_rate"), 0.0)
+    recent_hr_rate = safe_float(live_hitter.get("recent_hr_rate"), 0.0)
+    trend_delta = safe_float(live_hitter.get("trend_delta"), 0.0)
+
+    raw_ev = safe_float(sav.get("Savant_EV"), live_hitter["EV"])
+    raw_hard_hit = safe_float(sav.get("Savant_HardHit%"), live_hitter["HardHit%"])
+    raw_fly_ball = safe_float(sav.get("Savant_FB%"), live_hitter["FlyBall%"])
+    raw_line_drive = safe_float(sav.get("Savant_LD%"), live_hitter["LineDrive%"])
+    raw_ground_ball = safe_float(sav.get("Savant_GB%"), live_hitter["GroundBall%"])
+    raw_barrel = safe_float(sav.get("Savant_Barrel%"), live_hitter["Barrel%"])
+    raw_air_pct = safe_float(sav.get("Savant_AIR%"), max(0.0, 100 - raw_ground_ball))
+    raw_launch_angle = safe_float(sav.get("Savant_LA"), 14.0)
+    raw_xslg = safe_float(sav.get("Savant_xSLG"), 0.0)
+    raw_xwoba = safe_float(sav.get("Savant_xwOBA"), 0.0)
+    raw_xiso = safe_float(sav.get("Savant_xISO"), live_hitter["recent_iso"])
+    pull_pct = safe_float(sav.get("Savant_Pull%"), clip(34 + raw_air_pct * 0.08 + raw_barrel * 0.22, 30, 52))
 
     recent_hr = live_hitter["recent_hr"]
     recent_xbh = live_hitter["recent_xbh"]
@@ -1848,18 +1897,33 @@ def build_hitter_metrics(
     recent_runs = live_hitter["recent_runs"]
     recent_pa = live_hitter["recent_pa"]
 
+    blend_recent = 0.35
+    blend_season = 0.65
+    ev = round((raw_ev * 0.7) + (live_hitter["EV"] * 0.3), 1)
+    hard_hit = round((raw_hard_hit * blend_season) + (live_hitter["HardHit%"] * blend_recent), 1)
+    fly_ball = round((raw_fly_ball * blend_season) + (live_hitter["FlyBall%"] * blend_recent), 1)
+    line_drive = round((raw_line_drive * blend_season) + (live_hitter["LineDrive%"] * blend_recent), 1)
+    ground_ball = round((raw_ground_ball * blend_season) + (live_hitter["GroundBall%"] * blend_recent), 1)
+    barrel = round((raw_barrel * blend_season) + (live_hitter["Barrel%"] * blend_recent), 1)
+    air_pct = round((raw_air_pct * blend_season) + ((100 - live_hitter["GroundBall%"]) * blend_recent), 1)
+    launch_angle = round((raw_launch_angle * 0.75) + (14.0 * 0.25), 1)
+    xslg = round(max(raw_xslg, 0.0), 3) if raw_xslg else round(max((season_iso + recent_iso + recent_avg), 0.0), 3)
+    xwoba = round(max(raw_xwoba, 0.0), 3) if raw_xwoba else round(0.285 + (recent_avg * 0.18) + (recent_iso * 0.22), 3)
+    xiso = round(max(raw_xiso, recent_iso), 3)
+
     recent_damage_score = (
-        (recent_hr * 9.0) +
-        (recent_xbh * 3.0) +
-        (recent_iso * 65.0) +
-        (recent_avg * 18.0)
+        (recent_hr * 9.5) +
+        (recent_xbh * 3.6) +
+        (recent_iso * 72.0) +
+        (recent_avg * 18.0) +
+        max(0.0, trend_delta) * 1.1
     )
 
-    if recent_hr >= 2 or recent_xbh >= 5 or recent_iso >= 0.260:
+    if recent_hr >= 2 or recent_xbh >= 5 or recent_iso >= 0.240 or trend_delta >= 10:
         recent_trend = "HOT"
-    elif recent_hr >= 1 or recent_xbh >= 3 or recent_iso >= 0.180:
+    elif recent_hr >= 1 or recent_xbh >= 3 or recent_iso >= 0.170 or trend_delta >= 4:
         recent_trend = "LIVE"
-    elif recent_iso >= 0.120 or recent_avg >= 0.260:
+    elif recent_iso >= 0.115 or recent_avg >= 0.255 or trend_delta >= -2:
         recent_trend = "NEUTRAL"
     else:
         recent_trend = "COLD"
@@ -1869,17 +1933,24 @@ def build_hitter_metrics(
     pitcher_throws = estimate_handedness_from_name(opp_pitcher, "pitcher")
 
     if live_pitcher is None:
-        pitch_hr9 = stable_float(f"{opp_pitcher}-hr9", 0.7, 1.9)
-        pitch_barrel_allowed = stable_float(f"{opp_pitcher}-barrel-allowed", 4, 13)
-        pitch_hard_hit_allowed = stable_float(f"{opp_pitcher}-hh-allowed", 30, 48)
+        pitch_hr9 = 1.05
+        pitch_barrel_allowed = 6.8
+        pitch_hard_hit_allowed = 37.5
     else:
         pitch_hr9 = live_pitcher["Pitcher_HR9_Last7"]
         pitch_barrel_allowed = live_pitcher["Pitcher_Barrel_Allowed"]
         pitch_hard_hit_allowed = live_pitcher["Pitcher_HardHit_Allowed"]
 
-    pullside_boost = stable_float(f"{player_id}-pull", -1, 3)
-    park_boost = (park_factor - 1.0) * 20
-    weather_score_boost = weather_boost * 1.6
+    pullside_boost = (
+        max(0.0, pull_pct - 38.0) * 0.22
+        + max(0.0, air_pct - 52.0) * 0.05
+        + (1.25 if bats != pitcher_throws else 0.0)
+    )
+    if recent_trend == "COLD" and recent_hr == 0 and recent_xbh <= 1:
+        pullside_boost -= 1.8
+
+    park_boost = (park_factor - 1.0) * 24
+    weather_score_boost = weather_boost * 1.8
     bullpen_fatigue_boost = bullpen_fatigue_score * 1.8
 
     pitch_mix_example = build_pitch_mix_profile(
@@ -2061,22 +2132,24 @@ def build_hitter_metrics(
         hr_eligible = False
 
     base_score = (
-        (barrel - 4) * 4.2 +
-        (hard_hit - 28) * 2.5 +
-        (air_pct - 45) * 1.2 +
-        (ev - 87) * 1.1 +
-        (xslg * 100) * 1.2 +
-        (xiso * 100) * 0.7 +
-        (xwoba * 100) * 0.45 +
+        (barrel - 5) * 4.9 +
+        (hard_hit - 32) * 2.8 +
+        (air_pct - 48) * 1.35 +
+        (ev - 88) * 1.35 +
+        (pull_pct - 36) * 0.65 +
+        (xslg * 100) * 1.45 +
+        (xiso * 100) * 0.95 +
+        (xwoba * 100) * 0.50 +
         pitch_isolation_bonus +
         handedness_edge +
-        (pitch_hr9 - 0.7) * 10.0 +
-        (pitch_barrel_allowed - 4) * 0.9 +
-        (pitch_hard_hit_allowed - 30) * 0.4 +
-        (recent_hr * 3.2) +
-        (recent_xbh * 1.5) +
-        (recent_iso * 24.0) +
-        (recent_damage_score * 0.22) +
+        (pitch_hr9 - 0.85) * 11.0 +
+        (pitch_barrel_allowed - 5) * 1.3 +
+        (pitch_hard_hit_allowed - 32) * 0.55 +
+        (recent_hr * 4.1) +
+        (recent_xbh * 1.9) +
+        (recent_iso * 28.0) +
+        (recent_damage_score * 0.26) +
+        max(0.0, trend_delta) * 1.0 +
         pullside_boost +
         park_boost +
         weather_score_boost +
@@ -2171,14 +2244,18 @@ def build_hitter_metrics(
         base_score += 2.5
 
     if not hr_eligible and elite_hr_flag and lineup_source == "PROJECTED":
-        hr_prob = max(7.5, min(18.0, base_score / 7.0))
+        hr_prob = max(6.5, min(15.0, base_score / 7.4))
     elif not hr_eligible:
         hr_prob = 0.0
     else:
-        hr_prob = max(3.0, min(28.0, (base_score + multi_pitch_authority_score * 2.2) / 6.6))
+        hr_prob = max(2.5, min(26.0, (base_score + multi_pitch_authority_score * 1.9) / 7.2))
 
-    if elite_hr_flag and hr_prob < 10.5:
-        hr_prob = 10.5
+    if recent_trend == "COLD" and pitch_mix_mode != "HARD":
+        hr_prob = max(0.0, hr_prob - 2.0)
+    if lineup_source == "PROJECTED" and lineup_spot is None and recent_trend == "NEUTRAL":
+        hr_prob = max(0.0, hr_prob - 1.25)
+    if elite_hr_flag and hr_prob < 10.0:
+        hr_prob = 10.0
 
     hrr_score = (
         (ev - 87) * 1.1 +
@@ -2263,24 +2340,26 @@ def build_hitter_metrics(
         reasons.append("Air-ball target")
 
     model_rank_score = (
-        (barrel * 5.6) +
-        (hard_hit * 3.0) +
-        (air_pct * 1.5) +
-        (xslg * 145) +
-        (xwoba * 72) +
-        (max(0, 24 - abs(launch_angle - 18)) * 1.5) +
-        (pitch_hr9 * 8.0) +
-        (pitch_barrel_allowed * 1.1) +
-        (recent_hr * 5.0) +
-        (recent_xbh * 1.8) +
-        (recent_iso * 24.0) +
-        (recent_damage_score * 0.35) +
-        (pitch_matchup_score * 2.1) +
-        (handedness_edge * 1.7) +
-        (weather_boost * 4.0) +
+        (barrel * 6.2) +
+        (hard_hit * 3.2) +
+        (air_pct * 1.6) +
+        (pull_pct * 1.15) +
+        (xslg * 155) +
+        (xwoba * 76) +
+        (max(0, 24 - abs(launch_angle - 18)) * 1.6) +
+        (pitch_hr9 * 8.8) +
+        (pitch_barrel_allowed * 1.35) +
+        (recent_hr * 5.4) +
+        (recent_xbh * 2.0) +
+        (recent_iso * 27.0) +
+        (recent_damage_score * 0.38) +
+        max(0.0, trend_delta) * 1.2 +
+        (pitch_matchup_score * 2.25) +
+        (handedness_edge * 1.8) +
+        (weather_boost * 4.2) +
         (bullpen_fatigue_score * 4.8) +
-        (statcast_authority_score * 1.55) +
-        (multi_pitch_authority_score * 3.0)
+        (statcast_authority_score * 1.7) +
+        (multi_pitch_authority_score * 3.1)
     )
 
     if pitch_isolation_valid == "Yes":
@@ -2298,11 +2377,11 @@ def build_hitter_metrics(
         model_rank_score += 3.0
 
     if recent_trend == "HOT":
-        model_rank_score += 6.0
+        model_rank_score += 6.5
     elif recent_trend == "LIVE":
-        model_rank_score += 3.0
+        model_rank_score += 3.5
     elif recent_trend == "COLD":
-        model_rank_score -= 5.0
+        model_rank_score -= 9.0
 
     if ground_ball >= 55:
         model_rank_score -= 18.0
@@ -2346,6 +2425,7 @@ def build_hitter_metrics(
         "GroundBall%": round(ground_ball, 1),
         "Barrel%": round(barrel, 1),
         "AIR%": round(air_pct, 1),
+        "Pull%": round(pull_pct, 1),
         "LaunchAngle": round(launch_angle, 1),
         "Recent Trend": recent_trend,
         "xSLG": round(xslg, 3) if xslg else 0.0,
@@ -2607,6 +2687,7 @@ def build_daily_dataset():
     return df, schedule
 
 
+
 def get_research_shortlist_pool(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return df.copy()
@@ -2619,35 +2700,40 @@ def get_research_shortlist_pool(df: pd.DataFrame) -> pd.DataFrame:
     barrel = safe_numeric_series(pool, "Barrel%", 0.0)
     hard_hit = safe_numeric_series(pool, "HardHit%", 0.0)
     air_pct = safe_numeric_series(pool, "AIR%", 0.0)
+    pull_pct = safe_numeric_series(pool, "Pull%", 0.0)
     xslg = safe_numeric_series(pool, "xSLG", 0.0)
     gb = safe_numeric_series(pool, "GroundBall%", 999.0)
     pitch_score = safe_numeric_series(pool, "Pitch Matchup Score", 0.0)
     hr_prob = safe_numeric_series(pool, "HR Probability %", 0.0)
+    trend_score = safe_numeric_series(pool, "Model Rank Score", 0.0)
     recent_trend = pool.get("Recent Trend", pd.Series(["NEUTRAL"] * len(pool), index=pool.index)).astype(str)
     authority_tier = pool.get("Statcast Authority Tier", pd.Series(["MEDIUM"] * len(pool), index=pool.index)).astype(str)
     mix_mode = pool.get("Pitch Mix Mode", pd.Series(["BALANCED"] * len(pool), index=pool.index)).astype(str)
     lineup_source = pool.get("Lineup Source", pd.Series(["PROJECTED"] * len(pool), index=pool.index)).astype(str).str.upper()
 
     authority_keep = authority_tier.isin(["ELITE", "STRONG"])
+    hot_keep = recent_trend.isin(["HOT", "LIVE"])
+
     projected_damage_keep = (
         lineup_source.eq("PROJECTED")
         & (
-            (barrel >= 10.0)
-            | (xslg >= 0.470)
-            | (hard_hit >= 42.0)
-            | recent_trend.isin(["HOT", "LIVE"])
-            | (pitch_score >= 4.8)
-            | (hr_prob >= 12.0)
+            authority_keep
+            | (barrel >= 10.5)
+            | (xslg >= 0.485)
+            | (hard_hit >= 43.0)
+            | hot_keep
+            | (pitch_score >= 5.2)
+            | (hr_prob >= 13.0)
         )
     )
 
     medium_keep = (
         authority_tier.eq("MEDIUM")
         & (
-            recent_trend.isin(["HOT", "LIVE"])
-            | (barrel >= 10.0)
+            hot_keep
+            | (barrel >= 10.2)
             | (xslg >= 0.470)
-            | ((lineup_num <= 5) & (pitch_score >= 3.0))
+            | ((lineup_num <= 5) & (pitch_score >= 3.6))
             | projected_damage_keep
         )
     )
@@ -2655,9 +2741,16 @@ def get_research_shortlist_pool(df: pd.DataFrame) -> pd.DataFrame:
     gb_keep = (
         (gb <= 47.5)
         | (barrel >= 11.0)
-        | (xslg >= 0.485)
+        | (xslg >= 0.490)
         | authority_keep
         | projected_damage_keep
+    )
+
+    shape_keep = (
+        (air_pct >= 50.0)
+        | (pull_pct >= 38.0)
+        | authority_keep
+        | ((barrel >= 10.5) & (hard_hit >= 42.0))
     )
 
     mix_keep = (
@@ -2667,8 +2760,8 @@ def get_research_shortlist_pool(df: pd.DataFrame) -> pd.DataFrame:
         | (
             mix_mode.eq("SOFT")
             & (
-                recent_trend.isin(["HOT", "LIVE"])
-                | (pitch_score >= 4.2)
+                hot_keep
+                | (pitch_score >= 4.4)
                 | ((lineup_num <= 5) & authority_tier.eq("MEDIUM"))
                 | projected_damage_keep
             )
@@ -2678,11 +2771,11 @@ def get_research_shortlist_pool(df: pd.DataFrame) -> pd.DataFrame:
             & (
                 authority_keep
                 | projected_damage_keep
-                | (barrel >= 10.0)
-                | (xslg >= 0.470)
-                | (hard_hit >= 42.0)
-                | recent_trend.isin(["HOT", "LIVE"])
-                | (authority_tier.eq("MEDIUM") & (lineup_num <= 5) & (pitch_score >= 3.5))
+                | (barrel >= 10.5)
+                | (xslg >= 0.480)
+                | (hard_hit >= 43.0)
+                | hot_keep
+                | (authority_tier.eq("MEDIUM") & (lineup_num <= 4) & (pitch_score >= 4.0))
             )
         )
     )
@@ -2692,11 +2785,11 @@ def get_research_shortlist_pool(df: pd.DataFrame) -> pd.DataFrame:
         & lineup_source.eq("PROJECTED")
         & (
             authority_keep
-            | (barrel >= 10.0)
-            | (xslg >= 0.470)
-            | (hard_hit >= 42.0)
-            | recent_trend.isin(["HOT", "LIVE"])
-            | (hr_prob >= 12.0)
+            | (barrel >= 11.0)
+            | (xslg >= 0.485)
+            | (hard_hit >= 43.0)
+            | hot_keep
+            | (hr_prob >= 13.0)
         )
     )
 
@@ -2708,18 +2801,29 @@ def get_research_shortlist_pool(df: pd.DataFrame) -> pd.DataFrame:
     )
 
     score_keep = (
-        (hr_prob >= 8.0)
+        (hr_prob >= 8.8)
         | authority_keep
         | projected_damage_keep
-        | ((barrel >= 10.5) & (hard_hit >= 41.0))
+        | ((barrel >= 10.8) & (hard_hit >= 41.5))
+        | (trend_score >= 425)
     )
 
-    shortlist = pool[gb_keep & mix_keep & lineup_keep & score_keep & (authority_keep | medium_keep | projected_damage_keep)].copy()
+    fade_cold = ~(
+        recent_trend.eq("COLD")
+        & (barrel < 11.0)
+        & (xslg < 0.470)
+        & (pitch_score < 5.0)
+        & ~authority_keep
+    )
+
+    shortlist = pool[
+        gb_keep & shape_keep & mix_keep & lineup_keep & score_keep & fade_cold & (authority_keep | medium_keep | projected_damage_keep)
+    ].copy()
     if shortlist.empty:
         shortlist = pool.copy()
 
     shortlist = sort_for_hr(shortlist)
-    shortlist = shortlist.head(60).reset_index(drop=True)
+    shortlist = shortlist.head(40).reset_index(drop=True)
     return shortlist
 
 
