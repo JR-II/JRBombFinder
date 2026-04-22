@@ -3185,6 +3185,42 @@ def auto_update_combo_tracker_results(combo_tracker: pd.DataFrame, schedule: lis
     return combo_tracker
 
 
+
+def summarize_tracker_sources(df: pd.DataFrame) -> dict:
+    buckets = {
+        "CORE_BOARD": {"today_total": 0, "today_hits": 0, "today_pct": 0.0, "all_total": 0, "all_hits": 0, "all_pct": 0.0},
+        "TOP12": {"today_total": 0, "today_hits": 0, "today_pct": 0.0, "all_total": 0, "all_hits": 0, "all_pct": 0.0},
+        "GAME_HR": {"today_total": 0, "today_hits": 0, "today_pct": 0.0, "all_total": 0, "all_hits": 0, "all_pct": 0.0},
+    }
+    if df.empty:
+        return buckets
+
+    work = df.copy()
+    if "tracker_source" not in work.columns:
+        work["tracker_source"] = "CORE_BOARD"
+    work["tracker_source"] = work["tracker_source"].fillna("CORE_BOARD").astype(str)
+    work["result_num"] = pd.to_numeric(work["result"], errors="coerce").fillna(0).astype(int)
+    today_mask = work["date"].astype(str) == today_str()
+
+    for source in buckets.keys():
+        all_df = work[work["tracker_source"] == source].copy()
+        today_df = all_df[today_mask].copy()
+        all_total = len(all_df)
+        all_hits = int(all_df["result_num"].sum()) if all_total else 0
+        today_total = len(today_df)
+        today_hits = int(today_df["result_num"].sum()) if today_total else 0
+        buckets[source] = {
+            "today_total": today_total,
+            "today_hits": today_hits,
+            "today_pct": round((today_hits / today_total) * 100, 2) if today_total else 0.0,
+            "all_total": all_total,
+            "all_hits": all_hits,
+            "all_pct": round((all_hits / all_total) * 100, 2) if all_total else 0.0,
+        }
+
+    return buckets
+
+
 def summarize_combo_tracker(df: pd.DataFrame) -> dict:
     summary = {
         "today_total": 0, "today_full_hits": 0, "today_partial_hits": 0,
@@ -3230,6 +3266,7 @@ if st.session_state.get("force_tracker_refresh", False) or st.session_state.get(
 save_daily_tracker_snapshot(tracker, today_str())
 
 summary = summarize_tracker(tracker)
+source_summary = summarize_tracker_sources(tracker)
 daily_summary = summarize_tracker_by_day(tracker)
 combo_summary = summarize_combo_tracker(combo_tracker)
 
@@ -3352,22 +3389,51 @@ with tabs[4]:
 
 with tabs[5]:
     st.subheader("Accuracy Tracker")
-    st.caption("HR tracking is split so your tighter core board and combo board can be judged separately. Any hitter surfaced in the visible per-game HR boards is now tracked too.")
+    st.caption("Tracker is broken into separate sections so you can judge Core Board, Top 12, Per-Game HR, and Combos independently.")
 
+    st.markdown("### Today by Section")
+    s1, s2, s3 = st.columns(3)
+    with s1:
+        st.markdown("**Core Board**")
+        st.metric("Surfaced", source_summary["CORE_BOARD"]["today_total"])
+        st.metric("HR Hit", source_summary["CORE_BOARD"]["today_hits"])
+        st.metric("Hit Rate %", source_summary["CORE_BOARD"]["today_pct"])
+    with s2:
+        st.markdown("**Top 12**")
+        st.metric("Surfaced", source_summary["TOP12"]["today_total"])
+        st.metric("HR Hit", source_summary["TOP12"]["today_hits"])
+        st.metric("Hit Rate %", source_summary["TOP12"]["today_pct"])
+    with s3:
+        st.markdown("**Per-Game HR**")
+        st.metric("Surfaced", source_summary["GAME_HR"]["today_total"])
+        st.metric("HR Hit", source_summary["GAME_HR"]["today_hits"])
+        st.metric("Hit Rate %", source_summary["GAME_HR"]["today_pct"])
+
+    st.markdown("### Combo Section")
+    cx1, cx2, cx3 = st.columns(3)
+    cx1.metric("Today Combos", combo_summary["today_total"])
+    cx2.metric("Today Full Hits", combo_summary["today_full_hits"])
+    cx3.metric("Today Partial Hits", combo_summary["today_partial_hits"])
+
+    st.divider()
+
+    st.markdown("### All-Time by Section")
     a1, a2, a3 = st.columns(3)
-    a1.metric("Today's Core Picks", summary.get("today_core_total", summary["today_total"]))
-    a2.metric("Today's Core HR", summary.get("today_core_hits", summary["today_hits"]))
-    a3.metric("Today's Core Hit Rate %", summary.get("today_core_pct", summary["today_pct"]))
-
-    b1, b2, b3 = st.columns(3)
-    b1.metric("Today's Top 12 Picks", summary.get("today_top12_total", 0))
-    b2.metric("Today's Top 12 HR", summary.get("today_top12_hits", 0))
-    b3.metric("Today's Top 12 Hit Rate %", summary.get("today_top12_pct", 0.0))
-
-    c1x, c2x, c3x = st.columns(3)
-    c1x.metric("Today Combos", combo_summary["today_total"])
-    c2x.metric("Today Full Combo Hits", combo_summary["today_full_hits"])
-    c3x.metric("Today Partial Combo Hits", combo_summary["today_partial_hits"])
+    with a1:
+        st.markdown("**Core Board**")
+        st.metric("All Surfaced", source_summary["CORE_BOARD"]["all_total"])
+        st.metric("All HR Hit", source_summary["CORE_BOARD"]["all_hits"])
+        st.metric("All Hit Rate %", source_summary["CORE_BOARD"]["all_pct"])
+    with a2:
+        st.markdown("**Top 12**")
+        st.metric("All Surfaced", source_summary["TOP12"]["all_total"])
+        st.metric("All HR Hit", source_summary["TOP12"]["all_hits"])
+        st.metric("All Hit Rate %", source_summary["TOP12"]["all_pct"])
+    with a3:
+        st.markdown("**Per-Game HR**")
+        st.metric("All Surfaced", source_summary["GAME_HR"]["all_total"])
+        st.metric("All HR Hit", source_summary["GAME_HR"]["all_hits"])
+        st.metric("All Hit Rate %", source_summary["GAME_HR"]["all_pct"])
 
     st.divider()
 
@@ -3376,33 +3442,37 @@ with tabs[5]:
     ].copy()
 
     if not today_tracker.empty:
-        st.caption("Today's tracked surfaced picks")
-        if "tracker_source" not in today_tracker.columns:
-            today_tracker["tracker_source"] = "CORE_BOARD"
-        st.dataframe(
-            today_tracker.sort_values(
-                by=["tracker_source", "hr_probability", "player"],
-                ascending=[True, False, True]
-            )[[
-                "player",
-                "team",
-                "game",
-                "hr_probability",
-                "hr_tier",
-                "tracker_source",
-                "hr_eligible",
-                "result",
-                "result_state",
-                "game_state",
-                "updated_at"
-            ]],
-            use_container_width=True,
-            hide_index=True
-        )
+        st.markdown("### Today's Split Tracker Tables")
+        for section_name, source_key in [("Core Board", "CORE_BOARD"), ("Top 12", "TOP12"), ("Per-Game HR", "GAME_HR")]:
+            section_df = today_tracker[today_tracker["tracker_source"].astype(str) == source_key].copy()
+            st.markdown(f"**{section_name}**")
+            if section_df.empty:
+                st.caption("No tracked rows in this section today.")
+            else:
+                st.dataframe(
+                    section_df.sort_values(
+                        by=["hr_probability", "player"],
+                        ascending=[False, True]
+                    )[[
+                        "player",
+                        "team",
+                        "game",
+                        "hr_probability",
+                        "hr_tier",
+                        "tracker_source",
+                        "hr_eligible",
+                        "result",
+                        "result_state",
+                        "game_state",
+                        "updated_at"
+                    ]],
+                    use_container_width=True,
+                    hide_index=True
+                )
 
     if not combo_tracker.empty:
         st.divider()
-        st.caption("Today's combo tracker")
+        st.markdown("### Today's Combo Tracker")
         today_combo = combo_tracker[
             combo_tracker["date"].astype("string").fillna("") == str(today_str())
         ].copy()
@@ -3426,7 +3496,7 @@ with tabs[5]:
 
     if not daily_summary.empty:
         st.divider()
-        st.caption("Daily HR prediction accuracy history")
+        st.markdown("### Daily HR Prediction Accuracy History")
         st.dataframe(
             daily_summary,
             use_container_width=True,
@@ -3435,7 +3505,7 @@ with tabs[5]:
 
     if not combo_tracker.empty:
         st.divider()
-        st.caption("Combo tracker history")
+        st.markdown("### Combo Tracker History")
         st.dataframe(
             combo_tracker.sort_values(
                 by=["date", "combo_size", "combined_score"],
