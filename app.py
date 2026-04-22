@@ -2859,6 +2859,8 @@ def build_visible_tracker_pool(df: pd.DataFrame, schedule: list[dict]) -> pd.Dat
         top12["Tracker Source"] = "TOP12"
         visible_frames.append(top12)
 
+    # Match tracker entries to the actual per-game HR boards the user sees.
+    # If BF Data surfaces a hitter in a visible per-game HR table, that hitter must be tracked.
     for game in schedule:
         gdf = df[df["Game"] == game["game_key"]].copy()
         if gdf.empty:
@@ -2869,13 +2871,13 @@ def build_visible_tracker_pool(df: pd.DataFrame, schedule: list[dict]) -> pd.Dat
 
         away_hr, _ = get_team_game_view(gdf, game["game_key"], away_team)
         if not away_hr.empty:
-            away_hr = away_hr.copy().head(2)
+            away_hr = away_hr.copy()
             away_hr["Tracker Source"] = "GAME_HR"
             visible_frames.append(away_hr)
 
         home_hr, _ = get_team_game_view(gdf, game["game_key"], home_team)
         if not home_hr.empty:
-            home_hr = home_hr.copy().head(2)
+            home_hr = home_hr.copy()
             home_hr["Tracker Source"] = "GAME_HR"
             visible_frames.append(home_hr)
 
@@ -3350,7 +3352,7 @@ with tabs[4]:
 
 with tabs[5]:
     st.subheader("Accuracy Tracker")
-    st.caption("HR tracking is split so your tighter core board and combo board can be judged separately.")
+    st.caption("HR tracking is split so your tighter core board and combo board can be judged separately. Any hitter surfaced in the visible per-game HR boards is now tracked too.")
 
     a1, a2, a3 = st.columns(3)
     a1.metric("Today's Core Picks", summary.get("today_core_total", summary["today_total"]))
