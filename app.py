@@ -267,7 +267,7 @@ def read_html_best_table(urls: list[str], must_have_any: list[str]) -> pd.DataFr
 def load_tracker() -> pd.DataFrame:
     columns = [
         "date", "player", "team", "game", "game_pk",
-        "hr_probability", "hr_tier", "hr_eligible",
+        "hr_probability", "hr_tier", "hr_eligible", "tracker_source",
         "result", "result_state", "game_state", "updated_at"
     ]
     if os.path.exists(TRACKER_FILE):
@@ -673,66 +673,132 @@ def compute_statcast_authority(
     return round(authority_score, 2), 0.00, "FAIL"
 
 
+
 def summarize_tracker(df: pd.DataFrame):
-    if df.empty:
-        return {
-            "today_total": 0,
-            "today_hits": 0,
-            "today_pct": 0.0,
-            "all_total": 0,
-            "all_hits": 0,
-            "all_pct": 0.0,
-        }
-
-    df = df.copy()
-    df["result_num"] = pd.to_numeric(df["result"], errors="coerce").fillna(0).astype(int)
-
-    today_df = df[df["date"].astype(str) == today_str()]
-    today_total = len(today_df)
-    today_hits = int(today_df["result_num"].sum())
-    today_pct = round((today_hits / today_total) * 100, 2) if today_total else 0.0
-
-    all_total = len(df)
-    all_hits = int(df["result_num"].sum())
-    all_pct = round((all_hits / all_total) * 100, 2) if all_total else 0.0
-
-    return {
-        "today_total": today_total,
-        "today_hits": today_hits,
-        "today_pct": today_pct,
-        "all_total": all_total,
-        "all_hits": all_hits,
-        "all_pct": all_pct,
+    summary = {
+        "today_total": 0,
+        "today_hits": 0,
+        "today_pct": 0.0,
+        "all_total": 0,
+        "all_hits": 0,
+        "all_pct": 0.0,
+        "today_core_total": 0,
+        "today_core_hits": 0,
+        "today_core_pct": 0.0,
+        "all_core_total": 0,
+        "all_core_hits": 0,
+        "all_core_pct": 0.0,
+        "today_top12_total": 0,
+        "today_top12_hits": 0,
+        "today_top12_pct": 0.0,
+        "all_top12_total": 0,
+        "all_top12_hits": 0,
+        "all_top12_pct": 0.0,
     }
+    if df.empty:
+        return summary
+
+    work = df.copy()
+    work["result_num"] = pd.to_numeric(work["result"], errors="coerce").fillna(0).astype(int)
+    if "tracker_source" not in work.columns:
+        work["tracker_source"] = "CORE_BOARD"
+    work["tracker_source"] = work["tracker_source"].fillna("CORE_BOARD").astype(str)
+
+    def _stats(sub: pd.DataFrame):
+        total = len(sub)
+        hits = int(sub["result_num"].sum()) if total else 0
+        pct = round((hits / total) * 100, 2) if total else 0.0
+        return total, hits, pct
+
+    today_df = work[work["date"].astype(str) == today_str()].copy()
+
+    summary["today_total"], summary["today_hits"], summary["today_pct"] = _stats(today_df)
+    summary["all_total"], summary["all_hits"], summary["all_pct"] = _stats(work)
+
+    today_core = today_df[today_df["tracker_source"].isin(["CORE_BOARD", "GAME_HR"])]
+    all_core = work[work["tracker_source"].isin(["CORE_BOARD", "GAME_HR"])]
+    summary["today_core_total"], summary["today_core_hits"], summary["today_core_pct"] = _stats(today_core)
+    summary["all_core_total"], summary["all_core_hits"], summary["all_core_pct"] = _stats(all_core)
+
+    today_top12 = today_df[today_df["tracker_source"] == "TOP12"]
+    all_top12 = work[work["tracker_source"] == "TOP12"]
+    summary["today_top12_total"], summary["today_top12_hits"], summary["today_top12_pct"] = _stats(today_top12)
+    summary["all_top12_total"], summary["all_top12_hits"], summary["all_top12_pct"] = _stats(all_top12)
+
+    return summary
+
 
 
 def summarize_tracker_by_day(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return pd.DataFrame(columns=[
             "date",
-            "surfaced_hr_picks",
-            "correct_hr",
-            "hit_rate_pct"
+            "all_surfaced",
+            "all_correct_hr",
+            "all_hit_rate_pct",
+            "core_surfaced",
+            "core_correct_hr",
+            "core_hit_rate_pct",
+            "top12_surfaced",
+            "top12_correct_hr",
+            "top12_hit_rate_pct",
         ])
 
     work = df.copy()
     work["result_num"] = pd.to_numeric(work["result"], errors="coerce").fillna(0).astype(int)
+    if "tracker_source" not in work.columns:
+        work["tracker_source"] = "CORE_BOARD"
+    work["tracker_source"] = work["tracker_source"].fillna("CORE_BOARD").astype(str)
 
-    daily = (
+    all_daily = (
         work.groupby("date", as_index=False)
         .agg(
-            surfaced_hr_picks=("player", "count"),
-            correct_hr=("result_num", "sum"),
+            all_surfaced=("player", "count"),
+            all_correct_hr=("result_num", "sum"),
         )
     )
-
-    daily["hit_rate_pct"] = daily.apply(
-        lambda row: round(
-            (row["correct_hr"] / row["surfaced_hr_picks"]) * 100,
-            2
-        ) if row["surfaced_hr_picks"] else 0.0,
+    all_daily["all_hit_rate_pct"] = all_daily.apply(
+        lambda row: round((row["all_correct_hr"] / row["all_surfaced"]) * 100, 2) if row["all_surfaced"] else 0.0,
         axis=1
     )
+
+    core_work = work[work["tracker_source"].isin(["CORE_BOARD", "GAME_HR"])].copy()
+    if core_work.empty:
+        core_daily = pd.DataFrame(columns=["date", "core_surfaced", "core_correct_hr", "core_hit_rate_pct"])
+    else:
+        core_daily = (
+            core_work.groupby("date", as_index=False)
+            .agg(
+                core_surfaced=("player", "count"),
+                core_correct_hr=("result_num", "sum"),
+            )
+        )
+        core_daily["core_hit_rate_pct"] = core_daily.apply(
+            lambda row: round((row["core_correct_hr"] / row["core_surfaced"]) * 100, 2) if row["core_surfaced"] else 0.0,
+            axis=1
+        )
+
+    top12_work = work[work["tracker_source"] == "TOP12"].copy()
+    if top12_work.empty:
+        top12_daily = pd.DataFrame(columns=["date", "top12_surfaced", "top12_correct_hr", "top12_hit_rate_pct"])
+    else:
+        top12_daily = (
+            top12_work.groupby("date", as_index=False)
+            .agg(
+                top12_surfaced=("player", "count"),
+                top12_correct_hr=("result_num", "sum"),
+            )
+        )
+        top12_daily["top12_hit_rate_pct"] = top12_daily.apply(
+            lambda row: round((row["top12_correct_hr"] / row["top12_surfaced"]) * 100, 2) if row["top12_surfaced"] else 0.0,
+            axis=1
+        )
+
+    daily = all_daily.merge(core_daily, on="date", how="left").merge(top12_daily, on="date", how="left")
+    for col in ["core_surfaced", "core_correct_hr", "core_hit_rate_pct", "top12_surfaced", "top12_correct_hr", "top12_hit_rate_pct"]:
+        if col not in daily.columns:
+            daily[col] = 0
+        daily[col] = daily[col].fillna(0)
 
     daily = daily.sort_values("date", ascending=False).reset_index(drop=True)
     return daily
@@ -2688,6 +2754,7 @@ def build_daily_dataset():
 
 
 
+
 def get_research_shortlist_pool(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return df.copy()
@@ -2706,124 +2773,88 @@ def get_research_shortlist_pool(df: pd.DataFrame) -> pd.DataFrame:
     pitch_score = safe_numeric_series(pool, "Pitch Matchup Score", 0.0)
     hr_prob = safe_numeric_series(pool, "HR Probability %", 0.0)
     trend_score = safe_numeric_series(pool, "Model Rank Score", 0.0)
-    recent_trend = pool.get("Recent Trend", pd.Series(["NEUTRAL"] * len(pool), index=pool.index)).astype(str)
     authority_tier = pool.get("Statcast Authority Tier", pd.Series(["MEDIUM"] * len(pool), index=pool.index)).astype(str)
     mix_mode = pool.get("Pitch Mix Mode", pd.Series(["BALANCED"] * len(pool), index=pool.index)).astype(str)
+    recent_trend = pool.get("Recent Trend", pd.Series(["NEUTRAL"] * len(pool), index=pool.index)).astype(str)
     lineup_source = pool.get("Lineup Source", pd.Series(["PROJECTED"] * len(pool), index=pool.index)).astype(str).str.upper()
 
     authority_keep = authority_tier.isin(["ELITE", "STRONG"])
     hot_keep = recent_trend.isin(["HOT", "LIVE"])
+    elite_shape = (barrel >= 12.0) | (xslg >= 0.500) | ((hard_hit >= 45.0) & (air_pct >= 54.0))
+    starter_attack = (pitch_score >= 4.2) | (hr_prob >= 12.0)
 
-    projected_damage_keep = (
-        lineup_source.eq("PROJECTED")
-        & (
-            authority_keep
-            | (barrel >= 10.5)
-            | (xslg >= 0.485)
-            | (hard_hit >= 43.0)
-            | hot_keep
-            | (pitch_score >= 5.2)
-            | (hr_prob >= 13.0)
-        )
-    )
-
-    medium_keep = (
-        authority_tier.eq("MEDIUM")
-        & (
-            hot_keep
-            | (barrel >= 10.2)
-            | (xslg >= 0.470)
-            | ((lineup_num <= 5) & (pitch_score >= 3.6))
-            | projected_damage_keep
-        )
+    hard_shape_gate = (
+        ((barrel >= 8.0) & (hard_hit >= 40.0) & (air_pct >= 48.0))
+        | ((barrel >= 9.5) & (xslg >= 0.455))
+        | ((hard_hit >= 44.0) & (pull_pct >= 39.0) & (air_pct >= 47.0))
+        | elite_shape
+        | authority_keep
     )
 
     gb_keep = (
-        (gb <= 47.5)
-        | (barrel >= 11.0)
-        | (xslg >= 0.490)
+        (gb <= 48.0)
+        | elite_shape
         | authority_keep
-        | projected_damage_keep
+        | ((gb <= 50.5) & (barrel >= 11.0) & (xslg >= 0.485))
     )
 
-    shape_keep = (
-        (air_pct >= 50.0)
-        | (pull_pct >= 38.0)
-        | authority_keep
-        | ((barrel >= 10.5) & (hard_hit >= 42.0))
+    projected_keep = (
+        lineup_source.eq("PROJECTED")
+        & (
+            elite_shape
+            | authority_keep
+            | (hot_keep & starter_attack)
+            | ((barrel >= 10.5) & (xslg >= 0.470))
+        )
     )
 
-    mix_keep = (
+    mixed_pitch_keep = (
         mix_mode.eq("HARD")
         | authority_keep
-        | projected_damage_keep
-        | (
-            mix_mode.eq("SOFT")
-            & (
-                hot_keep
-                | (pitch_score >= 4.4)
-                | ((lineup_num <= 5) & authority_tier.eq("MEDIUM"))
-                | projected_damage_keep
-            )
-        )
-        | (
-            mix_mode.eq("BALANCED")
-            & (
-                authority_keep
-                | projected_damage_keep
-                | (barrel >= 10.5)
-                | (xslg >= 0.480)
-                | (hard_hit >= 43.0)
-                | hot_keep
-                | (authority_tier.eq("MEDIUM") & (lineup_num <= 4) & (pitch_score >= 4.0))
-            )
-        )
+        | projected_keep
+        | (mix_mode.eq("SOFT") & (starter_attack | hot_keep | elite_shape))
+        | (mix_mode.eq("BALANCED") & (elite_shape | authority_keep | (hot_keep & (pitch_score >= 4.6))))
     )
 
-    projected_unknown_keep = (
-        lineup_num.eq(99)
-        & lineup_source.eq("PROJECTED")
-        & (
-            authority_keep
-            | (barrel >= 11.0)
-            | (xslg >= 0.485)
-            | (hard_hit >= 43.0)
-            | hot_keep
-            | (hr_prob >= 13.0)
-        )
-    )
-
-    lineup_keep = (
-        (lineup_num <= 6)
+    score_gate = (
+        (hr_prob >= 9.5)
         | authority_keep
-        | ((lineup_num <= 7) & (barrel >= 11.0))
-        | projected_unknown_keep
+        | elite_shape
+        | ((barrel >= 10.5) & (hard_hit >= 42.0))
+        | (trend_score >= 445)
     )
 
-    score_keep = (
-        (hr_prob >= 8.8)
-        | authority_keep
-        | projected_damage_keep
-        | ((barrel >= 10.8) & (hard_hit >= 41.5))
-        | (trend_score >= 425)
-    )
+    playable_lineup = (lineup_num <= 6) | authority_keep | projected_keep | hot_keep
 
     fade_cold = ~(
         recent_trend.eq("COLD")
-        & (barrel < 11.0)
-        & (xslg < 0.470)
-        & (pitch_score < 5.0)
+        & (barrel < 11.5)
+        & (xslg < 0.485)
+        & (pitch_score < 5.2)
         & ~authority_keep
     )
 
-    shortlist = pool[
-        gb_keep & shape_keep & mix_keep & lineup_keep & score_keep & fade_cold & (authority_keep | medium_keep | projected_damage_keep)
-    ].copy()
-    if shortlist.empty:
-        shortlist = pool.copy()
+    projected_unknown_fade = ~(
+        lineup_num.eq(99)
+        & lineup_source.eq("PROJECTED")
+        & ~(projected_keep | authority_keep | elite_shape)
+    )
 
-    shortlist = sort_for_hr(shortlist)
-    shortlist = shortlist.head(40).reset_index(drop=True)
+    shortlist = pool[
+        hard_shape_gate
+        & gb_keep
+        & mixed_pitch_keep
+        & score_gate
+        & playable_lineup
+        & fade_cold
+        & projected_unknown_fade
+    ].copy()
+
+    if shortlist.empty:
+        shortlist = sort_for_hr(pool).head(30).copy()
+        return shortlist.reset_index(drop=True)
+
+    shortlist = sort_for_hr(shortlist).head(32).reset_index(drop=True)
     return shortlist
 
 
@@ -2878,14 +2909,15 @@ def get_team_game_view(df: pd.DataFrame, game_key: str, team: str):
     return hr_pool, hrr
 
 
+
 def build_visible_tracker_pool(df: pd.DataFrame, schedule: list[dict]) -> pd.DataFrame:
     visible_frames = []
 
-    hr_board = df[df["HR Eligible"]].copy()
-    if not hr_board.empty:
-        hr_board = sort_for_hr(hr_board)
-        hr_board["Tracker Source"] = "HR_BOARD"
-        visible_frames.append(hr_board)
+    core_board = get_research_shortlist_pool(df).copy()
+    if not core_board.empty:
+        core_board = sort_for_hr(core_board)
+        core_board["Tracker Source"] = "CORE_BOARD"
+        visible_frames.append(core_board)
 
     top12 = get_top12_hybrid(df).copy()
     if not top12.empty:
@@ -2902,13 +2934,13 @@ def build_visible_tracker_pool(df: pd.DataFrame, schedule: list[dict]) -> pd.Dat
 
         away_hr, _ = get_team_game_view(gdf, game["game_key"], away_team)
         if not away_hr.empty:
-            away_hr = away_hr.copy()
+            away_hr = away_hr.copy().head(3)
             away_hr["Tracker Source"] = "GAME_HR"
             visible_frames.append(away_hr)
 
         home_hr, _ = get_team_game_view(gdf, game["game_key"], home_team)
         if not home_hr.empty:
-            home_hr = home_hr.copy()
+            home_hr = home_hr.copy().head(3)
             home_hr["Tracker Source"] = "GAME_HR"
             visible_frames.append(home_hr)
 
@@ -2917,6 +2949,7 @@ def build_visible_tracker_pool(df: pd.DataFrame, schedule: list[dict]) -> pd.Dat
 
     visible_df = pd.concat(visible_frames, ignore_index=True)
     visible_df = visible_df.drop_duplicates(subset=["Player", "Team", "Game"]).reset_index(drop=True)
+    visible_df = sort_for_hr(visible_df)
     return visible_df
 
 
@@ -2972,6 +3005,7 @@ def sync_tracker_with_board(tracked_df: pd.DataFrame):
             "hr_probability": row["HR Probability %"],
             "hr_tier": row["HR Tier"],
             "hr_eligible": int(bool(row["HR Eligible"])),
+            "tracker_source": row.get("Tracker Source", "CORE_BOARD"),
             "result": pd.NA,
             "result_state": "PENDING",
             "game_state": row["game_state"],
@@ -3142,19 +3176,25 @@ with tabs[3]:
         hide_index=True
     )
 
+
 with tabs[4]:
     st.subheader("Accuracy Tracker")
-    st.caption("Only tracks hitters BF Data actually surfaced on the locked visible HR boards.")
+    st.caption("Tracker now separates the tight core board from the Top 12 so accuracy reflects your best reads, not every broad look.")
 
     a1, a2, a3 = st.columns(3)
-    a1.metric("Today's Surfaced HR Picks", summary["today_total"])
-    a2.metric("Today's Correct HR", summary["today_hits"])
-    a3.metric("Today's Hit Rate %", summary["today_pct"])
+    a1.metric("Today's Core Picks", summary["today_core_total"])
+    a2.metric("Today's Core HR", summary["today_core_hits"])
+    a3.metric("Today's Core Hit Rate %", summary["today_core_pct"])
 
     b1, b2, b3 = st.columns(3)
-    b1.metric("All-Time Surfaced HR Picks", summary["all_total"])
-    b2.metric("All-Time Correct HR", summary["all_hits"])
-    b3.metric("All-Time Hit Rate %", summary["all_pct"])
+    b1.metric("Today's Top 12 Picks", summary["today_top12_total"])
+    b2.metric("Today's Top 12 HR", summary["today_top12_hits"])
+    b3.metric("Today's Top 12 Hit Rate %", summary["today_top12_pct"])
+
+    c5, c6, c7 = st.columns(3)
+    c5.metric("All Surfaced Picks", summary["all_total"])
+    c6.metric("All Correct HR", summary["all_hits"])
+    c7.metric("All Surfaced Hit Rate %", summary["all_pct"])
 
     st.divider()
 
@@ -3164,22 +3204,24 @@ with tabs[4]:
 
     if not today_tracker.empty:
         st.caption("Today's tracked surfaced picks")
+        view_cols = [
+            "player",
+            "team",
+            "game",
+            "hr_probability",
+            "hr_tier",
+            "tracker_source",
+            "hr_eligible",
+            "result",
+            "result_state",
+            "game_state",
+            "updated_at"
+        ]
         st.dataframe(
             today_tracker.sort_values(
-                by=["hr_probability", "player"],
-                ascending=[False, True]
-            )[[
-                "player",
-                "team",
-                "game",
-                "hr_probability",
-                "hr_tier",
-                "hr_eligible",
-                "result",
-                "result_state",
-                "game_state",
-                "updated_at"
-            ]],
+                by=["tracker_source", "hr_probability", "player"],
+                ascending=[True, False, True]
+            )[view_cols],
             use_container_width=True,
             hide_index=True
         )
@@ -3187,11 +3229,25 @@ with tabs[4]:
     if not tracker.empty:
         st.divider()
         st.caption("Full tracker history")
+        history_cols = [
+            "date",
+            "player",
+            "team",
+            "game",
+            "hr_probability",
+            "hr_tier",
+            "tracker_source",
+            "hr_eligible",
+            "result",
+            "result_state",
+            "game_state",
+            "updated_at"
+        ]
         st.dataframe(
             tracker.sort_values(
-                by=["date", "hr_probability", "player"],
-                ascending=[False, False, True]
-            ),
+                by=["date", "tracker_source", "hr_probability", "player"],
+                ascending=[False, True, False, True]
+            )[history_cols],
             use_container_width=True,
             hide_index=True
         )
@@ -3236,28 +3292,50 @@ with tabs[4]:
             2
         ) if selected_total else 0.0
 
+        selected_core_df = selected_day_df[selected_day_df["tracker_source"].isin(["CORE_BOARD", "GAME_HR"])].copy()
+        core_total = len(selected_core_df)
+        core_hits = int(selected_core_df["result_num"].sum()) if core_total else 0
+        core_pct = round((core_hits / core_total) * 100, 2) if core_total else 0.0
+
+        selected_top12_df = selected_day_df[selected_day_df["tracker_source"] == "TOP12"].copy()
+        top12_total = len(selected_top12_df)
+        top12_hits = int(selected_top12_df["result_num"].sum()) if top12_total else 0
+        top12_pct = round((top12_hits / top12_total) * 100, 2) if top12_total else 0.0
+
         d1, d2, d3 = st.columns(3)
-        d1.metric("Selected Day Surfaced HR Picks", selected_total)
+        d1.metric("Selected Day Surfaced Picks", selected_total)
         d2.metric("Selected Day Correct HR", selected_hits)
         d3.metric("Selected Day Hit Rate %", selected_pct)
 
+        e1, e2, e3 = st.columns(3)
+        e1.metric("Selected Day Core Picks", core_total)
+        e2.metric("Selected Day Core HR", core_hits)
+        e3.metric("Selected Day Core Hit Rate %", core_pct)
+
+        f1, f2, f3 = st.columns(3)
+        f1.metric("Selected Day Top 12 Picks", top12_total)
+        f2.metric("Selected Day Top 12 HR", top12_hits)
+        f3.metric("Selected Day Top 12 Hit Rate %", top12_pct)
+
         st.caption(f"Tracked surfaced picks for {selected_date}")
+        review_cols = [
+            "player",
+            "team",
+            "game",
+            "hr_probability",
+            "hr_tier",
+            "tracker_source",
+            "hr_eligible",
+            "result",
+            "result_state",
+            "game_state",
+            "updated_at"
+        ]
         st.dataframe(
             selected_day_df.sort_values(
-                by=["hr_probability", "player"],
-                ascending=[False, True]
-            )[[
-                "player",
-                "team",
-                "game",
-                "hr_probability",
-                "hr_tier",
-                "hr_eligible",
-                "result",
-                "result_state",
-                "game_state",
-                "updated_at"
-            ]],
+                by=["tracker_source", "hr_probability", "player"],
+                ascending=[True, False, True]
+            )[review_cols],
             use_container_width=True,
             hide_index=True
         )
