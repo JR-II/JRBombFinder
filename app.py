@@ -1880,6 +1880,360 @@ def qualifies_hr_profile(
     }
 
 
+
+def compute_pitcher_target_score(
+    pitch_hr9: float,
+    pitch_barrel_allowed: float,
+    pitch_hard_hit_allowed: float,
+    park_factor: float,
+    weather_boost: float,
+) -> tuple[float, str]:
+    score = 0.0
+    bits = []
+
+    if pitch_hr9 >= 2.4:
+        score += 18.0
+        bits.append("elite HR/9 target")
+    elif pitch_hr9 >= 2.0:
+        score += 13.0
+        bits.append("very high HR/9")
+    elif pitch_hr9 >= 1.6:
+        score += 8.0
+        bits.append("high HR/9")
+    elif pitch_hr9 >= 1.25:
+        score += 4.0
+        bits.append("attackable HR/9")
+    else:
+        bits.append("normal HR/9")
+
+    if pitch_barrel_allowed >= 11:
+        score += 9.0
+        bits.append("barrel-prone arm")
+    elif pitch_barrel_allowed >= 8:
+        score += 5.0
+        bits.append("allows barrels")
+
+    if pitch_hard_hit_allowed >= 44:
+        score += 7.0
+        bits.append("hard contact allowed")
+    elif pitch_hard_hit_allowed >= 40:
+        score += 4.0
+        bits.append("contact damage allowed")
+
+    park_boost = (park_factor - 1.0) * 20
+    if park_boost >= 1.0:
+        score += park_boost
+        bits.append("HR-friendly park")
+
+    if weather_boost >= 1.5:
+        score += weather_boost * 2.0
+        bits.append("carry weather")
+
+    return round(score, 2), " | ".join(bits[:4])
+
+
+def compute_matchup_advantage_score(
+    ev: float,
+    barrel: float,
+    hard_hit: float,
+    air_pct: float,
+    xslg: float,
+    xwoba: float,
+    ground_ball: float,
+    pitch_matchup_score: float,
+    pitch_hr9: float,
+    pitch_barrel_allowed: float,
+    pitch_hard_hit_allowed: float,
+    handedness_edge: float,
+    lineup_spot,
+    recent_trend: str,
+    statcast_authority_tier: str,
+    pitch_mix_mode: str,
+    primary_pitch_usage: float,
+    park_factor: float,
+    weather_boost: float,
+) -> tuple[float, str, str]:
+    score = 0.0
+    reasons = []
+
+    if ev >= 93:
+        score += 9
+        reasons.append("elite EV")
+    elif ev >= 90:
+        score += 5
+        reasons.append("strong EV")
+
+    if barrel >= 14:
+        score += 12
+        reasons.append("elite barrel")
+    elif barrel >= 11:
+        score += 8
+        reasons.append("strong barrel")
+    elif barrel >= 9:
+        score += 4
+        reasons.append("usable barrel")
+
+    if hard_hit >= 48:
+        score += 8
+        reasons.append("elite hard-hit")
+    elif hard_hit >= 42:
+        score += 4
+        reasons.append("hard-hit edge")
+
+    if air_pct >= 62 and ground_ball <= 45:
+        score += 8
+        reasons.append("pull/air-style launch shape")
+    elif air_pct >= 55:
+        score += 5
+        reasons.append("air-ball path")
+
+    if xslg >= 0.520:
+        score += 9
+        reasons.append("elite xSLG")
+    elif xslg >= 0.470:
+        score += 5
+        reasons.append("xSLG edge")
+
+    if xwoba >= 0.365:
+        score += 4
+        reasons.append("xwOBA edge")
+
+    if pitch_matchup_score >= 7:
+        score += 9
+        reasons.append("major pitch edge")
+    elif pitch_matchup_score >= 4.5:
+        score += 6
+        reasons.append("pitch edge")
+    elif pitch_matchup_score >= 3:
+        score += 3
+        reasons.append("minor pitch edge")
+
+    if pitch_mix_mode == "HARD" and primary_pitch_usage >= 50:
+        score += 6
+        reasons.append("heavy pitch exposure")
+    elif pitch_mix_mode == "HARD" and primary_pitch_usage >= 38:
+        score += 4
+        reasons.append("clear pitch exposure")
+    elif pitch_mix_mode == "SOFT":
+        score += 2
+        reasons.append("soft pitch exposure")
+
+    if pitch_hr9 >= 2.0:
+        score += 10
+        reasons.append("target pitcher HR/9")
+    elif pitch_hr9 >= 1.6:
+        score += 7
+        reasons.append("high pitcher HR/9")
+    elif pitch_hr9 >= 1.25:
+        score += 3
+        reasons.append("attackable pitcher HR/9")
+
+    if pitch_barrel_allowed >= 10:
+        score += 6
+        reasons.append("pitcher barrel leak")
+    elif pitch_barrel_allowed >= 8:
+        score += 3
+        reasons.append("pitcher allows barrels")
+
+    if pitch_hard_hit_allowed >= 43:
+        score += 4
+        reasons.append("pitcher allows hard contact")
+
+    if handedness_edge >= 1:
+        score += 3
+        reasons.append("handedness edge")
+
+    if lineup_spot is not None:
+        try:
+            spot = int(lineup_spot)
+            if spot <= 4:
+                score += 5
+                reasons.append("premium lineup slot")
+            elif spot <= 6:
+                score += 2
+                reasons.append("playable lineup slot")
+        except Exception:
+            pass
+
+    if recent_trend == "HOT":
+        score += 5
+        reasons.append("hot form")
+    elif recent_trend == "LIVE":
+        score += 3
+        reasons.append("live form")
+    elif recent_trend == "COLD":
+        score -= 4
+        reasons.append("cold-form caution")
+
+    if statcast_authority_tier == "ELITE":
+        score += 7
+        reasons.append("elite Statcast authority")
+    elif statcast_authority_tier == "STRONG":
+        score += 4
+        reasons.append("strong Statcast authority")
+    elif statcast_authority_tier in {"WEAK", "FAIL"}:
+        score -= 6
+        reasons.append("weak authority caution")
+
+    park_boost = (park_factor - 1.0) * 20
+    if park_boost >= 1:
+        score += park_boost
+        reasons.append("park boost")
+
+    if weather_boost >= 1.5:
+        score += weather_boost * 2
+        reasons.append("weather carry")
+    elif weather_boost <= -1:
+        score += weather_boost
+        reasons.append("weather suppression")
+
+    if ground_ball >= 55:
+        score -= 12
+        reasons.append("severe GB risk")
+    elif ground_ball >= 50:
+        score -= 7
+        reasons.append("GB downgrade")
+    elif ground_ball >= 45:
+        score -= 3
+        reasons.append("borderline GB")
+
+    if score >= 55:
+        label = "HIGH"
+    elif score >= 38:
+        label = "MED"
+    else:
+        label = "LOW"
+
+    if not reasons:
+        reasons = ["no clear edge"]
+
+    return round(score, 2), label, " | ".join(reasons[:7])
+
+
+def build_ranking_reasons(row: pd.Series) -> str:
+    checks = []
+    def sf(col, default=0.0):
+        return safe_float(row.get(col, default), default)
+
+    ev = sf("EV")
+    barrel = sf("Barrel%")
+    hh = sf("HardHit%")
+    air = sf("AIR%")
+    gb = sf("GroundBall%", 999)
+    xslg = sf("xSLG")
+    pitch_score = sf("Pitch Matchup Score")
+    hr9 = sf("Pitcher_HR9_Last7")
+    pbarrel = sf("Pitcher_Barrel_Allowed")
+    auth = str(row.get("Statcast Authority Tier", ""))
+    trend = str(row.get("Recent Trend", ""))
+
+    if hr9 >= 2.0:
+        checks.append(f"major pitcher HR/9 target ({hr9})")
+    elif hr9 >= 1.6:
+        checks.append(f"high pitcher HR/9 ({hr9})")
+    elif hr9 >= 1.25:
+        checks.append(f"attackable pitcher HR/9 ({hr9})")
+
+    if barrel >= 14:
+        checks.append(f"elite barrel {barrel}%")
+    elif barrel >= 11:
+        checks.append(f"strong barrel {barrel}%")
+
+    if ev >= 93:
+        checks.append(f"elite EV {ev}")
+    elif ev >= 90:
+        checks.append(f"strong EV {ev}")
+
+    if hh >= 48:
+        checks.append(f"elite hard-hit {hh}%")
+    elif hh >= 42:
+        checks.append(f"hard-hit edge {hh}%")
+
+    if air >= 60 and gb <= 45:
+        checks.append("great air-ball/launch shape")
+    elif air >= 55:
+        checks.append(f"air-ball path {air}%")
+
+    if xslg >= 0.520:
+        checks.append(f"elite xSLG {xslg}")
+    elif xslg >= 0.470:
+        checks.append(f"xSLG edge {xslg}")
+
+    if pitch_score >= 7:
+        checks.append(f"major pitch-match edge {pitch_score}")
+    elif pitch_score >= 4.5:
+        checks.append(f"pitch-match edge {pitch_score}")
+
+    if pbarrel >= 10:
+        checks.append(f"pitcher barrel leak {pbarrel}%")
+    elif pbarrel >= 8:
+        checks.append(f"pitcher allows barrels {pbarrel}%")
+
+    if auth in ["ELITE", "STRONG"]:
+        checks.append(f"{auth.lower()} Statcast authority")
+
+    if trend in ["HOT", "LIVE"]:
+        checks.append(f"{trend.lower()} recent form")
+
+    if not checks:
+        checks.append("ranked by blended matchup score")
+
+    return " | ".join(checks[:8])
+
+
+def get_best_hr_matchups(df: pd.DataFrame, limit: int = 25) -> pd.DataFrame:
+    if df.empty:
+        return df.copy()
+
+    board = df.copy()
+    if "Matchup Advantage Score" not in board.columns:
+        board["Matchup Advantage Score"] = safe_numeric_series(board, "Model Rank Score", 0.0)
+    if "Pitcher Target Score" not in board.columns:
+        board["Pitcher Target Score"] = safe_numeric_series(board, "Pitcher_HR9_Last7", 0.0) * 10
+
+    eligible = board[board["HR Eligible"].astype(bool)].copy()
+    if eligible.empty:
+        eligible = board.copy()
+
+    eligible["_global_score"] = (
+        safe_numeric_series(eligible, "Matchup Advantage Score", 0.0) * 1.35
+        + safe_numeric_series(eligible, "Pitcher Target Score", 0.0) * 1.10
+        + safe_numeric_series(eligible, "Statcast Authority Score", 0.0) * 0.85
+        + safe_numeric_series(eligible, "Model Rank Score", 0.0) * 0.05
+        + safe_numeric_series(eligible, "HR Probability %", 0.0) * 1.4
+    )
+    eligible = eligible.sort_values("_global_score", ascending=False).drop(columns=["_global_score"]).head(limit)
+    return add_rank_column(eligible.reset_index(drop=True))
+
+
+def get_pitchers_to_target(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return pd.DataFrame()
+
+    cols = ["Game", "Pitcher", "Pitcher_HR9_Last7", "Pitcher_Barrel_Allowed", "Pitcher_HardHit_Allowed", "TempF", "WindMPH", "WeatherNote"]
+    work = df.copy()
+    for col in cols:
+        if col not in work.columns:
+            work[col] = pd.NA
+
+    work["_target_score"] = (
+        safe_numeric_series(work, "Pitcher_HR9_Last7", 0.0) * 12
+        + safe_numeric_series(work, "Pitcher_Barrel_Allowed", 0.0) * 1.8
+        + safe_numeric_series(work, "Pitcher_HardHit_Allowed", 0.0) * 0.8
+        + safe_numeric_series(work, "WeatherBoost", 0.0) * 4
+    )
+
+    out = (
+        work.sort_values("_target_score", ascending=False)
+        .drop_duplicates(subset=["Game", "Pitcher"])
+        .head(15)
+        .rename(columns={"_target_score": "Pitcher Target Score"})
+    )
+    out["Pitcher Target Score"] = out["Pitcher Target Score"].round(2)
+    return out[["Game", "Pitcher", "Pitcher Target Score", "Pitcher_HR9_Last7", "Pitcher_Barrel_Allowed", "Pitcher_HardHit_Allowed", "WeatherNote", "TempF", "WindMPH"]].reset_index(drop=True)
+
+
+
 def build_hitter_metrics(
     player_id: int,
     player_name: str,
@@ -2039,6 +2393,37 @@ def build_hitter_metrics(
         lineup_spot,
         recent_trend,
     )
+
+    pitcher_target_score, pitcher_target_label = compute_pitcher_target_score(
+        pitch_hr9,
+        pitch_barrel_allowed,
+        pitch_hard_hit_allowed,
+        park_factor,
+        weather_boost,
+    )
+
+    matchup_advantage_score, matchup_advantage_tier, matchup_advantage_reasons = compute_matchup_advantage_score(
+        ev=ev,
+        barrel=barrel,
+        hard_hit=hard_hit,
+        air_pct=air_pct,
+        xslg=xslg,
+        xwoba=xwoba,
+        ground_ball=ground_ball,
+        pitch_matchup_score=pitch_matchup_score,
+        pitch_hr9=pitch_hr9,
+        pitch_barrel_allowed=pitch_barrel_allowed,
+        pitch_hard_hit_allowed=pitch_hard_hit_allowed,
+        handedness_edge=handedness_edge,
+        lineup_spot=lineup_spot,
+        recent_trend=recent_trend,
+        statcast_authority_tier=statcast_authority_tier,
+        pitch_mix_mode=pitch_mix_mode,
+        primary_pitch_usage=primary_pitch_usage,
+        park_factor=park_factor,
+        weather_boost=weather_boost,
+    )
+
     elite_hr_flag = elite_hr_look(pd.Series({
         "Barrel%": barrel,
         "HardHit%": hard_hit,
@@ -2165,7 +2550,9 @@ def build_hitter_metrics(
         pullside_boost +
         park_boost +
         weather_score_boost +
-        bullpen_fatigue_boost
+        bullpen_fatigue_boost +
+        (pitcher_target_score * 0.35) +
+        (matchup_advantage_score * 0.28)
     )
 
     if statcast_authority_tier == "ELITE":
@@ -2365,7 +2752,9 @@ def build_hitter_metrics(
         (weather_boost * 4.0) +
         (bullpen_fatigue_score * 4.8) +
         (statcast_authority_score * 1.55) +
-        (multi_pitch_authority_score * 3.0)
+        (multi_pitch_authority_score * 3.0) +
+        (pitcher_target_score * 1.15) +
+        (matchup_advantage_score * 1.05)
     )
 
     if pitch_isolation_valid == "Yes":
@@ -2462,6 +2851,11 @@ def build_hitter_metrics(
         "BullpenArmsPrev": int(bullpen_arms_prev),
         "Statcast Authority Score": round(statcast_authority_score, 2),
         "Statcast Authority Tier": statcast_authority_tier,
+        "Pitcher Target Score": round(pitcher_target_score, 2),
+        "Pitcher Target Label": pitcher_target_label,
+        "Matchup Advantage Score": round(matchup_advantage_score, 2),
+        "Matchup Advantage": matchup_advantage_tier,
+        "Ranking Reasons": matchup_advantage_reasons,
         "Why": " | ".join(reasons[:6]),
     }
 
@@ -2508,9 +2902,13 @@ def sort_for_hr(df: pd.DataFrame) -> pd.DataFrame:
     sortable["_hrr_sort"] = safe_numeric_series(sortable, "HRR Score", 0.0)
     sortable["_multi_pitch_sort"] = safe_numeric_series(sortable, "Multi Pitch Authority Score", 0.0)
     sortable["_elite_hr_sort"] = sortable.get("Elite HR Look", pd.Series(["No"] * len(sortable), index=sortable.index)).map({"Yes": 1, "No": 0}).fillna(0)
+    sortable["_pitcher_target_sort"] = safe_numeric_series(sortable, "Pitcher Target Score", 0.0)
+    sortable["_matchup_adv_sort"] = safe_numeric_series(sortable, "Matchup Advantage Score", 0.0)
 
     sortable = sortable.sort_values(
         by=[
+            "_matchup_adv_sort",
+            "_pitcher_target_sort",
             "_elite_hr_sort",
             "_authority_tier_sort",
             "_authority_sort",
@@ -2536,7 +2934,7 @@ def sort_for_hr(df: pd.DataFrame) -> pd.DataFrame:
             "_trend_sort",
             "_hrr_sort",
         ],
-        ascending=[False, False, False, False, False, False, False, False, False, False, False, False, False, False, True, False, False, True, False, False, False, False, False, False],
+        ascending=[False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, True, False, False, True, False, False, False, False, False, False],
     ).reset_index(drop=True)
     return sortable.drop(columns=[
         "_lineup_sort",
@@ -2563,6 +2961,8 @@ def sort_for_hr(df: pd.DataFrame) -> pd.DataFrame:
         "_hrr_sort",
         "_multi_pitch_sort",
         "_elite_hr_sort",
+        "_pitcher_target_sort",
+        "_matchup_adv_sort",
     ])
 
 
@@ -3287,7 +3687,7 @@ if locked_df.empty:
     st.warning("No games or hitter data loaded.")
     st.stop()
 
-base_tabs = ["HR Probability", "Top 12", "HR Combos", "Hits + Runs + RBIs", "Engine Breakdown", "Accuracy Tracker"]
+base_tabs = ["HR Probability", "Top 12", "Top HR Targets", "Pitchers to Target", "HR Combos", "Hits + Runs + RBIs", "Batter Breakdown", "Accuracy Tracker"]
 schedule = sort_schedule_rows(schedule)
 game_tabs = [f"{format_game_time_et(g.get('game_time', ''))} | {g['game_key']}" for g in schedule]
 tabs = st.tabs(base_tabs + game_tabs)
@@ -3300,7 +3700,7 @@ with tabs[0]:
         hr_df[[
             "Rank", "Player", "Team", "Game", "Pitcher", "Lineup Spot",
             "Lineup Source", "HR Probability %", "HR Tier", "GroundBall%",
-            "GB Rule", "GB Note", "WeatherNote", "BullpenFatigueNote", "HardHit%", "FlyBall%", "AIR%", "xSLG", "xwOBA", "Barrel%", "Why"
+            "GB Rule", "GB Note", "Matchup Advantage", "Pitcher Target Score", "WeatherNote", "BullpenFatigueNote", "HardHit%", "FlyBall%", "AIR%", "xSLG", "xwOBA", "Barrel%", "Ranking Reasons", "Why"
         ]],
         use_container_width=True,
         hide_index=True
@@ -3314,13 +3714,46 @@ with tabs[1]:
         top12[[
             "Rank", "Player", "Team", "Game", "Pitcher", "Lineup Spot",
             "Lineup Source", "HR Probability %", "HR Tier", "GroundBall%",
-            "GB Rule", "GB Note", "WeatherNote", "BullpenFatigueNote", "HardHit%", "FlyBall%", "AIR%", "xSLG", "xwOBA", "Barrel%", "Why"
+            "GB Rule", "GB Note", "Matchup Advantage", "Pitcher Target Score", "WeatherNote", "BullpenFatigueNote", "HardHit%", "FlyBall%", "AIR%", "xSLG", "xwOBA", "Barrel%", "Ranking Reasons", "Why"
         ]],
         use_container_width=True,
         hide_index=True
     )
 
 with tabs[2]:
+    st.subheader("Top HR Targets — Slate-Wide Top 25")
+    st.caption("Global slate ranking based on hitter authority, ISO/EV-style power, pitch exposure, pitcher HR/9 vulnerability, weather, park, and matchup advantage.")
+    top_targets = get_best_hr_matchups(locked_df, 25)
+    if top_targets.empty:
+        st.caption("No global HR targets surfaced yet.")
+    else:
+        target_cols = [
+            "Rank", "Player", "Team", "Game", "Pitcher", "Lineup Spot", "Lineup Source",
+            "Matchup Advantage", "Matchup Advantage Score", "Pitcher Target Score", "Pitcher_HR9_Last7",
+            "EV", "Barrel%", "HardHit%", "AIR%", "xSLG", "xwOBA",
+            "Pitch Mix Mode", "Relevant Pitch Mix", "Primary Pitch Usage",
+            "HR Probability %", "HR Tier", "Ranking Reasons"
+        ]
+        st.dataframe(
+            top_targets[[c for c in target_cols if c in top_targets.columns]],
+            use_container_width=True,
+            hide_index=True
+        )
+
+with tabs[3]:
+    st.subheader("Pitchers to Target Today")
+    st.caption("Attackability board emphasizing HR/9, barrel allowed, hard contact allowed, park/weather carry, and matchup vulnerability.")
+    pitcher_targets = get_pitchers_to_target(locked_df)
+    if pitcher_targets.empty:
+        st.caption("No pitcher target data available yet.")
+    else:
+        st.dataframe(
+            pitcher_targets,
+            use_container_width=True,
+            hide_index=True
+        )
+
+with tabs[4]:
     st.subheader("HR Combos")
     st.caption("Randomized but high-likelihood HR ladders built from the best current board without cloning the same pairings.")
 
@@ -3352,7 +3785,7 @@ with tabs[2]:
             hide_index=True
         )
 
-with tabs[3]:
+with tabs[5]:
     st.subheader("Hits + Runs + RBIs Board")
     st.caption("Confirmed teams freeze once lineups lock. Projected teams can still update.")
     hrr = locked_df.copy().sort_values(
@@ -3369,8 +3802,8 @@ with tabs[3]:
         hide_index=True
     )
 
-with tabs[4]:
-    st.subheader("Engine Breakdown")
+with tabs[6]:
+    st.subheader("Batter Breakdown")
     st.caption("Projected teams stay live until confirmed. Heavy GB bats are downgraded, not blindly erased unless the profile is truly bad.")
     breakdown = sort_for_hr(locked_df.copy())
     st.dataframe(
@@ -3379,6 +3812,7 @@ with tabs[4]:
             "EV", "HardHit%", "FlyBall%", "AIR%", "LaunchAngle", "Recent Trend", "LineDrive%", "GroundBall%", "Barrel%",
             "xSLG", "xwOBA",
             "Pitcher_HR9_Last7", "Pitcher_Barrel_Allowed", "Pitcher_HardHit_Allowed",
+            "Pitcher Target Score", "Pitcher Target Label", "Matchup Advantage Score", "Matchup Advantage", "Ranking Reasons",
             "Statcast Pass", "Strict Statcast", "Recent Form Pass", "Pitcher Attackable",
             "Pitch_Isolation_Valid", "GB Rule", "GB Note", "WeatherNote", "BullpenFatigueNote", "BullpenFatigueScore", "TempF", "WindMPH", "HR Eligible",
             "HR Probability %", "HRR Score", "Why"
@@ -3387,7 +3821,7 @@ with tabs[4]:
         hide_index=True
     )
 
-with tabs[5]:
+with tabs[7]:
     st.subheader("Accuracy Tracker")
     st.caption("Tracker is broken into separate sections so you can judge Core Board, Top 12, Per-Game HR, and Combos independently.")
 
@@ -3515,7 +3949,7 @@ with tabs[5]:
             hide_index=True
         )
 
-for idx, game in enumerate(schedule, start=6):
+for idx, game in enumerate(schedule, start=8):
     with tabs[idx]:
         st.subheader(f"{game['game_key']} — {format_game_time_et(game.get('game_time', ''))}")
         st.caption(
