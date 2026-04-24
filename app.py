@@ -1881,6 +1881,26 @@ def qualifies_hr_profile(
 
 
 
+def dedupe_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Streamlit/Arrow crashes if a dataframe has duplicate column names."""
+    if df is None or df.empty:
+        return df
+    return df.loc[:, ~df.columns.duplicated()].copy()
+
+
+def display_existing_columns(df: pd.DataFrame, columns: list[str], **kwargs):
+    """Safely display only columns that exist, with duplicate column protection."""
+    if df is None or df.empty:
+        st.caption("No rows to display.")
+        return
+    safe_df = dedupe_columns(df)
+    cols = [c for c in columns if c in safe_df.columns]
+    if not cols:
+        st.dataframe(safe_df, use_container_width=True, hide_index=True)
+    else:
+        st.dataframe(safe_df[cols], use_container_width=True, hide_index=True)
+
+
 def compute_pitcher_target_score(
     pitch_hr9: float,
     pitch_barrel_allowed: float,
@@ -1908,7 +1928,7 @@ def compute_pitcher_target_score(
 
     if pitch_barrel_allowed >= 11:
         score += 9.0
-        bits.append("barrel-prone arm")
+        bits.append("barrel-prone pitcher")
     elif pitch_barrel_allowed >= 8:
         score += 5.0
         bits.append("allows barrels")
@@ -1982,7 +2002,7 @@ def compute_matchup_advantage_score(
 
     if air_pct >= 62 and ground_ball <= 45:
         score += 8
-        reasons.append("pull/air-style launch shape")
+        reasons.append("great air-ball shape")
     elif air_pct >= 55:
         score += 5
         reasons.append("air-ball path")
@@ -2043,8 +2063,8 @@ def compute_matchup_advantage_score(
         score += 3
         reasons.append("handedness edge")
 
-    if lineup_spot is not None:
-        try:
+    try:
+        if lineup_spot is not None and str(lineup_spot) != "—":
             spot = int(lineup_spot)
             if spot <= 4:
                 score += 5
@@ -2052,8 +2072,8 @@ def compute_matchup_advantage_score(
             elif spot <= 6:
                 score += 2
                 reasons.append("playable lineup slot")
-        except Exception:
-            pass
+    except Exception:
+        pass
 
     if recent_trend == "HOT":
         score += 5
@@ -2105,80 +2125,9 @@ def compute_matchup_advantage_score(
         label = "LOW"
 
     if not reasons:
-        reasons = ["no clear edge"]
+        reasons = ["ranked by blended matchup score"]
 
     return round(score, 2), label, " | ".join(reasons[:7])
-
-
-def build_ranking_reasons(row: pd.Series) -> str:
-    checks = []
-    def sf(col, default=0.0):
-        return safe_float(row.get(col, default), default)
-
-    ev = sf("EV")
-    barrel = sf("Barrel%")
-    hh = sf("HardHit%")
-    air = sf("AIR%")
-    gb = sf("GroundBall%", 999)
-    xslg = sf("xSLG")
-    pitch_score = sf("Pitch Matchup Score")
-    hr9 = sf("Pitcher_HR9_Last7")
-    pbarrel = sf("Pitcher_Barrel_Allowed")
-    auth = str(row.get("Statcast Authority Tier", ""))
-    trend = str(row.get("Recent Trend", ""))
-
-    if hr9 >= 2.0:
-        checks.append(f"major pitcher HR/9 target ({hr9})")
-    elif hr9 >= 1.6:
-        checks.append(f"high pitcher HR/9 ({hr9})")
-    elif hr9 >= 1.25:
-        checks.append(f"attackable pitcher HR/9 ({hr9})")
-
-    if barrel >= 14:
-        checks.append(f"elite barrel {barrel}%")
-    elif barrel >= 11:
-        checks.append(f"strong barrel {barrel}%")
-
-    if ev >= 93:
-        checks.append(f"elite EV {ev}")
-    elif ev >= 90:
-        checks.append(f"strong EV {ev}")
-
-    if hh >= 48:
-        checks.append(f"elite hard-hit {hh}%")
-    elif hh >= 42:
-        checks.append(f"hard-hit edge {hh}%")
-
-    if air >= 60 and gb <= 45:
-        checks.append("great air-ball/launch shape")
-    elif air >= 55:
-        checks.append(f"air-ball path {air}%")
-
-    if xslg >= 0.520:
-        checks.append(f"elite xSLG {xslg}")
-    elif xslg >= 0.470:
-        checks.append(f"xSLG edge {xslg}")
-
-    if pitch_score >= 7:
-        checks.append(f"major pitch-match edge {pitch_score}")
-    elif pitch_score >= 4.5:
-        checks.append(f"pitch-match edge {pitch_score}")
-
-    if pbarrel >= 10:
-        checks.append(f"pitcher barrel leak {pbarrel}%")
-    elif pbarrel >= 8:
-        checks.append(f"pitcher allows barrels {pbarrel}%")
-
-    if auth in ["ELITE", "STRONG"]:
-        checks.append(f"{auth.lower()} Statcast authority")
-
-    if trend in ["HOT", "LIVE"]:
-        checks.append(f"{trend.lower()} recent form")
-
-    if not checks:
-        checks.append("ranked by blended matchup score")
-
-    return " | ".join(checks[:8])
 
 
 def get_best_hr_matchups(df: pd.DataFrame, limit: int = 25) -> pd.DataFrame:
@@ -2202,8 +2151,9 @@ def get_best_hr_matchups(df: pd.DataFrame, limit: int = 25) -> pd.DataFrame:
         + safe_numeric_series(eligible, "Model Rank Score", 0.0) * 0.05
         + safe_numeric_series(eligible, "HR Probability %", 0.0) * 1.4
     )
+
     eligible = eligible.sort_values("_global_score", ascending=False).drop(columns=["_global_score"]).head(limit)
-    return add_rank_column(eligible.reset_index(drop=True))
+    return add_rank_column(dedupe_columns(eligible.reset_index(drop=True)))
 
 
 def get_pitchers_to_target(df: pd.DataFrame) -> pd.DataFrame:
@@ -2211,7 +2161,6 @@ def get_pitchers_to_target(df: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame()
 
     work = df.copy()
-
     for col in [
         "Game", "Pitcher", "Pitcher_HR9_Last7", "Pitcher_Barrel_Allowed",
         "Pitcher_HardHit_Allowed", "TempF", "WindMPH", "WeatherNote", "WeatherBoost"
@@ -2219,7 +2168,6 @@ def get_pitchers_to_target(df: pd.DataFrame) -> pd.DataFrame:
         if col not in work.columns:
             work[col] = pd.NA
 
-    # Never create a duplicate column name. Use an internal temp column, then assign cleanly once.
     work["_bf_pitcher_target_score"] = (
         safe_numeric_series(work, "Pitcher_HR9_Last7", 0.0) * 12
         + safe_numeric_series(work, "Pitcher_Barrel_Allowed", 0.0) * 1.8
@@ -2233,20 +2181,1421 @@ def get_pitchers_to_target(df: pd.DataFrame) -> pd.DataFrame:
         .head(15)
         .copy()
     )
-
-    out["Pitcher Target Score"] = pd.to_numeric(
-        out["_bf_pitcher_target_score"], errors="coerce"
-    ).fillna(0.0).round(2)
+    out["Pitcher Target Score"] = pd.to_numeric(out["_bf_pitcher_target_score"], errors="coerce").fillna(0.0).round(2)
 
     final_cols = [
         "Game", "Pitcher", "Pitcher Target Score", "Pitcher_HR9_Last7",
         "Pitcher_Barrel_Allowed", "Pitcher_HardHit_Allowed",
         "WeatherNote", "TempF", "WindMPH"
     ]
-
     out = out[[c for c in final_cols if c in out.columns]].copy()
-    out = out.loc[:, ~out.columns.duplicated()].reset_index(drop=True)
-    return out
+    return dedupe_columns(out.reset_index(drop=True))
+
+
+
+def build_hitter_metrics(
+    player_id: int,
+    player_name: str,
+    team: str,
+    opp_pitcher: str,
+    park_factor: float,
+    opp_pitcher_id,
+    lineup_spot,
+    lineup_source,
+    hitter_stats_map,
+    pitcher_stats_map,
+    savant_batter_map,
+    weather_boost: float = 0.0,
+    weather_note: str = "neutral weather",
+    temp_f: float = 72.0,
+    wind_mph: float = 7.0,
+    bullpen_fatigue_score: float = 0.0,
+    bullpen_fatigue_note: str = "Neutral bullpen rest",
+    bullpen_ip_prev: float = 0.0,
+    bullpen_arms_prev: int = 0,
+):
+    live_hitter = compute_hitter_live_metrics_from_map(player_id, hitter_stats_map)
+    live_pitcher = compute_pitcher_live_metrics_from_map(
+        opp_pitcher_id,
+        opp_pitcher,
+        pitcher_stats_map,
+    )
+
+    if live_hitter is None:
+        return None
+
+    sav = savant_batter_map.get(normalize_name(player_name), {})
+
+    ev = safe_float(sav.get("Savant_EV"), live_hitter["EV"])
+    hard_hit = safe_float(sav.get("Savant_HardHit%"), live_hitter["HardHit%"])
+    fly_ball = safe_float(sav.get("Savant_FB%"), live_hitter["FlyBall%"])
+    line_drive = safe_float(sav.get("Savant_LD%"), live_hitter["LineDrive%"])
+    ground_ball = safe_float(sav.get("Savant_GB%"), live_hitter["GroundBall%"])
+    barrel = safe_float(sav.get("Savant_Barrel%"), live_hitter["Barrel%"])
+    air_pct = safe_float(sav.get("Savant_AIR%"), max(0.0, 100 - ground_ball))
+    launch_angle = safe_float(sav.get("Savant_LA"), 14.0)
+    xslg = safe_float(sav.get("Savant_xSLG"), 0.0)
+    xwoba = safe_float(sav.get("Savant_xwOBA"), 0.0)
+    xiso = safe_float(sav.get("Savant_xISO"), live_hitter["recent_iso"])
+
+    recent_hr = live_hitter["recent_hr"]
+    recent_xbh = live_hitter["recent_xbh"]
+    recent_iso = live_hitter["recent_iso"]
+    recent_avg = live_hitter["recent_avg"]
+    recent_rbi = live_hitter["recent_rbi"]
+    recent_runs = live_hitter["recent_runs"]
+    recent_pa = live_hitter["recent_pa"]
+
+    recent_damage_score = (
+        (recent_hr * 9.0) +
+        (recent_xbh * 3.0) +
+        (recent_iso * 65.0) +
+        (recent_avg * 18.0)
+    )
+
+    if recent_hr >= 2 or recent_xbh >= 5 or recent_iso >= 0.260:
+        recent_trend = "HOT"
+    elif recent_hr >= 1 or recent_xbh >= 3 or recent_iso >= 0.180:
+        recent_trend = "LIVE"
+    elif recent_iso >= 0.120 or recent_avg >= 0.260:
+        recent_trend = "NEUTRAL"
+    else:
+        recent_trend = "COLD"
+
+    display_spot = display_lineup_spot(lineup_spot)
+    bats = estimate_handedness_from_name(player_name, "batter")
+    pitcher_throws = estimate_handedness_from_name(opp_pitcher, "pitcher")
+
+    if live_pitcher is None:
+        pitch_hr9 = stable_float(f"{opp_pitcher}-hr9", 0.7, 1.9)
+        pitch_barrel_allowed = stable_float(f"{opp_pitcher}-barrel-allowed", 4, 13)
+        pitch_hard_hit_allowed = stable_float(f"{opp_pitcher}-hh-allowed", 30, 48)
+    else:
+        pitch_hr9 = live_pitcher["Pitcher_HR9_Last7"]
+        pitch_barrel_allowed = live_pitcher["Pitcher_Barrel_Allowed"]
+        pitch_hard_hit_allowed = live_pitcher["Pitcher_HardHit_Allowed"]
+
+    pullside_boost = stable_float(f"{player_id}-pull", -1, 3)
+    park_boost = (park_factor - 1.0) * 20
+    weather_score_boost = weather_boost * 1.6
+    bullpen_fatigue_boost = bullpen_fatigue_score * 1.8
+
+    pitch_mix_example = build_pitch_mix_profile(
+        opp_pitcher,
+        opp_pitcher_id,
+        pitch_hr9,
+        pitch_barrel_allowed,
+        pitch_hard_hit_allowed,
+        pitcher_throws,
+    )
+    pitch_context = compute_relevant_pitch_matchup(
+        pitch_mix_example,
+        bats,
+        pitcher_throws,
+        barrel,
+        hard_hit,
+        air_pct,
+        launch_angle,
+        xslg,
+        xwoba,
+        ground_ball,
+    )
+    pitch_mix_mode = pitch_context["mode"]
+    relevant_pitch_mix = pitch_context["label"]
+    primary_pitch = pitch_context["primary_pitch"]
+    primary_pitch_usage = pitch_context["usage"]
+    pitch_gap = pitch_context["gap"]
+    pitch_matchup_score = pitch_context["score"]
+    pitch_matchup_label = pitch_context["reason"]
+    handedness_edge = pitch_context["handedness_edge"]
+
+    pitch_isolation_bonus = -2.5
+    pitch_isolation_valid = "No"
+
+    elite_statcast_profile = (
+        (
+            barrel >= 10
+            and hard_hit >= 45
+            and air_pct >= 55
+            and ground_ball <= 50
+        )
+        or (
+            barrel >= 11
+            and xslg >= 0.500
+            and xwoba >= 0.340
+            and 10 <= launch_angle <= 24
+        )
+    )
+
+    weak_pitch_shape = (
+        barrel < 9 and hard_hit < 39 and xslg < 0.430 and air_pct < 52
+    )
+
+    statcast_authority_score, statcast_authority_multiplier, statcast_authority_tier = compute_statcast_authority(
+        ev,
+        barrel,
+        hard_hit,
+        air_pct,
+        launch_angle,
+        xslg,
+        ground_ball,
+    )
+
+    multi_pitch_authority_score = compute_multi_pitch_authority_score(
+        pitch_mix_mode,
+        pitch_matchup_score,
+        barrel,
+        hard_hit,
+        air_pct,
+        xslg,
+        ev,
+        lineup_spot,
+        recent_trend,
+    )
+
+    pitcher_target_score, pitcher_target_label = compute_pitcher_target_score(
+        pitch_hr9,
+        pitch_barrel_allowed,
+        pitch_hard_hit_allowed,
+        park_factor,
+        weather_boost,
+    )
+
+    matchup_advantage_score, matchup_advantage_tier, ranking_reasons = compute_matchup_advantage_score(
+        ev=ev,
+        barrel=barrel,
+        hard_hit=hard_hit,
+        air_pct=air_pct,
+        xslg=xslg,
+        xwoba=xwoba,
+        ground_ball=ground_ball,
+        pitch_matchup_score=pitch_matchup_score,
+        pitch_hr9=pitch_hr9,
+        pitch_barrel_allowed=pitch_barrel_allowed,
+        pitch_hard_hit_allowed=pitch_hard_hit_allowed,
+        handedness_edge=handedness_edge,
+        lineup_spot=lineup_spot,
+        recent_trend=recent_trend,
+        statcast_authority_tier=statcast_authority_tier,
+        pitch_mix_mode=pitch_mix_mode,
+        primary_pitch_usage=primary_pitch_usage,
+        park_factor=park_factor,
+        weather_boost=weather_boost,
+    )
+
+    elite_hr_flag = elite_hr_look(pd.Series({
+        "Barrel%": barrel,
+        "HardHit%": hard_hit,
+        "AIR%": air_pct,
+        "xSLG": xslg,
+        "EV": ev,
+        "GroundBall%": ground_ball,
+    }))
+
+    if pitch_mix_mode == "HARD" and primary_pitch is not None:
+        pitch_isolation_valid = "Yes"
+        pitch_isolation_bonus = pitch_matchup_score
+    elif pitch_mix_mode == "SOFT":
+        if weak_pitch_shape and not elite_statcast_profile:
+            pitch_isolation_valid = "Soft No Edge"
+            pitch_isolation_bonus = min(pitch_matchup_score - 2.0, -0.75)
+        else:
+            pitch_isolation_valid = "Soft Isolate"
+            pitch_isolation_bonus = pitch_matchup_score * 0.96
+    elif pitch_mix_mode == "BALANCED":
+        if weak_pitch_shape and not elite_statcast_profile and not (barrel >= 10 or hard_hit >= 42 or xslg >= 0.470):
+            pitch_isolation_valid = "Balanced No Edge"
+            pitch_isolation_bonus = min(pitch_matchup_score - 2.0, -1.0)
+        else:
+            pitch_isolation_valid = "Balanced Mix"
+            pitch_isolation_bonus = pitch_matchup_score * 0.92
+    elif elite_statcast_profile:
+        pitch_isolation_valid = "Elite Statcast Override"
+        pitch_isolation_bonus = 2.25
+
+    if pitch_isolation_valid != "No":
+        if pitch_isolation_valid == "Elite Statcast Override":
+            pitch_isolation_bonus = pitch_isolation_bonus * max(statcast_authority_multiplier, 0.75)
+        else:
+            pitch_isolation_bonus = pitch_isolation_bonus * statcast_authority_multiplier
+
+    if statcast_authority_tier == "FAIL" and pitch_mix_mode != "HARD" and not elite_statcast_profile:
+        pitch_isolation_bonus = min(pitch_isolation_bonus, -3.5)
+    elif statcast_authority_tier == "WEAK" and pitch_mix_mode == "BALANCED" and not elite_statcast_profile:
+        pitch_isolation_bonus = min(pitch_isolation_bonus, -2.0)
+
+    gb_status = "PASS"
+    if ground_ball >= 55:
+        gb_status = "AUTO NO"
+    elif ground_ball >= 50:
+        gb_status = "HEAVY DOWNGRADE"
+    elif ground_ball >= 45:
+        gb_status = "CAUTION"
+
+    qual = qualifies_hr_profile(
+        barrel=barrel,
+        hard_hit=hard_hit,
+        air_pct=air_pct,
+        xslg=xslg,
+        xwoba=xwoba,
+        ground_ball=ground_ball,
+        recent_hr=recent_hr,
+        recent_xbh=recent_xbh,
+        recent_iso=recent_iso,
+        recent_pa=recent_pa,
+        pitch_hr9=pitch_hr9,
+        pitch_barrel_allowed=pitch_barrel_allowed,
+        pitch_hard_hit_allowed=pitch_hard_hit_allowed,
+        lineup_source=lineup_source,
+    )
+
+    hr_eligible = qual["hr_eligible"]
+    statcast_pass = qual["statcast_pass"]
+    recent_form_pass = qual["recent_form_pass"]
+    pitcher_attackable = qual["pitcher_attackable"]
+    elite_override = qual["elite_override"]
+    awful_hr_shape = qual["awful_hr_shape"]
+    weak_recent_profile = qual["weak_recent_profile"]
+
+    confirmed_keep_override = bool(
+        lineup_source == "CONFIRMED"
+        and lineup_spot is not None
+        and lineup_spot <= 4
+        and pitch_mix_mode == "HARD"
+        and pitch_matchup_score >= 5.0
+    )
+
+    confirmed_authority_fail = bool(
+        lineup_source == "CONFIRMED"
+        and statcast_authority_tier in {"FAIL", "WEAK"}
+        and ev < 90.0
+        and barrel < 12.0
+        and hard_hit < 40.0
+        and xslg < 0.450
+        and not elite_override
+    )
+
+    confirmed_blend_fail = bool(
+        lineup_source == "CONFIRMED"
+        and pitch_mix_mode != "HARD"
+        and ev < 90.0
+        and barrel < 11.0
+        and hard_hit < 41.0
+        and xslg < 0.455
+        and air_pct < 55.0
+        and not elite_override
+    )
+
+    if (confirmed_authority_fail or confirmed_blend_fail) and not confirmed_keep_override:
+        hr_eligible = False
+
+    base_score = (
+        (barrel - 4) * 4.2 +
+        (hard_hit - 28) * 2.5 +
+        (air_pct - 45) * 1.2 +
+        (ev - 87) * 1.1 +
+        (xslg * 100) * 1.2 +
+        (xiso * 100) * 0.7 +
+        (xwoba * 100) * 0.45 +
+        pitch_isolation_bonus +
+        handedness_edge +
+        (pitch_hr9 - 0.7) * 10.0 +
+        (pitch_barrel_allowed - 4) * 0.9 +
+        (pitch_hard_hit_allowed - 30) * 0.4 +
+        (recent_hr * 3.2) +
+        (recent_xbh * 1.5) +
+        (recent_iso * 24.0) +
+        (recent_damage_score * 0.22) +
+        pullside_boost +
+        park_boost +
+        weather_score_boost +
+        bullpen_fatigue_boost +
+        (pitcher_target_score * 0.35) +
+        (matchup_advantage_score * 0.28)
+    )
+
+    if statcast_authority_tier == "ELITE":
+        base_score += 4.5
+    elif statcast_authority_tier == "STRONG":
+        base_score += 2.0
+    elif statcast_authority_tier == "MEDIUM":
+        base_score -= 0.5
+    elif statcast_authority_tier == "WEAK":
+        base_score -= 4.0
+    else:
+        base_score -= 8.0
+
+    if lineup_spot is not None:
+        if lineup_spot <= 4:
+            base_score += 3.5
+        elif lineup_spot <= 6:
+            base_score += 1.5
+        else:
+            base_score -= 1.0
+
+    if ground_ball < 40:
+        base_score += 4.0
+    elif 45 <= ground_ball < 50:
+        base_score -= 7.0
+    elif 50 <= ground_ball < 55:
+        base_score -= 14.0
+    elif ground_ball >= 55:
+        base_score -= 25.0
+
+    if air_pct >= 65:
+        base_score += 5.0
+    elif air_pct >= 55:
+        base_score += 2.0
+    elif air_pct < 45:
+        base_score -= 7.0
+
+    if 12 <= launch_angle <= 22:
+        base_score += 3.0
+    elif 8 <= launch_angle < 12 or 22 < launch_angle <= 28:
+        base_score += 1.0
+    else:
+        base_score -= 2.0
+
+    if barrel >= 14:
+        base_score += 6.0
+    elif barrel < 8:
+        base_score -= 7.0
+
+    if hard_hit >= 45:
+        base_score += 5.0
+    elif hard_hit < 35:
+        base_score -= 7.0
+
+    if pitch_mix_mode == "HARD" and primary_pitch_usage >= 50:
+        base_score += 2.8
+    elif pitch_mix_mode == "HARD" and pitch_gap > 20:
+        base_score += 1.8
+    elif pitch_mix_mode == "SOFT":
+        base_score += 0.9
+
+    if not pitcher_attackable:
+        base_score -= 4.0
+    if weak_recent_profile:
+        base_score -= 10.0
+    if awful_hr_shape:
+        base_score -= 14.0
+    if recent_trend == "HOT":
+        base_score += 4.0
+    elif recent_trend == "LIVE":
+        base_score += 2.0
+    elif recent_trend == "COLD":
+        base_score -= 4.0
+    if lineup_source == "PROJECTED" and lineup_spot is None:
+        if (
+            statcast_authority_tier in {"ELITE", "STRONG"}
+            or barrel >= 10.0
+            or xslg >= 0.470
+            or hard_hit >= 42.0
+            or recent_trend in {"HOT", "LIVE"}
+            or pitch_mix_mode in {"HARD", "SOFT"}
+            or pitch_matchup_score >= 4.5
+        ):
+            base_score -= 1.25
+        else:
+            base_score -= 4.0
+    if elite_override and ground_ball < 55:
+        base_score += 2.5
+
+    if not hr_eligible and elite_hr_flag and lineup_source == "PROJECTED":
+        hr_prob = max(7.5, min(18.0, base_score / 7.0))
+    elif not hr_eligible:
+        hr_prob = 0.0
+    else:
+        hr_prob = max(3.0, min(28.0, (base_score + multi_pitch_authority_score * 2.2) / 6.6))
+
+    if elite_hr_flag and hr_prob < 10.5:
+        hr_prob = 10.5
+
+    hrr_score = (
+        (ev - 87) * 1.1 +
+        (hard_hit - 28) * 1.0 +
+        (line_drive - 14) * 0.9 +
+        (pitch_hard_hit_allowed - 30) * 0.4 +
+        park_boost +
+        (recent_runs * 0.7) +
+        (recent_rbi * 0.7) +
+        (recent_avg * 15) +
+        (weather_boost * 0.8) +
+        (bullpen_fatigue_score * 0.7)
+    )
+    if lineup_spot is not None:
+        hrr_score += max(0, 10 - lineup_spot) * 1.5
+
+    gb_note = get_gb_explanation(ground_ball, barrel, air_pct, xslg)
+
+    reasons = []
+    reasons.append(f"{lineup_source} lineup pool")
+    reasons.append("Statcast damage pass" if statcast_pass else "Failed Statcast damage")
+    reasons.append("Pitcher attackable" if pitcher_attackable else "Pitcher less attackable")
+    reasons.append("Recent damage form" if recent_form_pass else "Weak recent form")
+
+    if pitch_isolation_valid == "Yes" and elite_statcast_profile:
+        reasons.append("Elite + isolation combo")
+    elif pitch_isolation_valid in ["Yes", "Soft Isolate", "Balanced Mix"]:
+        reasons.append(pitch_matchup_label)
+    elif multi_pitch_authority_score >= 3.5:
+        reasons.append("Multi-pitch authority path")
+    elif pitch_isolation_valid == "Elite Statcast Override":
+        reasons.append("Elite Statcast override")
+    else:
+        reasons.append("No pitch edge")
+
+    if recent_trend == "HOT":
+        reasons.append("Hot recent trend")
+    elif recent_trend == "LIVE":
+        reasons.append("Live recent trend")
+    elif recent_trend == "COLD":
+        reasons.append("Cold recent trend")
+    else:
+        reasons.append("Neutral recent trend")
+
+    if weather_boost >= 1.5:
+        reasons.append("Weather carry boost")
+    elif weather_boost <= -1.0:
+        reasons.append("Weather suppression")
+    else:
+        reasons.append("Neutral weather")
+
+    if statcast_authority_tier == "ELITE":
+        reasons.append("Elite Statcast authority")
+    elif statcast_authority_tier == "STRONG":
+        reasons.append("Strong Statcast authority")
+    elif statcast_authority_tier == "MEDIUM":
+        reasons.append("Moderate Statcast authority")
+    elif statcast_authority_tier == "WEAK":
+        reasons.append("Weak Statcast authority")
+    else:
+        reasons.append("Statcast authority fail")
+
+    if bullpen_fatigue_score >= 2.0:
+        reasons.append("Bullpen fatigue boost")
+    elif bullpen_fatigue_score >= 0.8:
+        reasons.append("Bullpen slightly taxed")
+    else:
+        reasons.append("Bullpen rested")
+
+    if ground_ball >= 50:
+        reasons.append("Heavy GB downgrade")
+    elif ground_ball >= 45:
+        reasons.append("Borderline GB caution")
+    else:
+        reasons.append("Clean launch shape")
+
+    if barrel >= 12:
+        reasons.append("Strong barrel")
+    elif hard_hit >= 40:
+        reasons.append("Hard-hit target")
+    elif air_pct >= 55:
+        reasons.append("Air-ball target")
+
+    model_rank_score = (
+        (barrel * 5.6) +
+        (hard_hit * 3.0) +
+        (air_pct * 1.5) +
+        (xslg * 145) +
+        (xwoba * 72) +
+        (max(0, 24 - abs(launch_angle - 18)) * 1.5) +
+        (pitch_hr9 * 8.0) +
+        (pitch_barrel_allowed * 1.1) +
+        (recent_hr * 5.0) +
+        (recent_xbh * 1.8) +
+        (recent_iso * 24.0) +
+        (recent_damage_score * 0.35) +
+        (pitch_matchup_score * 2.1) +
+        (handedness_edge * 1.7) +
+        (weather_boost * 4.0) +
+        (bullpen_fatigue_score * 4.8) +
+        (statcast_authority_score * 1.55) +
+        (multi_pitch_authority_score * 3.0) +
+        (pitcher_target_score * 1.15) +
+        (matchup_advantage_score * 1.05)
+    )
+
+    if pitch_isolation_valid == "Yes":
+        model_rank_score += 7.5
+    elif pitch_isolation_valid == "Elite Statcast Override":
+        model_rank_score += 5.0
+
+    if pitch_mix_mode == "HARD" and primary_pitch_usage >= 50:
+        model_rank_score += 4.0
+    elif pitch_mix_mode == "HARD" and pitch_gap > 20:
+        model_rank_score += 2.0
+    elif pitch_mix_mode == "SOFT":
+        model_rank_score += 1.5
+    elif pitch_mix_mode == "BALANCED" and elite_hr_flag:
+        model_rank_score += 3.0
+
+    if recent_trend == "HOT":
+        model_rank_score += 6.0
+    elif recent_trend == "LIVE":
+        model_rank_score += 3.0
+    elif recent_trend == "COLD":
+        model_rank_score -= 5.0
+
+    if ground_ball >= 55:
+        model_rank_score -= 18.0
+    elif ground_ball >= 50:
+        model_rank_score -= 10.0
+    elif ground_ball >= 45:
+        model_rank_score -= 4.0
+
+    if lineup_spot is not None:
+        if lineup_spot <= 4:
+            model_rank_score += 5.0
+        elif lineup_spot <= 6:
+            model_rank_score += 2.0
+
+    strict_flag = strict_statcast_ok(pd.Series({
+        "Statcast Pass": "Yes" if statcast_pass else "No",
+        "GroundBall%": ground_ball,
+        "Barrel%": barrel,
+        "AIR%": air_pct,
+        "xSLG": xslg,
+    }))
+
+    return {
+        "Player": player_name,
+        "Team": team,
+        "Bats": bats,
+        "Pitcher Throws": pitcher_throws,
+        "Pitch Mix Mode": pitch_mix_mode,
+        "Relevant Pitch Mix": relevant_pitch_mix,
+        "Primary Pitch": primary_pitch if primary_pitch is not None else "Mix",
+        "Primary Pitch Usage": round(primary_pitch_usage, 1),
+        "Pitch Gap": round(pitch_gap, 1),
+        "Pitch Matchup Score": round(pitch_matchup_score, 2),
+        "Handedness Edge": round(handedness_edge, 2),
+        "Lineup Spot": display_spot,
+        "Lineup Source": lineup_source,
+        "EV": round(ev, 1),
+        "HardHit%": round(hard_hit, 1),
+        "FlyBall%": round(fly_ball, 1),
+        "LineDrive%": round(line_drive, 1),
+        "GroundBall%": round(ground_ball, 1),
+        "Barrel%": round(barrel, 1),
+        "AIR%": round(air_pct, 1),
+        "LaunchAngle": round(launch_angle, 1),
+        "Recent Trend": recent_trend,
+        "xSLG": round(xslg, 3) if xslg else 0.0,
+        "xwOBA": round(xwoba, 3) if xwoba else 0.0,
+        "Pitcher": opp_pitcher,
+        "Pitcher_HR9_Last7": round(pitch_hr9, 2),
+        "Pitcher_Barrel_Allowed": round(pitch_barrel_allowed, 1),
+        "Pitcher_HardHit_Allowed": round(pitch_hard_hit_allowed, 1),
+        "Statcast Pass": "Yes" if statcast_pass else "No",
+        "Recent Form Pass": "Yes" if recent_form_pass else "No",
+        "Pitcher Attackable": "Yes" if pitcher_attackable else "No",
+        "Pitch_Isolation_Valid": pitch_isolation_valid,
+        "GB Rule": gb_status,
+        "GB Note": gb_note,
+        "HR Eligible": hr_eligible,
+        "Strict Statcast": "Yes" if strict_flag else "No",
+        "Elite HR Look": "Yes" if elite_hr_flag else "No",
+        "Multi Pitch Authority Score": round(multi_pitch_authority_score, 2),
+        "HR Probability %": round(hr_prob, 1),
+        "HRR Score": round(hrr_score, 1),
+        "Model Rank Score": round(model_rank_score, 2),
+        "TempF": round(temp_f, 1),
+        "WindMPH": round(wind_mph, 1),
+        "WeatherBoost": round(weather_boost, 2),
+        "WeatherNote": weather_note,
+        "BullpenFatigueScore": round(bullpen_fatigue_score, 2),
+        "BullpenFatigueNote": bullpen_fatigue_note,
+        "BullpenIPPrev": round(bullpen_ip_prev, 1),
+        "BullpenArmsPrev": int(bullpen_arms_prev),
+        "Statcast Authority Score": round(statcast_authority_score, 2),
+        "Statcast Authority Tier": statcast_authority_tier,
+        "Pitcher Target Score": round(pitcher_target_score, 2),
+        "Pitcher Target Label": pitcher_target_label,
+        "Matchup Advantage Score": round(matchup_advantage_score, 2),
+        "Matchup Advantage": matchup_advantage_tier,
+        "Ranking Reasons": ranking_reasons,
+        "Why": " | ".join(reasons[:6]),
+    }
+
+
+
+def safe_numeric_series(df: pd.DataFrame, col_name: str, default=0.0) -> pd.Series:
+    if col_name in df.columns:
+        return pd.to_numeric(df[col_name], errors="coerce").fillna(default)
+    return pd.Series([default] * len(df), index=df.index, dtype="float64")
+
+def classify_hr_tier(prob: float) -> str:
+    if prob >= 20:
+        return "CORE TARGET"
+    if prob >= 14:
+        return "STRONG LOOK"
+    if prob >= 9:
+        return "SLEEPER"
+    return "DEEP"
+
+
+def sort_for_hr(df: pd.DataFrame) -> pd.DataFrame:
+    sortable = df.copy()
+    sortable["_lineup_sort"] = safe_numeric_series(sortable, "Lineup Spot", 99)
+    sortable["_model_rank_sort"] = safe_numeric_series(sortable, "Model Rank Score", 0.0)
+    sortable["_hr_prob_sort"] = safe_numeric_series(sortable, "HR Probability %", 0.0)
+    sortable["_barrel_sort"] = safe_numeric_series(sortable, "Barrel%", 0.0)
+    sortable["_hh_sort"] = safe_numeric_series(sortable, "HardHit%", 0.0)
+    sortable["_air_sort"] = safe_numeric_series(sortable, "AIR%", 0.0)
+    sortable["_fb_sort"] = safe_numeric_series(sortable, "FlyBall%", 0.0)
+    sortable["_ld_sort"] = safe_numeric_series(sortable, "LineDrive%", 0.0)
+    sortable["_air_edge_sort"] = sortable["_fb_sort"] + sortable["_ld_sort"] - safe_numeric_series(sortable, "GroundBall%", 999.0)
+    sortable["_xslg_sort"] = safe_numeric_series(sortable, "xSLG", 0.0)
+    sortable["_gb_sort"] = safe_numeric_series(sortable, "GroundBall%", 999.0)
+    sortable["_pitch_hr9_sort"] = safe_numeric_series(sortable, "Pitcher_HR9_Last7", 0.0)
+    sortable["_pitch_barrel_sort"] = safe_numeric_series(sortable, "Pitcher_Barrel_Allowed", 0.0)
+    sortable["_pitch_matchup_sort"] = safe_numeric_series(sortable, "Pitch Matchup Score", 0.0)
+    sortable["_handedness_sort"] = safe_numeric_series(sortable, "Handedness Edge", 0.0)
+    sortable["_usage_sort"] = safe_numeric_series(sortable, "Primary Pitch Usage", 0.0)
+    sortable["_mix_mode_sort"] = sortable.get("Pitch Mix Mode", pd.Series(["BALANCED"] * len(sortable), index=sortable.index)).map({"HARD": 3, "SOFT": 2, "BALANCED": 1}).fillna(1)
+    sortable["_authority_sort"] = safe_numeric_series(sortable, "Statcast Authority Score", 0.0)
+    sortable["_authority_tier_sort"] = sortable.get("Statcast Authority Tier", pd.Series(["MEDIUM"] * len(sortable), index=sortable.index)).map({"ELITE": 4, "STRONG": 3, "MEDIUM": 2, "WEAK": 1, "FAIL": 0}).fillna(2)
+    sortable["_la_sort"] = safe_numeric_series(sortable, "LaunchAngle", 0.0)
+    sortable["_trend_sort"] = sortable.get("Recent Trend", pd.Series(["NEUTRAL"] * len(sortable), index=sortable.index)).map({"HOT": 3, "LIVE": 2, "NEUTRAL": 1, "COLD": 0}).fillna(1)
+    sortable["_hrr_sort"] = safe_numeric_series(sortable, "HRR Score", 0.0)
+    sortable["_multi_pitch_sort"] = safe_numeric_series(sortable, "Multi Pitch Authority Score", 0.0)
+    sortable["_elite_hr_sort"] = sortable.get("Elite HR Look", pd.Series(["No"] * len(sortable), index=sortable.index)).map({"Yes": 1, "No": 0}).fillna(0)
+    sortable["_pitcher_target_sort"] = safe_numeric_series(sortable, "Pitcher Target Score", 0.0)
+    sortable["_matchup_adv_sort"] = safe_numeric_series(sortable, "Matchup Advantage Score", 0.0)
+
+    sortable = sortable.sort_values(
+        by=[
+            "_matchup_adv_sort",
+            "_pitcher_target_sort",
+            "_elite_hr_sort",
+            "_authority_tier_sort",
+            "_authority_sort",
+            "_multi_pitch_sort",
+            "_barrel_sort",
+            "_hh_sort",
+            "_air_edge_sort",
+            "_fb_sort",
+            "_ld_sort",
+            "_air_sort",
+            "_xslg_sort",
+            "_pitch_matchup_sort",
+            "_hr_prob_sort",
+            "_model_rank_sort",
+            "_lineup_sort",
+            "_usage_sort",
+            "_mix_mode_sort",
+            "_gb_sort",
+            "_pitch_hr9_sort",
+            "_pitch_barrel_sort",
+            "_handedness_sort",
+            "_la_sort",
+            "_trend_sort",
+            "_hrr_sort",
+        ],
+        ascending=[False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, True, False, False, True, False, False, False, False, False, False],
+    ).reset_index(drop=True)
+    return sortable.drop(columns=[
+        "_lineup_sort",
+        "_model_rank_sort",
+        "_hr_prob_sort",
+        "_barrel_sort",
+        "_hh_sort",
+        "_air_sort",
+        "_fb_sort",
+        "_ld_sort",
+        "_air_edge_sort",
+        "_xslg_sort",
+        "_gb_sort",
+        "_pitch_hr9_sort",
+        "_pitch_barrel_sort",
+        "_pitch_matchup_sort",
+        "_handedness_sort",
+        "_usage_sort",
+        "_mix_mode_sort",
+        "_authority_sort",
+        "_authority_tier_sort",
+        "_la_sort",
+        "_trend_sort",
+        "_hrr_sort",
+        "_multi_pitch_sort",
+        "_elite_hr_sort",
+        "_pitcher_target_sort",
+        "_matchup_adv_sort",
+    ])
+
+
+@st.cache_data(ttl=900)
+def build_daily_dataset():
+    schedule = sort_schedule_rows(get_today_schedule())
+    rows = []
+
+    savant_batter_map = fetch_savant_batter_map(CURRENT_SEASON)
+
+    candidate_map = {}
+    all_hitter_ids = set()
+    all_pitcher_ids = set()
+
+    for game in schedule:
+        away_candidates, away_source = get_team_candidate_hitters(
+            game["game_pk"], game["away_team_id"], "away", savant_batter_map
+        )
+        home_candidates, home_source = get_team_candidate_hitters(
+            game["game_pk"], game["home_team_id"], "home", savant_batter_map
+        )
+
+        candidate_map[(game["game_pk"], "away")] = (away_candidates, away_source)
+        candidate_map[(game["game_pk"], "home")] = (home_candidates, home_source)
+
+        if away_source == "CONFIRMED":
+            game["away_confirmed_count"] = min(9, len(away_candidates))
+        if home_source == "CONFIRMED":
+            game["home_confirmed_count"] = min(9, len(home_candidates))
+
+        for h in away_candidates + home_candidates:
+            if h.get("player_id") is not None:
+                all_hitter_ids.add(h["player_id"])
+
+        if game.get("away_pitcher_id") is not None:
+            all_pitcher_ids.add(game["away_pitcher_id"])
+        if game.get("home_pitcher_id") is not None:
+            all_pitcher_ids.add(game["home_pitcher_id"])
+
+    hitter_stats_map = fetch_people_stats(tuple(all_hitter_ids), "hitting")
+    pitcher_stats_map = fetch_people_stats(tuple(all_pitcher_ids), "pitching")
+
+    for game in schedule:
+        away_abbr = team_abbr(game["away_team"])
+        home_abbr = team_abbr(game["home_team"])
+        away_park = PARK_FACTORS.get(home_abbr, 1.00)
+        home_park = PARK_FACTORS.get(home_abbr, 1.00)
+        weather = fetch_weather_for_park(home_abbr)
+        home_bullpen = fetch_bullpen_fatigue_for_team(game["home_team_id"])
+        away_bullpen = fetch_bullpen_fatigue_for_team(game["away_team_id"])
+
+        away_candidates, away_source = candidate_map[(game["game_pk"], "away")]
+        home_candidates, home_source = candidate_map[(game["game_pk"], "home")]
+
+        for hitter in away_candidates:
+            metrics = build_hitter_metrics(
+                player_id=hitter["player_id"],
+                player_name=hitter["player_name"],
+                team=away_abbr,
+                opp_pitcher=game["home_pitcher"],
+                park_factor=away_park,
+                opp_pitcher_id=game["home_pitcher_id"],
+                lineup_spot=hitter.get("lineup_spot"),
+                lineup_source=away_source,
+                hitter_stats_map=hitter_stats_map,
+                pitcher_stats_map=pitcher_stats_map,
+                savant_batter_map=savant_batter_map,
+                weather_boost=weather.get("WeatherBoost", 0.0),
+                weather_note=weather.get("WeatherNote", "neutral weather"),
+                temp_f=weather.get("TempF", 72.0),
+                wind_mph=weather.get("WindMPH", 7.0),
+                bullpen_fatigue_score=home_bullpen.get("BullpenFatigueScore", 0.0),
+                bullpen_fatigue_note=home_bullpen.get("BullpenFatigueNote", "Neutral bullpen rest"),
+                bullpen_ip_prev=home_bullpen.get("BullpenIPPrev", 0.0),
+                bullpen_arms_prev=home_bullpen.get("BullpenArmsPrev", 0),
+            )
+            if metrics is not None:
+                rows.append({
+                    "date": today_str(),
+                    "game_pk": game["game_pk"],
+                    "game_state": game["game_state"],
+                    "detailed_state": game["detailed_state"],
+                    "Game": game["game_key"],
+                    "Side": "Away",
+                    **metrics
+                })
+
+        for hitter in home_candidates:
+            metrics = build_hitter_metrics(
+                player_id=hitter["player_id"],
+                player_name=hitter["player_name"],
+                team=home_abbr,
+                opp_pitcher=game["away_pitcher"],
+                park_factor=home_park,
+                opp_pitcher_id=game["away_pitcher_id"],
+                lineup_spot=hitter.get("lineup_spot"),
+                lineup_source=home_source,
+                hitter_stats_map=hitter_stats_map,
+                pitcher_stats_map=pitcher_stats_map,
+                savant_batter_map=savant_batter_map,
+                weather_boost=weather.get("WeatherBoost", 0.0),
+                weather_note=weather.get("WeatherNote", "neutral weather"),
+                temp_f=weather.get("TempF", 72.0),
+                wind_mph=weather.get("WindMPH", 7.0),
+                bullpen_fatigue_score=away_bullpen.get("BullpenFatigueScore", 0.0),
+                bullpen_fatigue_note=away_bullpen.get("BullpenFatigueNote", "Neutral bullpen rest"),
+                bullpen_ip_prev=away_bullpen.get("BullpenIPPrev", 0.0),
+                bullpen_arms_prev=away_bullpen.get("BullpenArmsPrev", 0),
+            )
+            if metrics is not None:
+                rows.append({
+                    "date": today_str(),
+                    "game_pk": game["game_pk"],
+                    "game_state": game["game_state"],
+                    "detailed_state": game["detailed_state"],
+                    "Game": game["game_key"],
+                    "Side": "Home",
+                    **metrics
+                })
+
+    df = pd.DataFrame(rows)
+    if df.empty:
+        return pd.DataFrame(), schedule
+
+    df["HR Tier"] = df["HR Probability %"].apply(classify_hr_tier)
+    df = sort_for_hr(df)
+    return df, schedule
+
+
+def get_research_shortlist_pool(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return df.copy()
+
+    pool = df[df["HR Eligible"]].copy()
+    if pool.empty:
+        return pool
+
+    lineup_num = safe_numeric_series(pool, "Lineup Spot", 99)
+    barrel = safe_numeric_series(pool, "Barrel%", 0.0)
+    hard_hit = safe_numeric_series(pool, "HardHit%", 0.0)
+    air_pct = safe_numeric_series(pool, "AIR%", 0.0)
+    xslg = safe_numeric_series(pool, "xSLG", 0.0)
+    gb = safe_numeric_series(pool, "GroundBall%", 999.0)
+    pitch_score = safe_numeric_series(pool, "Pitch Matchup Score", 0.0)
+    hr_prob = safe_numeric_series(pool, "HR Probability %", 0.0)
+    trend_score = safe_numeric_series(pool, "Model Rank Score", 0.0)
+    recent_trend = pool.get("Recent Trend", pd.Series(["NEUTRAL"] * len(pool), index=pool.index)).astype(str)
+    authority_tier = pool.get("Statcast Authority Tier", pd.Series(["MEDIUM"] * len(pool), index=pool.index)).astype(str)
+    mix_mode = pool.get("Pitch Mix Mode", pd.Series(["BALANCED"] * len(pool), index=pool.index)).astype(str)
+    lineup_source = pool.get("Lineup Source", pd.Series(["PROJECTED"] * len(pool), index=pool.index)).astype(str).str.upper()
+
+    authority_keep = authority_tier.isin(["ELITE", "STRONG"])
+    hot_keep = recent_trend.isin(["HOT", "LIVE"])
+    elite_shape = (barrel >= 12.0) | (xslg >= 0.500) | ((hard_hit >= 45.0) & (air_pct >= 54.0))
+    starter_attack = (pitch_score >= 4.4) | (hr_prob >= 12.5)
+
+    hard_shape_gate = (
+        ((barrel >= 8.5) & (hard_hit >= 40.0) & (air_pct >= 49.0))
+        | ((barrel >= 10.0) & (xslg >= 0.460))
+        | ((hard_hit >= 44.0) & (air_pct >= 50.0))
+        | elite_shape
+        | authority_keep
+    )
+
+    gb_keep = (
+        (gb <= 47.5)
+        | elite_shape
+        | authority_keep
+        | ((gb <= 50.0) & (barrel >= 11.0) & (xslg >= 0.485))
+    )
+
+    projected_keep = (
+        lineup_source.eq("PROJECTED")
+        & (
+            elite_shape
+            | authority_keep
+            | (hot_keep & starter_attack)
+            | ((barrel >= 10.5) & (xslg >= 0.475))
+        )
+    )
+
+    mixed_pitch_keep = (
+        mix_mode.eq("HARD")
+        | authority_keep
+        | projected_keep
+        | (mix_mode.eq("SOFT") & (starter_attack | hot_keep | elite_shape))
+        | (mix_mode.eq("BALANCED") & (elite_shape | authority_keep | (hot_keep & (pitch_score >= 4.8))))
+    )
+
+    score_gate = (
+        (hr_prob >= 9.2)
+        | authority_keep
+        | elite_shape
+        | ((barrel >= 10.8) & (hard_hit >= 42.0))
+        | (trend_score >= 455)
+    )
+
+    playable_lineup = (lineup_num <= 6) | authority_keep | projected_keep | hot_keep
+
+    fade_cold = ~(
+        recent_trend.eq("COLD")
+        & (barrel < 11.5)
+        & (xslg < 0.485)
+        & (pitch_score < 5.2)
+        & ~authority_keep
+    )
+
+    projected_unknown_fade = ~(
+        lineup_num.eq(99)
+        & lineup_source.eq("PROJECTED")
+        & ~(projected_keep | authority_keep | elite_shape)
+    )
+
+    shortlist = pool[
+        hard_shape_gate
+        & gb_keep
+        & mixed_pitch_keep
+        & score_gate
+        & playable_lineup
+        & fade_cold
+        & projected_unknown_fade
+    ].copy()
+
+    if shortlist.empty:
+        shortlist = sort_for_hr(pool).head(28).copy()
+        return shortlist.reset_index(drop=True)
+
+    shortlist = sort_for_hr(shortlist).head(30).reset_index(drop=True)
+    return shortlist
+
+
+def get_strict_hr_pool(df: pd.DataFrame) -> pd.DataFrame:
+    hr_pool = get_research_shortlist_pool(df)
+    if hr_pool.empty:
+        return hr_pool
+    return add_rank_column(hr_pool)
+
+
+def get_top12_hybrid(df: pd.DataFrame) -> pd.DataFrame:
+    hr_pool = get_research_shortlist_pool(df)
+    if hr_pool.empty:
+        return hr_pool
+
+    hr_pool = sort_for_hr(hr_pool)
+    strict_pool = hr_pool[hr_pool["Strict Statcast"] == "Yes"].copy()
+    strict_pool = sort_for_hr(strict_pool)
+
+    strict_keys = set(zip(strict_pool["Player"], strict_pool["Team"], strict_pool["Game"]))
+    fallback_rows = []
+    for _, row in hr_pool.iterrows():
+        key = (row["Player"], row["Team"], row["Game"])
+        if key not in strict_keys:
+            fallback_rows.append(row)
+
+    fallback_df = pd.DataFrame(fallback_rows) if fallback_rows else pd.DataFrame(columns=hr_pool.columns)
+    top12 = pd.concat([strict_pool, fallback_df], ignore_index=True).head(12)
+
+    if top12.empty:
+        return top12
+
+    top12 = sort_for_hr(top12)
+    return add_rank_column(top12)
+
+
+def get_team_game_view(df: pd.DataFrame, game_key: str, team: str):
+    team_df = df[(df["Game"] == game_key) & (df["Team"] == team)].copy()
+    if team_df.empty:
+        return team_df, team_df
+
+    hr_pool = get_research_shortlist_pool(team_df)
+    hr_pool = sort_for_hr(hr_pool).head(4)
+    if not hr_pool.empty:
+        hr_pool = add_rank_column(hr_pool)
+
+    hrr = team_df.sort_values(
+        by=["HRR Score", "LineDrive%", "HardHit%", "GroundBall%"],
+        ascending=[False, False, False, True]
+    ).head(5)
+
+    return hr_pool, hrr
+
+
+def build_visible_tracker_pool(df: pd.DataFrame, schedule: list[dict]) -> pd.DataFrame:
+    visible_frames = []
+
+    core_board = get_research_shortlist_pool(df).copy()
+    if not core_board.empty:
+        core_board = sort_for_hr(core_board).head(30)
+        core_board["Tracker Source"] = "CORE_BOARD"
+        visible_frames.append(core_board)
+
+    top12 = get_top12_hybrid(df).copy()
+    if not top12.empty:
+        top12["Tracker Source"] = "TOP12"
+        visible_frames.append(top12)
+
+    # Match tracker entries to the actual per-game HR boards the user sees.
+    # If BF Data surfaces a hitter in a visible per-game HR table, that hitter must be tracked.
+    for game in schedule:
+        gdf = df[df["Game"] == game["game_key"]].copy()
+        if gdf.empty:
+            continue
+
+        away_team = team_abbr(game["away_team"])
+        home_team = team_abbr(game["home_team"])
+
+        away_hr, _ = get_team_game_view(gdf, game["game_key"], away_team)
+        if not away_hr.empty:
+            away_hr = away_hr.copy()
+            away_hr["Tracker Source"] = "GAME_HR"
+            visible_frames.append(away_hr)
+
+        home_hr, _ = get_team_game_view(gdf, game["game_key"], home_team)
+        if not home_hr.empty:
+            home_hr = home_hr.copy()
+            home_hr["Tracker Source"] = "GAME_HR"
+            visible_frames.append(home_hr)
+
+    if not visible_frames:
+        return pd.DataFrame(columns=df.columns.tolist() + ["Tracker Source"])
+
+    visible_df = pd.concat(visible_frames, ignore_index=True)
+    visible_df = visible_df.drop_duplicates(subset=["Player", "Team", "Game"]).reset_index(drop=True)
+    visible_df = sort_for_hr(visible_df)
+    return visible_df
+
+
+@st.cache_data(ttl=120)
+def get_boxscore_homers(game_pk: int):
+    url = f"https://statsapi.mlb.com/api/v1/game/{game_pk}/boxscore"
+    try:
+        resp = requests.get(url, timeout=20)
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception:
+        return {}
+
+    homer_map = {}
+
+    for side in ["away", "home"]:
+        team_data = data.get("teams", {}).get(side, {})
+        players = team_data.get("players", {})
+        for _, player_data in players.items():
+            person = player_data.get("person", {})
+            full_name = person.get("fullName")
+            batting = player_data.get("stats", {}).get("batting", {})
+            hr_count = batting.get("homeRuns", 0)
+            if full_name:
+                homer_map[full_name] = int(hr_count)
+
+    return homer_map
+
+
+def sync_tracker_with_board(tracked_df: pd.DataFrame):
+    tracker = load_tracker()
+    date_key = today_str()
+
+    if tracked_df.empty:
+        return tracker
+
+    existing_today = tracker[tracker["date"].astype(str) == date_key].copy()
+
+    # Freeze the day's surfaced HR prediction pool once it has been created.
+    # This prevents the locked daily surfaced count from inflating later
+    # because of lineup changes, refreshes, or late board reshuffles.
+    if not existing_today.empty:
+        return tracker
+
+    new_rows = []
+    for _, row in tracked_df.iterrows():
+        new_rows.append({
+            "date": date_key,
+            "player": row["Player"],
+            "team": row["Team"],
+            "game": row["Game"],
+            "game_pk": row["game_pk"],
+            "hr_probability": row["HR Probability %"],
+            "hr_tier": row["HR Tier"],
+            "hr_eligible": int(bool(row["HR Eligible"])),
+            "tracker_source": row.get("Tracker Source", "CORE_BOARD"),
+            "result": pd.NA,
+            "result_state": "PENDING",
+            "game_state": row["game_state"],
+            "updated_at": now_et_string(),
+        })
+
+    if new_rows:
+        tracker = pd.concat([tracker, pd.DataFrame(new_rows)], ignore_index=True)
+        save_tracker(tracker)
+
+    return tracker
+
+
+def auto_update_tracker_results(tracker: pd.DataFrame, schedule: list[dict]):
+    if tracker.empty:
+        return tracker
+
+    tracker = tracker.copy()
+    date_key = today_str()
+    today_mask = tracker["date"].astype(str) == date_key
+
+    for game in schedule:
+        game_pk = game["game_pk"]
+        game_state = game.get("game_state", "Preview")
+        detailed_state = game.get("detailed_state", "Scheduled")
+
+        rows_mask = today_mask & (tracker["game_pk"] == game_pk)
+        if not rows_mask.any():
+            continue
+
+        if game_state == "Preview":
+            tracker.loc[rows_mask, "result_state"] = "PREGAME"
+            tracker.loc[rows_mask, "game_state"] = detailed_state
+            tracker.loc[rows_mask, "updated_at"] = now_et_string()
+            continue
+
+        homer_map = get_boxscore_homers(game_pk)
+
+        for idx in tracker.index[rows_mask]:
+            player = tracker.at[idx, "player"]
+            hr_count = int(homer_map.get(player, 0))
+
+            if hr_count > 0:
+                tracker.at[idx, "result"] = 1
+                tracker.at[idx, "result_state"] = "HOMERED"
+            else:
+                if game_state == "Final":
+                    tracker.at[idx, "result"] = 0
+                    tracker.at[idx, "result_state"] = "FINAL_NO_HR"
+                else:
+                    tracker.at[idx, "result_state"] = "LIVE"
+
+            tracker.at[idx, "game_state"] = detailed_state
+            tracker.at[idx, "updated_at"] = now_et_string()
+
+    save_tracker(tracker)
+    return tracker
+
+
+def _combo_signature(players: list[str]) -> str:
+    return " | ".join(sorted(players))
+
+
+def _pick_combo_rows(candidates: pd.DataFrame, size: int, max_combos: int, global_usage: dict) -> list[dict]:
+    from itertools import combinations
+
+    if candidates.empty or len(candidates) < size:
+        return []
+
+    ranked = candidates.reset_index(drop=True).copy()
+    combos = []
+    for idxs in combinations(ranked.index.tolist(), size):
+        rows = ranked.loc[list(idxs)].copy()
+        players = rows["Player"].tolist()
+        games = rows["Game"].tolist()
+        teams = rows["Team"].tolist()
+        if len(set(players)) != size:
+            continue
+        if size >= 3 and len(set(games)) < size - 1:
+            continue
+        if len(set(teams)) < max(2, size - 1):
+            continue
+
+        avg_prob = rows["HR Probability %"].mean()
+        total_prob = rows["HR Probability %"].sum()
+        total_model = rows["Model Rank Score"].sum()
+        diversity_bonus = len(set(games)) * 2.4 + len(set(teams)) * 1.2
+        same_game_penalty = max(0, size - len(set(games))) * 6.0
+        score = total_prob + (total_model * 0.08) + diversity_bonus - same_game_penalty
+        combos.append({
+            "players": players,
+            "games": games,
+            "rows": rows,
+            "score": round(score, 2),
+            "avg_prob": round(avg_prob, 2),
+        })
+
+    combos = sorted(combos, key=lambda x: (x["score"], x["avg_prob"]), reverse=True)
+
+    selected = []
+    seen = set()
+    for combo in combos:
+        sig = _combo_signature(combo["players"])
+        if sig in seen:
+            continue
+        if any(global_usage.get(p, 0) >= 3 for p in combo["players"]):
+            continue
+        if any(len(set(combo["players"]) & set(existing["players"])) > max(1, size // 2) for existing in selected):
+            continue
+        selected.append(combo)
+        seen.add(sig)
+        for p in combo["players"]:
+            global_usage[p] = global_usage.get(p, 0) + 1
+        if len(selected) >= max_combos:
+            break
+    return selected
+
+
+def build_combo_board(df: pd.DataFrame) -> pd.DataFrame:
+    shortlist = get_research_shortlist_pool(df)
+    top12 = get_top12_hybrid(df)
+    if shortlist.empty and top12.empty:
+        return pd.DataFrame()
+
+    candidate_pool = pd.concat([top12, shortlist], ignore_index=True)
+    candidate_pool = candidate_pool.drop_duplicates(subset=["Player", "Team", "Game"])
+    candidate_pool = sort_for_hr(candidate_pool).head(14).reset_index(drop=True)
+
+    global_usage = {}
+    rows = []
+    combo_counts = {2: 5, 3: 4, 4: 3, 5: 2}
+    for size in [2, 3, 4, 5]:
+        selected = _pick_combo_rows(candidate_pool, size, combo_counts[size], global_usage)
+        for idx, combo in enumerate(selected, start=1):
+            players = combo["players"]
+            games = combo["games"]
+            labels = [f"{p} ({t})" for p, t in zip(combo["players"], combo["rows"]["Team"].tolist())]
+            rows.append({
+                "Combo Type": f"{size}-Leg",
+                "Combo #": idx,
+                "Combo Label": " + ".join(labels),
+                "Players": " | ".join(players),
+                "Games": " | ".join(games),
+                "Avg Leg HR %": round(combo["avg_prob"], 2),
+                "Combined Score": combo["score"],
+                "Source Pool": "TOP12+CORE",
+            })
+    return pd.DataFrame(rows)
+
+
+def sync_combo_tracker_with_board(combo_df: pd.DataFrame):
+    tracker = load_combo_tracker()
+    date_key = today_str()
+    if combo_df.empty:
+        return tracker
+
+    existing_today = tracker[tracker["date"].astype(str) == date_key].copy()
+    if not existing_today.empty:
+        return tracker
+
+    new_rows = []
+    for _, row in combo_df.iterrows():
+        combo_id = f"{date_key}-{row['Combo Type']}-{int(row['Combo #'])}"
+        legs = str(row["Players"]).split(" | ")
+        new_rows.append({
+            "date": date_key,
+            "combo_id": combo_id,
+            "combo_label": row["Combo Label"],
+            "combo_size": int(str(row["Combo Type"]).split("-")[0]),
+            "legs": row["Players"],
+            "games": row["Games"],
+            "avg_leg_probability": row["Avg Leg HR %"],
+            "combined_score": row["Combined Score"],
+            "source_pool": row["Source Pool"],
+            "result": pd.NA,
+            "result_state": "PENDING",
+            "legs_hit": 0,
+            "total_legs": len(legs),
+            "updated_at": now_et_string(),
+        })
+
+    if new_rows:
+        tracker = pd.concat([tracker, pd.DataFrame(new_rows)], ignore_index=True)
+        save_combo_tracker(tracker)
+    return tracker
+
+
+def auto_update_combo_tracker_results(combo_tracker: pd.DataFrame, schedule: list[dict]):
+    if combo_tracker.empty:
+        return combo_tracker
+
+    combo_tracker = combo_tracker.copy()
+    date_key = today_str()
+    today_mask = combo_tracker["date"].astype(str) == date_key
+
+    homer_maps = {}
+    schedule_states = {}
+    for game in schedule:
+        homer_maps[game["game_pk"]] = get_boxscore_homers(game["game_pk"])
+        schedule_states[game["game_key"]] = (game.get("game_state", "Preview"), game.get("detailed_state", "Scheduled"))
+
+    for idx in combo_tracker.index[today_mask]:
+        legs = [x.strip() for x in str(combo_tracker.at[idx, "legs"]).split("|") if x.strip()]
+        games = [x.strip() for x in str(combo_tracker.at[idx, "games"]).split("|") if x.strip()]
+        legs_hit = 0
+        any_live = False
+        all_final = True
+        for leg, game_key in zip(legs, games):
+            game_state, detailed = schedule_states.get(game_key, ("Preview", "Scheduled"))
+            if game_state != "Final":
+                all_final = False
+            if game_state not in ["Preview", "Final"]:
+                any_live = True
+            # find matching homer map by game key via schedule lookup
+            matched = False
+            for game in schedule:
+                if game["game_key"] == game_key:
+                    if int(homer_maps.get(game["game_pk"], {}).get(leg, 0)) > 0:
+                        legs_hit += 1
+                    matched = True
+                    break
+            if not matched:
+                all_final = False
+
+        combo_tracker.at[idx, "legs_hit"] = legs_hit
+        combo_tracker.at[idx, "total_legs"] = len(legs)
+        combo_tracker.at[idx, "updated_at"] = now_et_string()
+        if legs_hit == len(legs) and len(legs) > 0:
+            combo_tracker.at[idx, "result"] = 1
+            combo_tracker.at[idx, "result_state"] = "FULL_HIT"
+        elif all_final:
+            combo_tracker.at[idx, "result"] = 0
+            combo_tracker.at[idx, "result_state"] = "PARTIAL_HIT" if legs_hit > 0 else "FINAL_MISS"
+        elif any_live:
+            combo_tracker.at[idx, "result_state"] = "LIVE" if legs_hit == 0 else f"LIVE_{legs_hit}_HIT"
+        else:
+            combo_tracker.at[idx, "result_state"] = "PREGAME"
+
+    save_combo_tracker(combo_tracker)
+    return combo_tracker
+
+
+
+def summarize_tracker_sources(df: pd.DataFrame) -> dict:
+    buckets = {
+        "CORE_BOARD": {"today_total": 0, "today_hits": 0, "today_pct": 0.0, "all_total": 0, "all_hits": 0, "all_pct": 0.0},
+        "TOP12": {"today_total": 0, "today_hits": 0, "today_pct": 0.0, "all_total": 0, "all_hits": 0, "all_pct": 0.0},
+        "GAME_HR": {"today_total": 0, "today_hits": 0, "today_pct": 0.0, "all_total": 0, "all_hits": 0, "all_pct": 0.0},
+    }
+    if df.empty:
+        return buckets
+
+    work = df.copy()
+    if "tracker_source" not in work.columns:
+        work["tracker_source"] = "CORE_BOARD"
+    work["tracker_source"] = work["tracker_source"].fillna("CORE_BOARD").astype(str)
+    work["result_num"] = pd.to_numeric(work["result"], errors="coerce").fillna(0).astype(int)
+    today_mask = work["date"].astype(str) == today_str()
+
+    for source in buckets.keys():
+        all_df = work[work["tracker_source"] == source].copy()
+        today_df = all_df[today_mask].copy()
+        all_total = len(all_df)
+        all_hits = int(all_df["result_num"].sum()) if all_total else 0
+        today_total = len(today_df)
+        today_hits = int(today_df["result_num"].sum()) if today_total else 0
+        buckets[source] = {
+            "today_total": today_total,
+            "today_hits": today_hits,
+            "today_pct": round((today_hits / today_total) * 100, 2) if today_total else 0.0,
+            "all_total": all_total,
+            "all_hits": all_hits,
+            "all_pct": round((all_hits / all_total) * 100, 2) if all_total else 0.0,
+        }
+
+    return buckets
+
+
+def summarize_combo_tracker(df: pd.DataFrame) -> dict:
+    summary = {
+        "today_total": 0, "today_full_hits": 0, "today_partial_hits": 0,
+        "all_total": 0, "all_full_hits": 0, "all_partial_hits": 0,
+    }
+    if df.empty:
+        return summary
+    work = df.copy()
+    today_df = work[work["date"].astype(str) == today_str()]
+    summary["today_total"] = len(today_df)
+    summary["today_full_hits"] = int((today_df["result_state"].astype(str) == "FULL_HIT").sum())
+    summary["today_partial_hits"] = int(today_df["legs_hit"].fillna(0).astype(int).gt(0).sum())
+    summary["all_total"] = len(work)
+    summary["all_full_hits"] = int((work["result_state"].astype(str) == "FULL_HIT").sum())
+    summary["all_partial_hits"] = int(work["legs_hit"].fillna(0).astype(int).gt(0).sum())
+    return summary
 
 
 c1, c2, c3, c4 = st.columns([1, 1, 1, 2])
@@ -2332,37 +3681,25 @@ with tabs[1]:
 
 with tabs[2]:
     st.subheader("Top HR Targets — Slate-Wide Top 25")
-    st.caption("Global slate ranking based on hitter authority, ISO/EV-style power, pitch exposure, pitcher HR/9 vulnerability, weather, park, and matchup advantage.")
+    st.caption("Global slate ranking based on hitter authority, EV/ISO-style power, pitch exposure, pitcher HR/9 vulnerability, weather, park, and matchup advantage.")
     top_targets = get_best_hr_matchups(locked_df, 25)
-    if top_targets.empty:
-        st.caption("No global HR targets surfaced yet.")
-    else:
-        target_cols = [
-            "Rank", "Player", "Team", "Game", "Pitcher", "Lineup Spot", "Lineup Source",
-            "Matchup Advantage", "Matchup Advantage Score", "Pitcher Target Score", "Pitcher_HR9_Last7",
-            "EV", "Barrel%", "HardHit%", "AIR%", "xSLG", "xwOBA",
-            "Pitch Mix Mode", "Relevant Pitch Mix", "Primary Pitch Usage",
-            "HR Probability %", "HR Tier", "Ranking Reasons"
-        ]
-        st.dataframe(
-            top_targets[[c for c in target_cols if c in top_targets.columns]],
-            use_container_width=True,
-            hide_index=True
-        )
+    target_cols = [
+        "Rank", "Player", "Team", "Game", "Pitcher", "Lineup Spot", "Lineup Source",
+        "Matchup Advantage", "Matchup Advantage Score", "Pitcher Target Score", "Pitcher_HR9_Last7",
+        "EV", "Barrel%", "HardHit%", "AIR%", "xSLG", "xwOBA",
+        "Pitch Mix Mode", "Relevant Pitch Mix", "Primary Pitch Usage",
+        "HR Probability %", "HR Tier", "Ranking Reasons"
+    ]
+    display_existing_columns(top_targets, target_cols)
 
 with tabs[3]:
     st.subheader("Pitchers to Target Today")
     st.caption("Attackability board emphasizing HR/9, barrel allowed, hard contact allowed, park/weather carry, and matchup vulnerability.")
     pitcher_targets = get_pitchers_to_target(locked_df)
-    if pitcher_targets.empty:
-        st.caption("No pitcher target data available yet.")
-    else:
-        pitcher_targets = pitcher_targets.loc[:, ~pitcher_targets.columns.duplicated()].copy()
-        st.dataframe(
-            pitcher_targets,
-            use_container_width=True,
-            hide_index=True
-        )
+    display_existing_columns(
+        pitcher_targets,
+        ["Game", "Pitcher", "Pitcher Target Score", "Pitcher_HR9_Last7", "Pitcher_Barrel_Allowed", "Pitcher_HardHit_Allowed", "WeatherNote", "TempF", "WindMPH"]
+    )
 
 with tabs[4]:
     st.subheader("HR Combos")
@@ -2391,7 +3728,7 @@ with tabs[4]:
         st.divider()
         st.caption("Tracked combo history")
         st.dataframe(
-            combo_tracker.sort_values(by=["date", "combo_size", "combined_score"], ascending=[False, True, False]),
+            dedupe_columns(combo_tracker.sort_values(by=["date", "combo_size", "combined_score"], ascending=[False, True, False])),
             use_container_width=True,
             hide_index=True
         )
@@ -2552,10 +3889,10 @@ with tabs[7]:
         st.divider()
         st.markdown("### Combo Tracker History")
         st.dataframe(
-            combo_tracker.sort_values(
+            dedupe_columns(combo_tracker.sort_values(
                 by=["date", "combo_size", "combined_score"],
                 ascending=[False, True, False]
-            ),
+            )),
             use_container_width=True,
             hide_index=True
         )
