@@ -49,6 +49,30 @@ def save_daily_board_snapshot(board_df: pd.DataFrame, snapshot_date: str):
         board_df.to_csv(board_path, index=False)
 
 
+def load_daily_board_snapshot(snapshot_date: str) -> pd.DataFrame:
+    ensure_snapshot_folder()
+    board_path = os.path.join(SNAPSHOT_DIR, f"hr_board_{snapshot_date}.csv")
+    if os.path.exists(board_path):
+        try:
+            return pd.read_csv(board_path)
+        except Exception:
+            return pd.DataFrame()
+    return pd.DataFrame()
+
+
+def available_tracker_dates(tracker_df: pd.DataFrame) -> list[str]:
+    dates = set()
+    if tracker_df is not None and not tracker_df.empty and "date" in tracker_df.columns:
+        dates.update(tracker_df["date"].dropna().astype(str).tolist())
+    if os.path.exists(SNAPSHOT_DIR):
+        for name in os.listdir(SNAPSHOT_DIR):
+            m = re.match(r"hr_board_(\d{4}-\d{2}-\d{2})\.csv", name)
+            if m:
+                dates.add(m.group(1))
+    dates.add(today_str())
+    return sorted(dates, reverse=True)
+
+
 TEAM_ABBR = {
     "Arizona Diamondbacks": "ARI",
     "Atlanta Braves": "ATL",
@@ -269,7 +293,7 @@ def load_tracker() -> pd.DataFrame:
     columns = [
         "date", "player", "team", "game", "game_pk",
         "hr_probability", "hr_tier", "hr_eligible", "tracker_source",
-        "result", "result_state", "game_state", "updated_at"
+        "result", "hr_count", "result_state", "game_state", "updated_at"
     ]
     if os.path.exists(TRACKER_FILE):
         try:
@@ -2860,12 +2884,14 @@ def sort_for_hr(df: pd.DataFrame) -> pd.DataFrame:
     sortable["_trend_sort"] = sortable.get("Recent Trend", pd.Series(["NEUTRAL"] * len(sortable), index=sortable.index)).map({"HOT": 3, "LIVE": 2, "NEUTRAL": 1, "COLD": 0}).fillna(1)
     sortable["_hrr_sort"] = safe_numeric_series(sortable, "HRR Score", 0.0)
     sortable["_multi_pitch_sort"] = safe_numeric_series(sortable, "Multi Pitch Authority Score", 0.0)
+    sortable["_actual_hr_sort"] = safe_numeric_series(sortable, "Actual HR Today", 0.0)
     sortable["_elite_hr_sort"] = sortable.get("Elite HR Look", pd.Series(["No"] * len(sortable), index=sortable.index)).map({"Yes": 1, "No": 0}).fillna(0)
     sortable["_pitcher_target_sort"] = safe_numeric_series(sortable, "Pitcher Target Score", 0.0)
     sortable["_matchup_adv_sort"] = safe_numeric_series(sortable, "Matchup Advantage Score", 0.0)
 
     sortable = sortable.sort_values(
         by=[
+            "_actual_hr_sort",
             "_matchup_adv_sort",
             "_pitcher_target_sort",
             "_elite_hr_sort",
@@ -2893,7 +2919,7 @@ def sort_for_hr(df: pd.DataFrame) -> pd.DataFrame:
             "_trend_sort",
             "_hrr_sort",
         ],
-        ascending=[False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, True, False, False, True, False, False, False, False, False, False],
+        ascending=[False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, True, False, False, True, False, False, False, False, False, False],
     ).reset_index(drop=True)
     return sortable.drop(columns=[
         "_lineup_sort",
@@ -2922,6 +2948,7 @@ def sort_for_hr(df: pd.DataFrame) -> pd.DataFrame:
         "_elite_hr_sort",
         "_pitcher_target_sort",
         "_matchup_adv_sort",
+        "_actual_hr_sort",
     ])
 
 
@@ -3268,11 +3295,46 @@ def get_boxscore_homers(game_pk: int):
             person = player_data.get("person", {})
             full_name = person.get("fullName")
             batting = player_data.get("stats", {}).get("batting", {})
-            hr_count = batting.get("homeRuns", 0)
+            hr_count = safe_int(batting.get("homeRuns", 0), 0)
             if full_name:
                 homer_map[full_name] = int(hr_count)
+                homer_map[normalize_name(full_name)] = int(hr_count)
 
     return homer_map
+
+
+def get_player_hr_count_from_map(homer_map: dict, player_name: str) -> int:
+    if not homer_map or not player_name:
+        return 0
+    if player_name in homer_map:
+        return safe_int(homer_map.get(player_name), 0)
+    norm = normalize_name(player_name)
+    if norm in homer_map:
+        return safe_int(homer_map.get(norm), 0)
+    for key, val in homer_map.items():
+        if normalize_name(key) == norm:
+            return safe_int(val, 0)
+    return 0
+
+
+def add_live_homer_counts_to_board(df: pd.DataFrame, schedule: list[dict]) -> pd.DataFrame:
+    if df.empty:
+        return df.copy()
+    out = df.copy()
+    out["Actual HR Today"] = 0
+    if "game_pk" not in out.columns or "Player" not in out.columns:
+        return out
+    for game in schedule:
+        game_pk = game.get("game_pk")
+        if game_pk is None:
+            continue
+        homer_map = get_boxscore_homers(game_pk)
+        mask = out["game_pk"] == game_pk
+        if mask.any():
+            out.loc[mask, "Actual HR Today"] = out.loc[mask, "Player"].apply(
+                lambda p: get_player_hr_count_from_map(homer_map, p)
+            )
+    return out
 
 
 def sync_tracker_with_board(tracked_df: pd.DataFrame):
@@ -3282,16 +3344,28 @@ def sync_tracker_with_board(tracked_df: pd.DataFrame):
     if tracked_df.empty:
         return tracker
 
-    existing_today = tracker[tracker["date"].astype(str) == date_key].copy()
+    if "hr_count" not in tracker.columns:
+        tracker["hr_count"] = 0
 
-    # Freeze the day's surfaced HR prediction pool once it has been created.
-    # This prevents the locked daily surfaced count from inflating later
-    # because of lineup changes, refreshes, or late board reshuffles.
-    if not existing_today.empty:
-        return tracker
+    existing_keys = set()
+    if not tracker.empty:
+        today_existing = tracker[tracker["date"].astype(str) == date_key].copy()
+        if not today_existing.empty:
+            existing_keys = set(zip(
+                today_existing["date"].astype(str),
+                today_existing["player"].astype(str),
+                today_existing["team"].astype(str),
+                today_existing["game"].astype(str),
+                today_existing["tracker_source"].astype(str),
+            ))
 
     new_rows = []
     for _, row in tracked_df.iterrows():
+        source = str(row.get("Tracker Source", "CORE_BOARD"))
+        key = (str(date_key), str(row["Player"]), str(row["Team"]), str(row["Game"]), source)
+        if key in existing_keys:
+            continue
+
         new_rows.append({
             "date": date_key,
             "player": row["Player"],
@@ -3301,8 +3375,9 @@ def sync_tracker_with_board(tracked_df: pd.DataFrame):
             "hr_probability": row["HR Probability %"],
             "hr_tier": row["HR Tier"],
             "hr_eligible": int(bool(row["HR Eligible"])),
-            "tracker_source": row.get("Tracker Source", "CORE_BOARD"),
+            "tracker_source": source,
             "result": pd.NA,
+            "hr_count": 0,
             "result_state": "PENDING",
             "game_state": row["game_state"],
             "updated_at": now_et_string(),
@@ -3320,6 +3395,9 @@ def auto_update_tracker_results(tracker: pd.DataFrame, schedule: list[dict]):
         return tracker
 
     tracker = tracker.copy()
+    if "hr_count" not in tracker.columns:
+        tracker["hr_count"] = 0
+
     date_key = today_str()
     today_mask = tracker["date"].astype(str) == date_key
 
@@ -3333,7 +3411,8 @@ def auto_update_tracker_results(tracker: pd.DataFrame, schedule: list[dict]):
             continue
 
         if game_state == "Preview":
-            tracker.loc[rows_mask, "result_state"] = "PREGAME"
+            unset_mask = rows_mask & tracker["result"].isna()
+            tracker.loc[unset_mask, "result_state"] = "PREGAME"
             tracker.loc[rows_mask, "game_state"] = detailed_state
             tracker.loc[rows_mask, "updated_at"] = now_et_string()
             continue
@@ -3342,11 +3421,12 @@ def auto_update_tracker_results(tracker: pd.DataFrame, schedule: list[dict]):
 
         for idx in tracker.index[rows_mask]:
             player = tracker.at[idx, "player"]
-            hr_count = int(homer_map.get(player, 0))
+            hr_count = get_player_hr_count_from_map(homer_map, player)
+            tracker.at[idx, "hr_count"] = int(hr_count)
 
             if hr_count > 0:
                 tracker.at[idx, "result"] = 1
-                tracker.at[idx, "result_state"] = "HOMERED"
+                tracker.at[idx, "result_state"] = "HOMERED" if hr_count == 1 else f"HOMERED_{hr_count}X"
             else:
                 if game_state == "Final":
                     tracker.at[idx, "result"] = 0
@@ -3519,7 +3599,7 @@ def auto_update_combo_tracker_results(combo_tracker: pd.DataFrame, schedule: lis
             matched = False
             for game in schedule:
                 if game["game_key"] == game_key:
-                    if int(homer_maps.get(game["game_pk"], {}).get(leg, 0)) > 0:
+                    if get_player_hr_count_from_map(homer_maps.get(game["game_pk"], {}), leg) > 0:
                         legs_hit += 1
                     matched = True
                     break
@@ -3580,6 +3660,40 @@ def summarize_tracker_sources(df: pd.DataFrame) -> dict:
     return buckets
 
 
+def summarize_tracker_sources_for_date(df: pd.DataFrame, date_key: str) -> dict:
+    buckets = {
+        "CORE_BOARD": {"total": 0, "hits": 0, "pct": 0.0, "misses": 0},
+        "TOP12": {"total": 0, "hits": 0, "pct": 0.0, "misses": 0},
+        "GAME_HR": {"total": 0, "hits": 0, "pct": 0.0, "misses": 0},
+    }
+    if df.empty:
+        return buckets
+
+    work = df.copy()
+    if "tracker_source" not in work.columns:
+        work["tracker_source"] = "CORE_BOARD"
+    if "hr_count" not in work.columns:
+        work["hr_count"] = pd.to_numeric(work.get("result", 0), errors="coerce").fillna(0)
+    work["tracker_source"] = work["tracker_source"].fillna("CORE_BOARD").astype(str)
+    work["result_num"] = pd.to_numeric(work["result"], errors="coerce").fillna(0).astype(int)
+    work["hr_count_num"] = pd.to_numeric(work["hr_count"], errors="coerce").fillna(0).astype(int)
+    day = work[work["date"].astype(str) == str(date_key)].copy()
+
+    for source in buckets:
+        sub = day[day["tracker_source"] == source].copy()
+        total = len(sub)
+        hits = int((sub["hr_count_num"] > 0).sum()) if total else 0
+        if hits == 0 and total:
+            hits = int(sub["result_num"].sum())
+        buckets[source] = {
+            "total": total,
+            "hits": hits,
+            "misses": max(total - hits, 0),
+            "pct": round((hits / total) * 100, 2) if total else 0.0,
+        }
+    return buckets
+
+
 def summarize_combo_tracker(df: pd.DataFrame) -> dict:
     summary = {
         "today_total": 0, "today_full_hits": 0, "today_partial_hits": 0,
@@ -3608,6 +3722,7 @@ with c1:
 
 live_df, schedule = build_daily_dataset()
 locked_df = ensure_daily_board_lock(live_df, schedule)
+locked_df = add_live_homer_counts_to_board(locked_df, schedule)
 
 lineup_mode = get_lineup_mode(schedule) if schedule else "PROJECTED"
 
@@ -3658,7 +3773,7 @@ with tabs[0]:
     st.dataframe(
         hr_df[[
             "Rank", "Player", "Team", "Game", "Pitcher", "Lineup Spot",
-            "Lineup Source", "HR Probability %", "HR Tier", "GroundBall%",
+            "Lineup Source", "Actual HR Today", "HR Probability %", "HR Tier", "GroundBall%",
             "GB Rule", "GB Note", "Matchup Advantage", "Pitcher Target Score", "WeatherNote", "BullpenFatigueNote", "HardHit%", "FlyBall%", "AIR%", "xSLG", "xwOBA", "Barrel%", "Ranking Reasons", "Why"
         ]],
         use_container_width=True,
@@ -3672,7 +3787,7 @@ with tabs[1]:
     st.dataframe(
         top12[[
             "Rank", "Player", "Team", "Game", "Pitcher", "Lineup Spot",
-            "Lineup Source", "HR Probability %", "HR Tier", "GroundBall%",
+            "Lineup Source", "Actual HR Today", "HR Probability %", "HR Tier", "GroundBall%",
             "GB Rule", "GB Note", "Matchup Advantage", "Pitcher Target Score", "WeatherNote", "BullpenFatigueNote", "HardHit%", "FlyBall%", "AIR%", "xSLG", "xwOBA", "Barrel%", "Ranking Reasons", "Why"
         ]],
         use_container_width=True,
@@ -3688,7 +3803,7 @@ with tabs[2]:
         "Matchup Advantage", "Matchup Advantage Score", "Pitcher Target Score", "Pitcher_HR9_Last7",
         "EV", "Barrel%", "HardHit%", "AIR%", "xSLG", "xwOBA",
         "Pitch Mix Mode", "Relevant Pitch Mix", "Primary Pitch Usage",
-        "HR Probability %", "HR Tier", "Ranking Reasons"
+        "Actual HR Today", "HR Probability %", "HR Tier", "Ranking Reasons"
     ]
     display_existing_columns(top_targets, target_cols)
 
@@ -3771,27 +3886,37 @@ with tabs[6]:
 
 with tabs[7]:
     st.subheader("Accuracy Tracker")
-    st.caption("Tracker is broken into separate sections so you can judge Core Board, Top 12, Per-Game HR, and Combos independently.")
+    st.caption("Tracker is broken into separate sections. Newly surfaced per-game picks are now added instead of being blocked after the first tracker write.")
 
-    st.markdown("### Today by Section")
+    date_options = available_tracker_dates(tracker)
+    selected_tracker_date = st.selectbox("Review slate date", options=date_options, index=0)
+
+    selected_source_summary = summarize_tracker_sources_for_date(tracker, selected_tracker_date)
+    selected_tracker = tracker[
+        tracker["date"].astype("string").fillna("") == str(selected_tracker_date)
+    ].copy()
+    if "hr_count" not in selected_tracker.columns:
+        selected_tracker["hr_count"] = pd.to_numeric(selected_tracker.get("result", 0), errors="coerce").fillna(0).astype(int)
+
+    st.markdown(f"### {selected_tracker_date} by Section")
     s1, s2, s3 = st.columns(3)
     with s1:
         st.markdown("**Core Board**")
-        st.metric("Surfaced", source_summary["CORE_BOARD"]["today_total"])
-        st.metric("HR Hit", source_summary["CORE_BOARD"]["today_hits"])
-        st.metric("Hit Rate %", source_summary["CORE_BOARD"]["today_pct"])
+        st.metric("Surfaced", selected_source_summary["CORE_BOARD"]["total"])
+        st.metric("HR Hit", selected_source_summary["CORE_BOARD"]["hits"])
+        st.metric("Hit Rate %", selected_source_summary["CORE_BOARD"]["pct"])
     with s2:
         st.markdown("**Top 12**")
-        st.metric("Surfaced", source_summary["TOP12"]["today_total"])
-        st.metric("HR Hit", source_summary["TOP12"]["today_hits"])
-        st.metric("Hit Rate %", source_summary["TOP12"]["today_pct"])
+        st.metric("Surfaced", selected_source_summary["TOP12"]["total"])
+        st.metric("HR Hit", selected_source_summary["TOP12"]["hits"])
+        st.metric("Hit Rate %", selected_source_summary["TOP12"]["pct"])
     with s3:
         st.markdown("**Per-Game HR**")
-        st.metric("Surfaced", source_summary["GAME_HR"]["today_total"])
-        st.metric("HR Hit", source_summary["GAME_HR"]["today_hits"])
-        st.metric("Hit Rate %", source_summary["GAME_HR"]["today_pct"])
+        st.metric("Surfaced", selected_source_summary["GAME_HR"]["total"])
+        st.metric("HR Hit", selected_source_summary["GAME_HR"]["hits"])
+        st.metric("Hit Rate %", selected_source_summary["GAME_HR"]["pct"])
 
-    st.markdown("### Combo Section")
+    st.markdown("### Today Combo Section")
     cx1, cx2, cx3 = st.columns(3)
     cx1.metric("Today Combos", combo_summary["today_total"])
     cx2.metric("Today Full Hits", combo_summary["today_full_hits"])
@@ -3799,103 +3924,68 @@ with tabs[7]:
 
     st.divider()
 
-    st.markdown("### All-Time by Section")
-    a1, a2, a3 = st.columns(3)
-    with a1:
-        st.markdown("**Core Board**")
-        st.metric("All Surfaced", source_summary["CORE_BOARD"]["all_total"])
-        st.metric("All HR Hit", source_summary["CORE_BOARD"]["all_hits"])
-        st.metric("All Hit Rate %", source_summary["CORE_BOARD"]["all_pct"])
-    with a2:
-        st.markdown("**Top 12**")
-        st.metric("All Surfaced", source_summary["TOP12"]["all_total"])
-        st.metric("All HR Hit", source_summary["TOP12"]["all_hits"])
-        st.metric("All Hit Rate %", source_summary["TOP12"]["all_pct"])
-    with a3:
-        st.markdown("**Per-Game HR**")
-        st.metric("All Surfaced", source_summary["GAME_HR"]["all_total"])
-        st.metric("All HR Hit", source_summary["GAME_HR"]["all_hits"])
-        st.metric("All Hit Rate %", source_summary["GAME_HR"]["all_pct"])
-
-    st.divider()
-
-    today_tracker = tracker[
-        tracker["date"].astype("string").fillna("") == str(today_str())
-    ].copy()
-
-    if not today_tracker.empty:
-        st.markdown("### Today's Split Tracker Tables")
+    if not selected_tracker.empty:
+        st.markdown("### Selected Date Split Tracker Tables")
         for section_name, source_key in [("Core Board", "CORE_BOARD"), ("Top 12", "TOP12"), ("Per-Game HR", "GAME_HR")]:
-            section_df = today_tracker[today_tracker["tracker_source"].astype(str) == source_key].copy()
+            section_df = selected_tracker[selected_tracker["tracker_source"].astype(str) == source_key].copy()
             st.markdown(f"**{section_name}**")
             if section_df.empty:
-                st.caption("No tracked rows in this section today.")
+                st.caption("No tracked rows in this section for selected date.")
             else:
+                section_df["hr_count"] = pd.to_numeric(section_df["hr_count"], errors="coerce").fillna(0).astype(int)
                 st.dataframe(
-                    section_df.sort_values(
-                        by=["hr_probability", "player"],
-                        ascending=[False, True]
+                    dedupe_columns(section_df.sort_values(
+                        by=["hr_count", "result", "hr_probability", "player"],
+                        ascending=[False, False, False, True]
                     )[[
-                        "player",
-                        "team",
-                        "game",
-                        "hr_probability",
-                        "hr_tier",
-                        "tracker_source",
-                        "hr_eligible",
-                        "result",
-                        "result_state",
-                        "game_state",
-                        "updated_at"
-                    ]],
+                        "player", "team", "game", "hr_probability", "hr_tier",
+                        "tracker_source", "hr_eligible", "result", "hr_count",
+                        "result_state", "game_state", "updated_at"
+                    ]]),
                     use_container_width=True,
                     hide_index=True
                 )
+    else:
+        st.caption("No tracker rows for selected date.")
+
+    selected_board_snapshot = load_daily_board_snapshot(selected_tracker_date)
+    if not selected_board_snapshot.empty:
+        st.divider()
+        st.markdown("### Saved Board Snapshot for Selected Date")
+        snapshot_cols = [
+            "Tracker Source", "Player", "Team", "Game", "Pitcher", "Lineup Spot",
+            "HR Probability %", "HR Tier", "Actual HR Today", "Matchup Advantage",
+            "Pitcher Target Score", "EV", "Barrel%", "HardHit%", "AIR%",
+            "Ranking Reasons", "Why"
+        ]
+        display_existing_columns(selected_board_snapshot, snapshot_cols)
+    else:
+        st.caption("No saved board snapshot found for selected date.")
 
     if not combo_tracker.empty:
         st.divider()
-        st.markdown("### Today's Combo Tracker")
-        today_combo = combo_tracker[
-            combo_tracker["date"].astype("string").fillna("") == str(today_str())
-        ].copy()
-        st.dataframe(
-            today_combo.sort_values(
-                by=["combo_size", "combined_score"],
-                ascending=[True, False]
-            )[[
-                "combo_label",
-                "combo_size",
-                "avg_leg_probability",
-                "combined_score",
-                "legs_hit",
-                "total_legs",
-                "result_state",
-                "updated_at"
-            ]],
-            use_container_width=True,
-            hide_index=True
-        )
+        st.markdown("### Combo Tracker")
+        combo_view = combo_tracker[combo_tracker["date"].astype("string").fillna("") == str(selected_tracker_date)].copy()
+        if combo_view.empty:
+            st.caption("No combos tracked for selected date.")
+        else:
+            st.dataframe(
+                dedupe_columns(combo_view.sort_values(
+                    by=["combo_size", "combined_score"],
+                    ascending=[True, False]
+                )[[
+                    "combo_label", "combo_size", "avg_leg_probability",
+                    "combined_score", "legs_hit", "total_legs",
+                    "result_state", "updated_at"
+                ]]),
+                use_container_width=True,
+                hide_index=True
+            )
 
     if not daily_summary.empty:
         st.divider()
         st.markdown("### Daily HR Prediction Accuracy History")
-        st.dataframe(
-            daily_summary,
-            use_container_width=True,
-            hide_index=True
-        )
-
-    if not combo_tracker.empty:
-        st.divider()
-        st.markdown("### Combo Tracker History")
-        st.dataframe(
-            dedupe_columns(combo_tracker.sort_values(
-                by=["date", "combo_size", "combined_score"],
-                ascending=[False, True, False]
-            )),
-            use_container_width=True,
-            hide_index=True
-        )
+        st.dataframe(dedupe_columns(daily_summary), use_container_width=True, hide_index=True)
 
 for idx, game in enumerate(schedule, start=8):
     with tabs[idx]:
@@ -3923,9 +4013,9 @@ for idx, game in enumerate(schedule, start=8):
                 st.dataframe(
                     team_hr[[
                         "Rank", "Player", "Lineup Spot", "Lineup Source", "Statcast Pass",
-                        "Strict Statcast", "Recent Form Pass", "Pitcher Attackable", "HR Probability %",
+                        "Strict Statcast", "Recent Form Pass", "Pitcher Attackable", "Actual HR Today", "HR Probability %",
                         "HR Tier", "GroundBall%", "GB Rule", "GB Note", "WeatherNote", "BullpenFatigueNote", "HardHit%", "FlyBall%",
-                        "AIR%", "xSLG", "xwOBA", "Barrel%", "Why"
+                        "AIR%", "xSLG", "xwOBA", "Barrel%", "Ranking Reasons", "Why"
                     ]],
                     use_container_width=True,
                     hide_index=True
@@ -3956,9 +4046,9 @@ for idx, game in enumerate(schedule, start=8):
                 st.dataframe(
                     team_hr[[
                         "Rank", "Player", "Lineup Spot", "Lineup Source", "Statcast Pass",
-                        "Strict Statcast", "Recent Form Pass", "Pitcher Attackable", "HR Probability %",
+                        "Strict Statcast", "Recent Form Pass", "Pitcher Attackable", "Actual HR Today", "HR Probability %",
                         "HR Tier", "GroundBall%", "GB Rule", "GB Note", "WeatherNote", "BullpenFatigueNote", "HardHit%", "FlyBall%",
-                        "AIR%", "xSLG", "xwOBA", "Barrel%", "Why"
+                        "AIR%", "xSLG", "xwOBA", "Barrel%", "Ranking Reasons", "Why"
                     ]],
                     use_container_width=True,
                     hide_index=True
