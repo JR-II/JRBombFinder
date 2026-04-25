@@ -42,11 +42,15 @@ def save_daily_tracker_snapshot(tracker_df: pd.DataFrame, snapshot_date: str):
 
 
 def save_daily_board_snapshot(board_df: pd.DataFrame, snapshot_date: str):
-    """Persist the surfaced HR board once per day so surfaced counts cannot be lost."""
+    """Persist the original surfaced HR board once per day so historical predictions cannot be rewritten."""
     ensure_snapshot_folder()
     board_path = os.path.join(SNAPSHOT_DIR, f"hr_board_{snapshot_date}.csv")
-    if not os.path.exists(board_path):
-        board_df.to_csv(board_path, index=False)
+    if os.path.exists(board_path):
+        return
+    clean_board = board_df.copy()
+    if "Actual HR Today" in clean_board.columns:
+        clean_board = clean_board.drop(columns=["Actual HR Today"])
+    clean_board.to_csv(board_path, index=False)
 
 
 def load_daily_board_snapshot(snapshot_date: str) -> pd.DataFrame:
@@ -749,6 +753,8 @@ def summarize_tracker(df: pd.DataFrame):
         work["tracker_source"] = "CORE_BOARD"
     work["tracker_source"] = work["tracker_source"].fillna("CORE_BOARD").astype(str)
     work["result_num"] = pd.to_numeric(work["result"], errors="coerce").fillna(0).astype(int)
+    if "hr_count" in work.columns:
+        work["result_num"] = (pd.to_numeric(work["hr_count"], errors="coerce").fillna(0).astype(int) > 0).astype(int)
 
     def _stats(sub: pd.DataFrame):
         total = len(sub)
@@ -2884,14 +2890,12 @@ def sort_for_hr(df: pd.DataFrame) -> pd.DataFrame:
     sortable["_trend_sort"] = sortable.get("Recent Trend", pd.Series(["NEUTRAL"] * len(sortable), index=sortable.index)).map({"HOT": 3, "LIVE": 2, "NEUTRAL": 1, "COLD": 0}).fillna(1)
     sortable["_hrr_sort"] = safe_numeric_series(sortable, "HRR Score", 0.0)
     sortable["_multi_pitch_sort"] = safe_numeric_series(sortable, "Multi Pitch Authority Score", 0.0)
-    sortable["_actual_hr_sort"] = safe_numeric_series(sortable, "Actual HR Today", 0.0)
     sortable["_elite_hr_sort"] = sortable.get("Elite HR Look", pd.Series(["No"] * len(sortable), index=sortable.index)).map({"Yes": 1, "No": 0}).fillna(0)
     sortable["_pitcher_target_sort"] = safe_numeric_series(sortable, "Pitcher Target Score", 0.0)
     sortable["_matchup_adv_sort"] = safe_numeric_series(sortable, "Matchup Advantage Score", 0.0)
 
     sortable = sortable.sort_values(
         by=[
-            "_actual_hr_sort",
             "_matchup_adv_sort",
             "_pitcher_target_sort",
             "_elite_hr_sort",
@@ -2919,7 +2923,7 @@ def sort_for_hr(df: pd.DataFrame) -> pd.DataFrame:
             "_trend_sort",
             "_hrr_sort",
         ],
-        ascending=[False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, True, False, False, True, False, False, False, False, False, False],
+        ascending=[False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, True, False, False, True, False, False, False, False, False, False],
     ).reset_index(drop=True)
     return sortable.drop(columns=[
         "_lineup_sort",
@@ -2948,7 +2952,6 @@ def sort_for_hr(df: pd.DataFrame) -> pd.DataFrame:
         "_elite_hr_sort",
         "_pitcher_target_sort",
         "_matchup_adv_sort",
-        "_actual_hr_sort",
     ])
 
 
@@ -3287,7 +3290,6 @@ def get_boxscore_homers(game_pk: int):
         return {}
 
     homer_map = {}
-
     for side in ["away", "home"]:
         team_data = data.get("teams", {}).get(side, {})
         players = team_data.get("players", {})
@@ -3297,18 +3299,18 @@ def get_boxscore_homers(game_pk: int):
             batting = player_data.get("stats", {}).get("batting", {})
             hr_count = safe_int(batting.get("homeRuns", 0), 0)
             if full_name:
-                homer_map[full_name] = int(hr_count)
+                homer_map[str(full_name)] = int(hr_count)
                 homer_map[normalize_name(full_name)] = int(hr_count)
-
     return homer_map
 
 
 def get_player_hr_count_from_map(homer_map: dict, player_name: str) -> int:
     if not homer_map or not player_name:
         return 0
-    if player_name in homer_map:
-        return safe_int(homer_map.get(player_name), 0)
-    norm = normalize_name(player_name)
+    raw = str(player_name)
+    if raw in homer_map:
+        return safe_int(homer_map.get(raw), 0)
+    norm = normalize_name(raw)
     if norm in homer_map:
         return safe_int(homer_map.get(norm), 0)
     for key, val in homer_map.items():
@@ -3318,6 +3320,7 @@ def get_player_hr_count_from_map(homer_map: dict, player_name: str) -> int:
 
 
 def add_live_homer_counts_to_board(df: pd.DataFrame, schedule: list[dict]) -> pd.DataFrame:
+    """Display-only result column. This must NEVER be used to rank or rewrite predictions."""
     if df.empty:
         return df.copy()
     out = df.copy()
@@ -3353,7 +3356,7 @@ def sync_tracker_with_board(tracked_df: pd.DataFrame):
         if not today_existing.empty:
             existing_keys = set(zip(
                 today_existing["date"].astype(str),
-                today_existing["player"].astype(str),
+                today_existing["player"].astype(str).map(normalize_name),
                 today_existing["team"].astype(str),
                 today_existing["game"].astype(str),
                 today_existing["tracker_source"].astype(str),
@@ -3362,13 +3365,14 @@ def sync_tracker_with_board(tracked_df: pd.DataFrame):
     new_rows = []
     for _, row in tracked_df.iterrows():
         source = str(row.get("Tracker Source", "CORE_BOARD"))
-        key = (str(date_key), str(row["Player"]), str(row["Team"]), str(row["Game"]), source)
+        player_name = str(row["Player"])
+        key = (str(date_key), normalize_name(player_name), str(row["Team"]), str(row["Game"]), source)
         if key in existing_keys:
             continue
 
         new_rows.append({
             "date": date_key,
-            "player": row["Player"],
+            "player": player_name,
             "team": row["Team"],
             "game": row["Game"],
             "game_pk": row["game_pk"],
@@ -3410,13 +3414,7 @@ def auto_update_tracker_results(tracker: pd.DataFrame, schedule: list[dict]):
         if not rows_mask.any():
             continue
 
-        if game_state == "Preview":
-            unset_mask = rows_mask & tracker["result"].isna()
-            tracker.loc[unset_mask, "result_state"] = "PREGAME"
-            tracker.loc[rows_mask, "game_state"] = detailed_state
-            tracker.loc[rows_mask, "updated_at"] = now_et_string()
-            continue
-
+        # Always read boxscore. Some MLB schedule states lag or stay weird while boxscore already has HR data.
         homer_map = get_boxscore_homers(game_pk)
 
         for idx in tracker.index[rows_mask]:
@@ -3428,7 +3426,10 @@ def auto_update_tracker_results(tracker: pd.DataFrame, schedule: list[dict]):
                 tracker.at[idx, "result"] = 1
                 tracker.at[idx, "result_state"] = "HOMERED" if hr_count == 1 else f"HOMERED_{hr_count}X"
             else:
-                if game_state == "Final":
+                if game_state == "Preview":
+                    if pd.isna(tracker.at[idx, "result"]):
+                        tracker.at[idx, "result_state"] = "PREGAME"
+                elif game_state == "Final":
                     tracker.at[idx, "result"] = 0
                     tracker.at[idx, "result_state"] = "FINAL_NO_HR"
                 else:
@@ -3538,13 +3539,17 @@ def sync_combo_tracker_with_board(combo_df: pd.DataFrame):
     if combo_df.empty:
         return tracker
 
-    existing_today = tracker[tracker["date"].astype(str) == date_key].copy()
-    if not existing_today.empty:
-        return tracker
+    existing_ids = set()
+    if not tracker.empty:
+        existing_today = tracker[tracker["date"].astype(str) == date_key].copy()
+        if not existing_today.empty and "combo_id" in existing_today.columns:
+            existing_ids = set(existing_today["combo_id"].astype(str).tolist())
 
     new_rows = []
     for _, row in combo_df.iterrows():
         combo_id = f"{date_key}-{row['Combo Type']}-{int(row['Combo #'])}"
+        if combo_id in existing_ids:
+            continue
         legs = str(row["Players"]).split(" | ")
         new_rows.append({
             "date": date_key,
@@ -3721,21 +3726,26 @@ with c1:
 
 
 live_df, schedule = build_daily_dataset()
-locked_df = ensure_daily_board_lock(live_df, schedule)
-locked_df = add_live_homer_counts_to_board(locked_df, schedule)
+locked_df_raw = ensure_daily_board_lock(live_df, schedule)
 
 lineup_mode = get_lineup_mode(schedule) if schedule else "PROJECTED"
 
-tracked_df = build_visible_tracker_pool(locked_df, schedule)
-tracker = sync_tracker_with_board(tracked_df)
-combo_board = build_combo_board(locked_df)
-combo_tracker = sync_combo_tracker_with_board(combo_board)
+# Build and save the prediction/tracker pool BEFORE adding live results.
+# This prevents post-HR result data from rewriting the prediction board.
+tracked_df = build_visible_tracker_pool(locked_df_raw, schedule)
 save_daily_board_snapshot(tracked_df, today_str())
 
-if st.session_state.get("force_tracker_refresh", False) or st.session_state.get("manual_refresh_trigger", False):
-    tracker = auto_update_tracker_results(tracker, schedule)
-    combo_tracker = auto_update_combo_tracker_results(combo_tracker, schedule)
-    st.session_state.manual_refresh_trigger = False
+tracker = sync_tracker_with_board(tracked_df)
+combo_board = build_combo_board(locked_df_raw)
+combo_tracker = sync_combo_tracker_with_board(combo_board)
+
+# Always update results every run. Refresh/update should not be required for HR counts to move off zero.
+tracker = auto_update_tracker_results(tracker, schedule)
+combo_tracker = auto_update_combo_tracker_results(combo_tracker, schedule)
+st.session_state.manual_refresh_trigger = False
+
+# Display-only live result column.
+locked_df = add_live_homer_counts_to_board(locked_df_raw, schedule)
 
 save_daily_tracker_snapshot(tracker, today_str())
 
@@ -3768,7 +3778,7 @@ tabs = st.tabs(base_tabs + game_tabs)
 
 with tabs[0]:
     st.subheader("HR Probability Board")
-    st.caption("Projected teams stay live. Confirmed teams freeze once lineups lock.")
+    st.caption("Projected teams stay live. Confirmed teams freeze once lineups lock. Actual HR Today is display-only and does not change rankings.")
     hr_df = get_strict_hr_pool(locked_df)
     st.dataframe(
         hr_df[[
@@ -3782,7 +3792,7 @@ with tabs[0]:
 
 with tabs[1]:
     st.subheader("Top 12 HR Candidates")
-    st.caption("Confirmed teams freeze once lineups lock. Projected teams can still update.")
+    st.caption("Confirmed teams freeze once lineups lock. Projected teams can still update. Actual HR Today is display-only and does not change rankings.")
     top12 = get_top12_hybrid(locked_df)
     st.dataframe(
         top12[[
