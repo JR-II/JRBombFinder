@@ -14,216 +14,106 @@ st.set_page_config(page_title="BF Data", layout="wide")
 st.markdown("""
 <style>
 :root {
-    --bf-bg: #070707;
-    --bf-card: #111111;
-    --bf-card-2: #171717;
-    --bf-gold: #f5c542;
-    --bf-gold-soft: rgba(245, 197, 66, 0.16);
-    --bf-border: rgba(245, 197, 66, 0.22);
+    --bf-bg: #06080c;
+    --bf-panel: #10151c;
+    --bf-panel-2: #151b24;
+    --bf-blue: #9fdcff;
+    --bf-blue-deep: #3e8db8;
+    --bf-blue-soft: rgba(159, 220, 255, 0.14);
+    --bf-border: rgba(159, 220, 255, 0.24);
     --bf-text: #f7f7f7;
-    --bf-muted: #a7a7a7;
-    --bf-red: #ff4d4d;
+    --bf-muted: #a7b0ba;
+    --bf-red: #ff5d5d;
+    --bf-yellow: #ffd166;
     --bf-green: #3ee281;
 }
 .stApp {
     background:
-        radial-gradient(circle at 12% 0%, rgba(245, 197, 66, 0.12), transparent 28%),
-        radial-gradient(circle at 88% 8%, rgba(255, 255, 255, 0.05), transparent 24%),
-        linear-gradient(180deg, #060606 0%, #0b0b0b 100%);
+        radial-gradient(circle at 12% 0%, rgba(159, 220, 255, 0.11), transparent 28%),
+        radial-gradient(circle at 88% 8%, rgba(62, 226, 129, 0.035), transparent 24%),
+        linear-gradient(180deg, #05070a 0%, #090d12 100%);
     color: var(--bf-text);
 }
 .block-container {
-    padding-top: 1.2rem;
-    padding-bottom: 3rem;
-    max-width: 1500px;
+    padding-top: .85rem;
+    padding-bottom: 2rem;
+    max-width: 1560px;
 }
 [data-testid="stMetric"] {
-    background: linear-gradient(145deg, rgba(245,197,66,.12), rgba(255,255,255,.035));
+    background: linear-gradient(145deg, rgba(159,220,255,.10), rgba(255,255,255,.028));
     border: 1px solid var(--bf-border);
-    border-radius: 18px;
-    padding: 14px 16px;
-    box-shadow: 0 12px 28px rgba(0,0,0,.22);
+    border-radius: 14px;
+    padding: 8px 10px;
+    box-shadow: 0 8px 20px rgba(0,0,0,.20);
 }
 [data-testid="stMetricLabel"] p {
     color: var(--bf-muted) !important;
+    font-size: .78rem !important;
 }
 [data-testid="stMetricValue"] {
     color: #fff !important;
-    font-weight: 800;
+    font-size: 1.15rem !important;
+    font-weight: 850;
 }
-.stTabs [data-baseweb="tab-list"] {
-    gap: 8px;
-}
+.stTabs [data-baseweb="tab-list"] { gap: 6px; }
 .stTabs [data-baseweb="tab"] {
-    background: #111;
+    background: #10151c;
     border: 1px solid rgba(255,255,255,.08);
     border-radius: 999px;
-    padding: 10px 16px;
+    padding: 7px 11px;
 }
 .stTabs [aria-selected="true"] {
-    background: linear-gradient(135deg, #f5c542, #8f6b10) !important;
-    color: #050505 !important;
-    font-weight: 800;
+    background: linear-gradient(135deg, #9fdcff, #3e8db8) !important;
+    color: #05070a !important;
+    font-weight: 850;
 }
 .bf-hero {
     border: 1px solid var(--bf-border);
-    border-radius: 26px;
-    padding: 24px 26px;
-    margin-bottom: 18px;
+    border-radius: 20px;
+    padding: 16px 18px;
+    margin-bottom: 12px;
     background:
-      linear-gradient(135deg, rgba(245,197,66,.16), rgba(255,255,255,.035)),
-      linear-gradient(180deg, rgba(255,255,255,.04), rgba(0,0,0,.12));
-    box-shadow: 0 18px 48px rgba(0,0,0,.35);
+      linear-gradient(135deg, rgba(159,220,255,.14), rgba(255,255,255,.025)),
+      linear-gradient(180deg, rgba(255,255,255,.035), rgba(0,0,0,.10));
+    box-shadow: 0 14px 34px rgba(0,0,0,.30);
 }
 .bf-kicker {
-    color: var(--bf-gold);
-    font-size: .82rem;
-    font-weight: 800;
-    letter-spacing: .18em;
+    color: var(--bf-blue);
+    font-size: .74rem;
+    font-weight: 850;
+    letter-spacing: .16em;
     text-transform: uppercase;
 }
 .bf-title {
-    font-size: clamp(2.0rem, 4vw, 4.2rem);
+    font-size: clamp(1.55rem, 3.2vw, 3.2rem);
     font-weight: 950;
     line-height: 1;
-    margin: 8px 0 8px 0;
+    margin: 6px 0 6px 0;
 }
 .bf-subtitle {
     color: var(--bf-muted);
-    font-size: 1.02rem;
+    font-size: .92rem;
     max-width: 900px;
 }
-.bf-card {
-    border: 1px solid var(--bf-border);
-    border-radius: 22px;
-    background:
-      linear-gradient(145deg, rgba(245,197,66,.10), rgba(255,255,255,.035)),
-      #101010;
-    padding: 17px 18px;
-    margin: 0 0 16px 0;
-    min-height: 360px;
-    box-shadow: 0 14px 36px rgba(0,0,0,.28);
-}
-.bf-card-hit {
-    border-color: rgba(62,226,129,.62);
-    box-shadow: 0 0 0 1px rgba(62,226,129,.25), 0 14px 38px rgba(0,0,0,.35);
-}
-.bf-card-head {
-    display:flex;
-    justify-content:space-between;
-    gap:12px;
-    align-items:flex-start;
-    margin-bottom: 8px;
-}
-.bf-rank {
-    color:#050505;
-    background: linear-gradient(135deg, #f5c542, #ffe38a);
-    border-radius: 999px;
-    font-weight: 950;
-    padding: 6px 10px;
-    min-width: 42px;
-    text-align:center;
-}
-.bf-player {
-    font-size:1.28rem;
-    font-weight: 950;
-    color: #fff;
-    line-height: 1.08;
-}
-.bf-meta {
-    color: var(--bf-muted);
-    font-size:.88rem;
-    margin-top:4px;
-}
-.bf-pillrow {
-    display:flex;
-    flex-wrap:wrap;
-    gap:7px;
-    margin: 10px 0 12px 0;
-}
-.bf-pill {
-    border: 1px solid rgba(255,255,255,.10);
-    background: rgba(255,255,255,.055);
-    color:#eaeaea;
-    border-radius:999px;
-    padding:5px 9px;
-    font-size:.78rem;
-    font-weight:700;
-}
-.bf-pill-gold {
-    color:#050505;
-    background: linear-gradient(135deg, #f5c542, #ffe18a);
-}
-.bf-pill-red {
-    border-color: rgba(255,77,77,.42);
-    color: #ff9b9b;
-    background: rgba(255,77,77,.08);
-}
-.bf-pill-green {
-    border-color: rgba(62,226,129,.42);
-    color: #a9ffc9;
-    background: rgba(62,226,129,.08);
-}
-.bf-bars {
-    display:flex;
-    flex-direction:column;
-    gap:8px;
-    margin: 12px 0;
-}
-.bf-bar-label {
-    display:flex;
-    justify-content:space-between;
-    color:#e7e7e7;
-    font-size:.78rem;
-    font-weight:800;
-    margin-bottom:4px;
-}
-.bf-track {
-    height: 9px;
-    border-radius: 999px;
-    overflow:hidden;
-    background: rgba(255,255,255,.09);
-    border: 1px solid rgba(255,255,255,.06);
-}
-.bf-fill {
-    height: 100%;
-    border-radius: 999px;
-    background: linear-gradient(90deg, #6c6c6c, #f5c542);
-}
-.bf-fill-green {
-    background: linear-gradient(90deg, #275b3b, #3ee281);
-}
-.bf-fill-red {
-    background: linear-gradient(90deg, #5d2424, #ff4d4d);
-}
-.bf-why {
-    border-top:1px solid rgba(255,255,255,.08);
-    margin-top: 12px;
-    padding-top: 11px;
-    color:#d8d8d8;
-    font-size:.86rem;
-    line-height:1.38;
-}
-.bf-label {
-    color: var(--bf-gold);
-    font-weight: 900;
-}
-.bf-small {
-    color: var(--bf-muted);
-    font-size:.78rem;
-    margin-top: 6px;
-}
 div[data-testid="stDataFrame"] {
-    border: 1px solid rgba(245,197,66,.18);
-    border-radius: 18px;
+    border: 1px solid rgba(159,220,255,.16);
+    border-radius: 14px;
     overflow:hidden;
+}
+div[data-testid="stExpander"] {
+    background: rgba(255,255,255,.018);
+    border-radius: 12px;
+}
+hr {
+    margin-top: .45rem !important;
+    margin-bottom: .45rem !important;
 }
 </style>
 <div class="bf-hero">
     <div class="bf-kicker">BF DATA PRO LAB</div>
     <div class="bf-title">Daily Home Run Probability Engine</div>
     <div class="bf-subtitle">
-        Locked projection boards, matchup-driven hitter cards, pitcher vulnerability, weather/park context,
+        Dark slate, compact player cards, colored risk signals, matchup context,
         and transparent tracking built around the actual surfaced picks.
     </div>
 </div>
@@ -3942,7 +3832,10 @@ def _display_value(value, default="—"):
         pass
     if value is None:
         return default
-    return str(value)
+    txt = str(value)
+    txt = re.sub(r"<[^>]+>", "", txt)
+    txt = txt.replace("[", "(").replace("]", ")")
+    return txt.strip() if txt.strip() else default
 
 
 def _pct_width(value, max_value):
@@ -3959,28 +3852,95 @@ def _pct_width(value, max_value):
     return max(0, min(100, (val / max_val) * 100))
 
 
-def render_bar(label: str, value, max_value: float = 100.0, suffix: str = "", fill_class: str = "") -> str:
+def _signal_from_value(value, good_at, warn_at=None, lower_is_better=False):
     val = safe_float(value, 0.0)
-    width = _pct_width(val, max_value)
-    fill = f"bf-fill {fill_class}".strip()
-    pretty = f"{val:.1f}{suffix}" if isinstance(val, float) else f"{val}{suffix}"
-    return f"""
-    <div>
-        <div class="bf-bar-label"><span>{escape(str(label))}</span><span>{escape(pretty)}</span></div>
-        <div class="bf-track"><div class="{fill}" style="width:{width:.1f}%"></div></div>
-    </div>
-    """
+    if warn_at is None:
+        warn_at = good_at * 0.65
+
+    if lower_is_better:
+        if val <= good_at:
+            return "🟢", "green"
+        if val <= warn_at:
+            return "🟡", "orange"
+        return "🔴", "red"
+
+    if val >= good_at:
+        return "🟢", "green"
+    if val >= warn_at:
+        return "🟡", "orange"
+    return "🔴", "red"
 
 
-def render_player_card(row: pd.Series, rank_override=None) -> str:
+def _color_text(text, color="blue"):
+    safe = _display_value(text)
+    allowed = {"blue", "green", "orange", "red", "gray"}
+    color = color if color in allowed else "blue"
+    return f":{color}[{safe}]"
+
+
+def _tier_color(tier: str):
+    tier = str(tier).upper()
+    if tier in {"CORE TARGET", "STRONG LOOK"}:
+        return "blue"
+    if tier == "SLEEPER":
+        return "orange"
+    return "gray"
+
+
+def _matchup_color(matchup: str):
+    matchup = str(matchup).upper()
+    if matchup == "HIGH":
+        return "green"
+    if matchup == "MED":
+        return "orange"
+    return "red"
+
+
+def _gb_color(ground_ball: float):
+    if ground_ball >= 50:
+        return "red"
+    if ground_ball >= 45:
+        return "orange"
+    return "green"
+
+
+def _native_bar(label: str, value, max_value: float = 100.0, suffix: str = "", good_at: float | None = None, warn_at: float | None = None, lower_is_better: bool = False):
+    val = safe_float(value, 0.0)
+    pct = int(round(_pct_width(val, max_value)))
+    if good_at is None:
+        good_at = max_value * 0.67
+    if warn_at is None:
+        warn_at = max_value * 0.42
+    signal, color = _signal_from_value(val, good_at=good_at, warn_at=warn_at, lower_is_better=lower_is_better)
+    st.markdown(f"{signal} **{label}:** :{color}[{val:.1f}{suffix}]")
+    st.progress(pct)
+
+
+def render_bar(label: str, value, max_value: float = 100.0, suffix: str = "", fill_class: str = "") -> str:
+    """Legacy-safe helper kept for compatibility. Card rendering is native Streamlit now."""
+    val = safe_float(value, 0.0)
+    return f"{label}: {val:.1f}{suffix}"
+
+
+def render_player_card(row: pd.Series, rank_override=None):
+    """Compact Streamlit-native card. No raw card HTML is returned or printed."""
     rank = rank_override if rank_override is not None else row.get("Rank", "—")
-    player = escape(_display_value(row.get("Player")))
-    team = escape(_display_value(row.get("Team")))
-    game = escape(_display_value(row.get("Game")))
-    pitcher = escape(_display_value(row.get("Pitcher")))
-    tier = escape(_display_value(row.get("HR Tier")))
-    lineup = escape(_display_value(row.get("Lineup Spot")))
-    lineup_source = escape(_display_value(row.get("Lineup Source")))
+    player = _display_value(row.get("Player"))
+    team = _display_value(row.get("Team"))
+    game = _display_value(row.get("Game"))
+    pitcher = _display_value(row.get("Pitcher"))
+    tier = _display_value(row.get("HR Tier"))
+    lineup = _display_value(row.get("Lineup Spot"))
+    lineup_source = _display_value(row.get("Lineup Source"))
+    matchup = _display_value(row.get("Matchup Advantage"))
+    gb_rule = _display_value(row.get("GB Rule"))
+    recent = _display_value(row.get("Recent Trend"))
+    weather = _display_value(row.get("WeatherNote"))
+    pitch_mix = _display_value(row.get("Relevant Pitch Mix"))
+    pitch_mode = _display_value(row.get("Pitch Mix Mode"))
+    why = _display_value(row.get("Ranking Reasons", row.get("Why", "")))
+    why2 = _display_value(row.get("Why", ""))
+
     hr_prob = safe_float(row.get("HR Probability %"), 0.0)
     matchup_score = safe_float(row.get("Matchup Advantage Score"), 0.0)
     pitcher_target = safe_float(row.get("Pitcher Target Score"), 0.0)
@@ -3991,62 +3951,50 @@ def render_player_card(row: pd.Series, rank_override=None) -> str:
     ground_ball = safe_float(row.get("GroundBall%"), 0.0)
     xslg = safe_float(row.get("xSLG"), 0.0)
     actual_hr = safe_int(row.get("Actual HR Today"), 0)
-    gb_rule = escape(_display_value(row.get("GB Rule")))
-    recent = escape(_display_value(row.get("Recent Trend")))
-    matchup = escape(_display_value(row.get("Matchup Advantage")))
-    weather = escape(_display_value(row.get("WeatherNote")))
-    pitch_mix = escape(_display_value(row.get("Relevant Pitch Mix")))
-    pitch_mode = escape(_display_value(row.get("Pitch Mix Mode")))
-    why = escape(_display_value(row.get("Ranking Reasons", row.get("Why", ""))))
-    why2 = escape(_display_value(row.get("Why", "")))
-    hit_class = " bf-card-hit" if actual_hr > 0 else ""
 
-    gb_pill_class = "bf-pill-red" if ground_ball >= 50 else ("bf-pill-green" if ground_ball < 45 else "")
-    hit_pill = '<span class="bf-pill bf-pill-green">✅ HR HIT TODAY</span>' if actual_hr > 0 else ''
-    tier_pill_class = "bf-pill-gold" if tier in ["CORE TARGET", "STRONG LOOK"] else ""
+    tier_md = _color_text(tier, _tier_color(tier))
+    matchup_md = _color_text(matchup, _matchup_color(matchup))
+    gb_md = _color_text(gb_rule, _gb_color(ground_ball))
 
-    card = f"""
-    <div class="bf-card{hit_class}">
-        <div class="bf-card-head">
-            <div>
-                <div class="bf-player">{player}</div>
-                <div class="bf-meta">{team} • {game}<br/>vs {pitcher}</div>
-            </div>
-            <div class="bf-rank">#{escape(str(rank))}</div>
-        </div>
+    st.markdown(f"**#{rank} {player}**  \n`{team}` • {game}")
+    st.caption(f"vs {pitcher}")
 
-        <div class="bf-pillrow">
-            <span class="bf-pill {tier_pill_class}">{tier}</span>
-            <span class="bf-pill">LU {lineup}</span>
-            <span class="bf-pill">{lineup_source}</span>
-            <span class="bf-pill">{matchup}</span>
-            <span class="bf-pill {gb_pill_class}">{gb_rule}</span>
-            {hit_pill}
-        </div>
+    st.markdown(
+        f"{tier_md} · LU `{lineup}` · `{lineup_source}` · Matchup {matchup_md} · GB {gb_md}"
+    )
 
-        <div class="bf-bars">
-            {render_bar("HR Probability", hr_prob, 28, "%", "bf-fill-green" if hr_prob >= 14 else "")}
-            {render_bar("Matchup Score", matchup_score, 75, "")}
-            {render_bar("Pitcher Target", pitcher_target, 45, "")}
-            {render_bar("Statcast Authority", authority_score, 55, "")}
-            {render_bar("Barrel", barrel, 20, "%")}
-            {render_bar("Hard Hit", hard_hit, 60, "%")}
-            {render_bar("Air Ball", air_pct, 75, "%")}
-            {render_bar("Ground Ball Risk", ground_ball, 60, "%", "bf-fill-red" if ground_ball >= 50 else "")}
-        </div>
+    hr_signal, hr_color = _signal_from_value(hr_prob, good_at=14, warn_at=9)
+    matchup_signal, matchup_color = _signal_from_value(matchup_score, good_at=55, warn_at=38)
+    pitcher_signal, pitcher_color = _signal_from_value(pitcher_target, good_at=28, warn_at=16)
+    authority_signal, authority_color = _signal_from_value(authority_score, good_at=30, warn_at=17)
 
-        <div class="bf-small">
-            <span class="bf-label">Pitch Mix:</span> {pitch_mode} • {pitch_mix}
-            &nbsp; | &nbsp; <span class="bf-label">xSLG:</span> {xslg:.3f}
-            &nbsp; | &nbsp; <span class="bf-label">Trend:</span> {recent}
-            <br/><span class="bf-label">Weather:</span> {weather}
-        </div>
+    st.markdown(
+        f"{hr_signal} HR :{hr_color}[{hr_prob:.1f}%]  ·  "
+        f"{matchup_signal} Matchup :{matchup_color}[{matchup_score:.1f}]  ·  "
+        f"{pitcher_signal} Pitcher :{pitcher_color}[{pitcher_target:.1f}]  ·  "
+        f"{authority_signal} Auth :{authority_color}[{authority_score:.1f}]"
+    )
 
-        <div class="bf-why"><span class="bf-label">Why:</span> {why}</div>
-        <div class="bf-small">{why2}</div>
-    </div>
-    """
-    return card
+    if actual_hr > 0:
+        st.success(f"✅ HR HIT TODAY: {actual_hr}")
+
+    with st.expander("Bars + matchup details", expanded=False):
+        _native_bar("HR Probability", hr_prob, 28, "%", good_at=14, warn_at=9)
+        _native_bar("Matchup Score", matchup_score, 75, good_at=55, warn_at=38)
+        _native_bar("Pitcher Target", pitcher_target, 45, good_at=28, warn_at=16)
+        _native_bar("Statcast Authority", authority_score, 55, good_at=30, warn_at=17)
+        _native_bar("Barrel", barrel, 20, "%", good_at=11, warn_at=8)
+        _native_bar("Hard Hit", hard_hit, 60, "%", good_at=42, warn_at=35)
+        _native_bar("Air Ball", air_pct, 75, "%", good_at=55, warn_at=48)
+        _native_bar("Ground Ball Risk", ground_ball, 60, "%", good_at=44, warn_at=50, lower_is_better=True)
+
+        st.caption(f"Pitch Mix: {pitch_mode} • {pitch_mix} | xSLG: {xslg:.3f} | Trend: {recent}")
+        st.caption(f"Weather: {weather}")
+        st.write(f"Why: {why}")
+        if why2 and why2 != why:
+            st.caption(why2)
+
+    st.divider()
 
 
 def render_card_grid(df: pd.DataFrame, max_cards: int = 24, columns: int = 3, title: str | None = None):
@@ -4058,11 +4006,21 @@ def render_card_grid(df: pd.DataFrame, max_cards: int = 24, columns: int = 3, ti
     if title:
         st.markdown(f"### {title}")
 
+    try:
+        columns = int(columns)
+    except Exception:
+        columns = 3
+
+    # Use denser desktop layout for slate boards, but keep per-game team sections single-column when requested.
+    if columns >= 3:
+        columns = 4
+    columns = max(1, min(columns, 4))
+
     col_objs = st.columns(columns)
     for i, (_, row) in enumerate(view.iterrows()):
         rank = row.get("Rank", i + 1)
         with col_objs[i % columns]:
-            st.markdown(render_player_card(row, rank_override=rank), unsafe_allow_html=True)
+            render_player_card(row, rank_override=rank)
 
 
 
