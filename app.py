@@ -1,6 +1,7 @@
 import hashlib
 import os
 import re
+from html import escape
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -10,8 +11,224 @@ import streamlit as st
 import time 
 st.set_page_config(page_title="BF Data", layout="wide")
 
-st.title("BF Data")
-st.caption("Daily Home Run Probability Engine")
+st.markdown("""
+<style>
+:root {
+    --bf-bg: #070707;
+    --bf-card: #111111;
+    --bf-card-2: #171717;
+    --bf-gold: #f5c542;
+    --bf-gold-soft: rgba(245, 197, 66, 0.16);
+    --bf-border: rgba(245, 197, 66, 0.22);
+    --bf-text: #f7f7f7;
+    --bf-muted: #a7a7a7;
+    --bf-red: #ff4d4d;
+    --bf-green: #3ee281;
+}
+.stApp {
+    background:
+        radial-gradient(circle at 12% 0%, rgba(245, 197, 66, 0.12), transparent 28%),
+        radial-gradient(circle at 88% 8%, rgba(255, 255, 255, 0.05), transparent 24%),
+        linear-gradient(180deg, #060606 0%, #0b0b0b 100%);
+    color: var(--bf-text);
+}
+.block-container {
+    padding-top: 1.2rem;
+    padding-bottom: 3rem;
+    max-width: 1500px;
+}
+[data-testid="stMetric"] {
+    background: linear-gradient(145deg, rgba(245,197,66,.12), rgba(255,255,255,.035));
+    border: 1px solid var(--bf-border);
+    border-radius: 18px;
+    padding: 14px 16px;
+    box-shadow: 0 12px 28px rgba(0,0,0,.22);
+}
+[data-testid="stMetricLabel"] p {
+    color: var(--bf-muted) !important;
+}
+[data-testid="stMetricValue"] {
+    color: #fff !important;
+    font-weight: 800;
+}
+.stTabs [data-baseweb="tab-list"] {
+    gap: 8px;
+}
+.stTabs [data-baseweb="tab"] {
+    background: #111;
+    border: 1px solid rgba(255,255,255,.08);
+    border-radius: 999px;
+    padding: 10px 16px;
+}
+.stTabs [aria-selected="true"] {
+    background: linear-gradient(135deg, #f5c542, #8f6b10) !important;
+    color: #050505 !important;
+    font-weight: 800;
+}
+.bf-hero {
+    border: 1px solid var(--bf-border);
+    border-radius: 26px;
+    padding: 24px 26px;
+    margin-bottom: 18px;
+    background:
+      linear-gradient(135deg, rgba(245,197,66,.16), rgba(255,255,255,.035)),
+      linear-gradient(180deg, rgba(255,255,255,.04), rgba(0,0,0,.12));
+    box-shadow: 0 18px 48px rgba(0,0,0,.35);
+}
+.bf-kicker {
+    color: var(--bf-gold);
+    font-size: .82rem;
+    font-weight: 800;
+    letter-spacing: .18em;
+    text-transform: uppercase;
+}
+.bf-title {
+    font-size: clamp(2.0rem, 4vw, 4.2rem);
+    font-weight: 950;
+    line-height: 1;
+    margin: 8px 0 8px 0;
+}
+.bf-subtitle {
+    color: var(--bf-muted);
+    font-size: 1.02rem;
+    max-width: 900px;
+}
+.bf-card {
+    border: 1px solid var(--bf-border);
+    border-radius: 22px;
+    background:
+      linear-gradient(145deg, rgba(245,197,66,.10), rgba(255,255,255,.035)),
+      #101010;
+    padding: 17px 18px;
+    margin: 0 0 16px 0;
+    min-height: 360px;
+    box-shadow: 0 14px 36px rgba(0,0,0,.28);
+}
+.bf-card-hit {
+    border-color: rgba(62,226,129,.62);
+    box-shadow: 0 0 0 1px rgba(62,226,129,.25), 0 14px 38px rgba(0,0,0,.35);
+}
+.bf-card-head {
+    display:flex;
+    justify-content:space-between;
+    gap:12px;
+    align-items:flex-start;
+    margin-bottom: 8px;
+}
+.bf-rank {
+    color:#050505;
+    background: linear-gradient(135deg, #f5c542, #ffe38a);
+    border-radius: 999px;
+    font-weight: 950;
+    padding: 6px 10px;
+    min-width: 42px;
+    text-align:center;
+}
+.bf-player {
+    font-size:1.28rem;
+    font-weight: 950;
+    color: #fff;
+    line-height: 1.08;
+}
+.bf-meta {
+    color: var(--bf-muted);
+    font-size:.88rem;
+    margin-top:4px;
+}
+.bf-pillrow {
+    display:flex;
+    flex-wrap:wrap;
+    gap:7px;
+    margin: 10px 0 12px 0;
+}
+.bf-pill {
+    border: 1px solid rgba(255,255,255,.10);
+    background: rgba(255,255,255,.055);
+    color:#eaeaea;
+    border-radius:999px;
+    padding:5px 9px;
+    font-size:.78rem;
+    font-weight:700;
+}
+.bf-pill-gold {
+    color:#050505;
+    background: linear-gradient(135deg, #f5c542, #ffe18a);
+}
+.bf-pill-red {
+    border-color: rgba(255,77,77,.42);
+    color: #ff9b9b;
+    background: rgba(255,77,77,.08);
+}
+.bf-pill-green {
+    border-color: rgba(62,226,129,.42);
+    color: #a9ffc9;
+    background: rgba(62,226,129,.08);
+}
+.bf-bars {
+    display:flex;
+    flex-direction:column;
+    gap:8px;
+    margin: 12px 0;
+}
+.bf-bar-label {
+    display:flex;
+    justify-content:space-between;
+    color:#e7e7e7;
+    font-size:.78rem;
+    font-weight:800;
+    margin-bottom:4px;
+}
+.bf-track {
+    height: 9px;
+    border-radius: 999px;
+    overflow:hidden;
+    background: rgba(255,255,255,.09);
+    border: 1px solid rgba(255,255,255,.06);
+}
+.bf-fill {
+    height: 100%;
+    border-radius: 999px;
+    background: linear-gradient(90deg, #6c6c6c, #f5c542);
+}
+.bf-fill-green {
+    background: linear-gradient(90deg, #275b3b, #3ee281);
+}
+.bf-fill-red {
+    background: linear-gradient(90deg, #5d2424, #ff4d4d);
+}
+.bf-why {
+    border-top:1px solid rgba(255,255,255,.08);
+    margin-top: 12px;
+    padding-top: 11px;
+    color:#d8d8d8;
+    font-size:.86rem;
+    line-height:1.38;
+}
+.bf-label {
+    color: var(--bf-gold);
+    font-weight: 900;
+}
+.bf-small {
+    color: var(--bf-muted);
+    font-size:.78rem;
+    margin-top: 6px;
+}
+div[data-testid="stDataFrame"] {
+    border: 1px solid rgba(245,197,66,.18);
+    border-radius: 18px;
+    overflow:hidden;
+}
+</style>
+<div class="bf-hero">
+    <div class="bf-kicker">BF DATA PRO LAB</div>
+    <div class="bf-title">Daily Home Run Probability Engine</div>
+    <div class="bf-subtitle">
+        Locked projection boards, matchup-driven hitter cards, pitcher vulnerability, weather/park context,
+        and transparent tracking built around the actual surfaced picks.
+    </div>
+</div>
+""", unsafe_allow_html=True)
+
 AUTO_REFRESH_SECONDS = 120
 
 if "last_refresh_time" not in st.session_state:
@@ -3717,6 +3934,138 @@ def summarize_combo_tracker(df: pd.DataFrame) -> dict:
     return summary
 
 
+def _display_value(value, default="—"):
+    try:
+        if pd.isna(value):
+            return default
+    except Exception:
+        pass
+    if value is None:
+        return default
+    return str(value)
+
+
+def _pct_width(value, max_value):
+    try:
+        val = float(value)
+    except Exception:
+        val = 0.0
+    try:
+        max_val = float(max_value)
+    except Exception:
+        max_val = 100.0
+    if max_val <= 0:
+        max_val = 100.0
+    return max(0, min(100, (val / max_val) * 100))
+
+
+def render_bar(label: str, value, max_value: float = 100.0, suffix: str = "", fill_class: str = "") -> str:
+    val = safe_float(value, 0.0)
+    width = _pct_width(val, max_value)
+    fill = f"bf-fill {fill_class}".strip()
+    pretty = f"{val:.1f}{suffix}" if isinstance(val, float) else f"{val}{suffix}"
+    return f"""
+    <div>
+        <div class="bf-bar-label"><span>{escape(str(label))}</span><span>{escape(pretty)}</span></div>
+        <div class="bf-track"><div class="{fill}" style="width:{width:.1f}%"></div></div>
+    </div>
+    """
+
+
+def render_player_card(row: pd.Series, rank_override=None) -> str:
+    rank = rank_override if rank_override is not None else row.get("Rank", "—")
+    player = escape(_display_value(row.get("Player")))
+    team = escape(_display_value(row.get("Team")))
+    game = escape(_display_value(row.get("Game")))
+    pitcher = escape(_display_value(row.get("Pitcher")))
+    tier = escape(_display_value(row.get("HR Tier")))
+    lineup = escape(_display_value(row.get("Lineup Spot")))
+    lineup_source = escape(_display_value(row.get("Lineup Source")))
+    hr_prob = safe_float(row.get("HR Probability %"), 0.0)
+    matchup_score = safe_float(row.get("Matchup Advantage Score"), 0.0)
+    pitcher_target = safe_float(row.get("Pitcher Target Score"), 0.0)
+    authority_score = safe_float(row.get("Statcast Authority Score"), 0.0)
+    barrel = safe_float(row.get("Barrel%"), 0.0)
+    hard_hit = safe_float(row.get("HardHit%"), 0.0)
+    air_pct = safe_float(row.get("AIR%"), 0.0)
+    ground_ball = safe_float(row.get("GroundBall%"), 0.0)
+    xslg = safe_float(row.get("xSLG"), 0.0)
+    actual_hr = safe_int(row.get("Actual HR Today"), 0)
+    gb_rule = escape(_display_value(row.get("GB Rule")))
+    recent = escape(_display_value(row.get("Recent Trend")))
+    matchup = escape(_display_value(row.get("Matchup Advantage")))
+    weather = escape(_display_value(row.get("WeatherNote")))
+    pitch_mix = escape(_display_value(row.get("Relevant Pitch Mix")))
+    pitch_mode = escape(_display_value(row.get("Pitch Mix Mode")))
+    why = escape(_display_value(row.get("Ranking Reasons", row.get("Why", ""))))
+    why2 = escape(_display_value(row.get("Why", "")))
+    hit_class = " bf-card-hit" if actual_hr > 0 else ""
+
+    gb_pill_class = "bf-pill-red" if ground_ball >= 50 else ("bf-pill-green" if ground_ball < 45 else "")
+    hit_pill = '<span class="bf-pill bf-pill-green">✅ HR HIT TODAY</span>' if actual_hr > 0 else ''
+    tier_pill_class = "bf-pill-gold" if tier in ["CORE TARGET", "STRONG LOOK"] else ""
+
+    card = f"""
+    <div class="bf-card{hit_class}">
+        <div class="bf-card-head">
+            <div>
+                <div class="bf-player">{player}</div>
+                <div class="bf-meta">{team} • {game}<br/>vs {pitcher}</div>
+            </div>
+            <div class="bf-rank">#{escape(str(rank))}</div>
+        </div>
+
+        <div class="bf-pillrow">
+            <span class="bf-pill {tier_pill_class}">{tier}</span>
+            <span class="bf-pill">LU {lineup}</span>
+            <span class="bf-pill">{lineup_source}</span>
+            <span class="bf-pill">{matchup}</span>
+            <span class="bf-pill {gb_pill_class}">{gb_rule}</span>
+            {hit_pill}
+        </div>
+
+        <div class="bf-bars">
+            {render_bar("HR Probability", hr_prob, 28, "%", "bf-fill-green" if hr_prob >= 14 else "")}
+            {render_bar("Matchup Score", matchup_score, 75, "")}
+            {render_bar("Pitcher Target", pitcher_target, 45, "")}
+            {render_bar("Statcast Authority", authority_score, 55, "")}
+            {render_bar("Barrel", barrel, 20, "%")}
+            {render_bar("Hard Hit", hard_hit, 60, "%")}
+            {render_bar("Air Ball", air_pct, 75, "%")}
+            {render_bar("Ground Ball Risk", ground_ball, 60, "%", "bf-fill-red" if ground_ball >= 50 else "")}
+        </div>
+
+        <div class="bf-small">
+            <span class="bf-label">Pitch Mix:</span> {pitch_mode} • {pitch_mix}
+            &nbsp; | &nbsp; <span class="bf-label">xSLG:</span> {xslg:.3f}
+            &nbsp; | &nbsp; <span class="bf-label">Trend:</span> {recent}
+            <br/><span class="bf-label">Weather:</span> {weather}
+        </div>
+
+        <div class="bf-why"><span class="bf-label">Why:</span> {why}</div>
+        <div class="bf-small">{why2}</div>
+    </div>
+    """
+    return card
+
+
+def render_card_grid(df: pd.DataFrame, max_cards: int = 24, columns: int = 3, title: str | None = None):
+    if df is None or df.empty:
+        st.caption("No cards to display.")
+        return
+
+    view = df.copy().head(max_cards).reset_index(drop=True)
+    if title:
+        st.markdown(f"### {title}")
+
+    col_objs = st.columns(columns)
+    for i, (_, row) in enumerate(view.iterrows()):
+        rank = row.get("Rank", i + 1)
+        with col_objs[i % columns]:
+            st.markdown(render_player_card(row, rank_override=rank), unsafe_allow_html=True)
+
+
+
 c1, c2, c3, c4 = st.columns([1, 1, 1, 2])
 with c1:
     if st.button("Update Board", use_container_width=True):
@@ -3780,29 +4129,33 @@ with tabs[0]:
     st.subheader("HR Probability Board")
     st.caption("Projected teams stay live. Confirmed teams freeze once lineups lock. Actual HR Today is display-only and does not change rankings.")
     hr_df = get_strict_hr_pool(locked_df)
-    st.dataframe(
-        hr_df[[
-            "Rank", "Player", "Team", "Game", "Pitcher", "Lineup Spot",
-            "Lineup Source", "Actual HR Today", "HR Probability %", "HR Tier", "GroundBall%",
-            "GB Rule", "GB Note", "Matchup Advantage", "Pitcher Target Score", "WeatherNote", "BullpenFatigueNote", "HardHit%", "FlyBall%", "AIR%", "xSLG", "xwOBA", "Barrel%", "Ranking Reasons", "Why"
-        ]],
-        use_container_width=True,
-        hide_index=True
-    )
+    render_card_grid(hr_df, max_cards=30, columns=3)
+    with st.expander("Raw HR Probability Table"):
+        st.dataframe(
+            hr_df[[
+                "Rank", "Player", "Team", "Game", "Pitcher", "Lineup Spot",
+                "Lineup Source", "Actual HR Today", "HR Probability %", "HR Tier", "GroundBall%",
+                "GB Rule", "GB Note", "Matchup Advantage", "Pitcher Target Score", "WeatherNote", "BullpenFatigueNote", "HardHit%", "FlyBall%", "AIR%", "xSLG", "xwOBA", "Barrel%", "Ranking Reasons", "Why"
+            ]],
+            use_container_width=True,
+            hide_index=True
+        )
 
 with tabs[1]:
     st.subheader("Top 12 HR Candidates")
     st.caption("Confirmed teams freeze once lineups lock. Projected teams can still update. Actual HR Today is display-only and does not change rankings.")
     top12 = get_top12_hybrid(locked_df)
-    st.dataframe(
-        top12[[
-            "Rank", "Player", "Team", "Game", "Pitcher", "Lineup Spot",
-            "Lineup Source", "Actual HR Today", "HR Probability %", "HR Tier", "GroundBall%",
-            "GB Rule", "GB Note", "Matchup Advantage", "Pitcher Target Score", "WeatherNote", "BullpenFatigueNote", "HardHit%", "FlyBall%", "AIR%", "xSLG", "xwOBA", "Barrel%", "Ranking Reasons", "Why"
-        ]],
-        use_container_width=True,
-        hide_index=True
-    )
+    render_card_grid(top12, max_cards=12, columns=3)
+    with st.expander("Raw Top 12 Table"):
+        st.dataframe(
+            top12[[
+                "Rank", "Player", "Team", "Game", "Pitcher", "Lineup Spot",
+                "Lineup Source", "Actual HR Today", "HR Probability %", "HR Tier", "GroundBall%",
+                "GB Rule", "GB Note", "Matchup Advantage", "Pitcher Target Score", "WeatherNote", "BullpenFatigueNote", "HardHit%", "FlyBall%", "AIR%", "xSLG", "xwOBA", "Barrel%", "Ranking Reasons", "Why"
+            ]],
+            use_container_width=True,
+            hide_index=True
+        )
 
 with tabs[2]:
     st.subheader("Top HR Targets — Slate-Wide Top 25")
@@ -3815,7 +4168,9 @@ with tabs[2]:
         "Pitch Mix Mode", "Relevant Pitch Mix", "Primary Pitch Usage",
         "Actual HR Today", "HR Probability %", "HR Tier", "Ranking Reasons"
     ]
-    display_existing_columns(top_targets, target_cols)
+    render_card_grid(top_targets, max_cards=25, columns=3)
+    with st.expander("Raw Top HR Targets Table"):
+        display_existing_columns(top_targets, target_cols)
 
 with tabs[3]:
     st.subheader("Pitchers to Target Today")
@@ -4020,16 +4375,18 @@ for idx, game in enumerate(schedule, start=8):
             team_hr, team_hrr = get_team_game_view(gdf, game["game_key"], away_team)
             if not team_hr.empty:
                 st.markdown("**Best HR hitters**")
-                st.dataframe(
-                    team_hr[[
-                        "Rank", "Player", "Lineup Spot", "Lineup Source", "Statcast Pass",
-                        "Strict Statcast", "Recent Form Pass", "Pitcher Attackable", "Actual HR Today", "HR Probability %",
-                        "HR Tier", "GroundBall%", "GB Rule", "GB Note", "WeatherNote", "BullpenFatigueNote", "HardHit%", "FlyBall%",
-                        "AIR%", "xSLG", "xwOBA", "Barrel%", "Ranking Reasons", "Why"
-                    ]],
-                    use_container_width=True,
-                    hide_index=True
-                )
+                render_card_grid(team_hr, max_cards=4, columns=1)
+                with st.expander("Raw team HR table"):
+                    st.dataframe(
+                        team_hr[[
+                            "Rank", "Player", "Lineup Spot", "Lineup Source", "Statcast Pass",
+                            "Strict Statcast", "Recent Form Pass", "Pitcher Attackable", "Actual HR Today", "HR Probability %",
+                            "HR Tier", "GroundBall%", "GB Rule", "GB Note", "WeatherNote", "BullpenFatigueNote", "HardHit%", "FlyBall%",
+                            "AIR%", "xSLG", "xwOBA", "Barrel%", "Ranking Reasons", "Why"
+                        ]],
+                        use_container_width=True,
+                        hide_index=True
+                    )
             else:
                 st.caption("No HR-qualified bats surfaced.")
 
@@ -4053,16 +4410,18 @@ for idx, game in enumerate(schedule, start=8):
             team_hr, team_hrr = get_team_game_view(gdf, game["game_key"], home_team)
             if not team_hr.empty:
                 st.markdown("**Best HR hitters**")
-                st.dataframe(
-                    team_hr[[
-                        "Rank", "Player", "Lineup Spot", "Lineup Source", "Statcast Pass",
-                        "Strict Statcast", "Recent Form Pass", "Pitcher Attackable", "Actual HR Today", "HR Probability %",
-                        "HR Tier", "GroundBall%", "GB Rule", "GB Note", "WeatherNote", "BullpenFatigueNote", "HardHit%", "FlyBall%",
-                        "AIR%", "xSLG", "xwOBA", "Barrel%", "Ranking Reasons", "Why"
-                    ]],
-                    use_container_width=True,
-                    hide_index=True
-                )
+                render_card_grid(team_hr, max_cards=4, columns=1)
+                with st.expander("Raw team HR table"):
+                    st.dataframe(
+                        team_hr[[
+                            "Rank", "Player", "Lineup Spot", "Lineup Source", "Statcast Pass",
+                            "Strict Statcast", "Recent Form Pass", "Pitcher Attackable", "Actual HR Today", "HR Probability %",
+                            "HR Tier", "GroundBall%", "GB Rule", "GB Note", "WeatherNote", "BullpenFatigueNote", "HardHit%", "FlyBall%",
+                            "AIR%", "xSLG", "xwOBA", "Barrel%", "Ranking Reasons", "Why"
+                        ]],
+                        use_container_width=True,
+                        hide_index=True
+                    )
             else:
                 st.caption("No HR-qualified bats surfaced.")
 
