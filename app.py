@@ -14,108 +14,56 @@ st.set_page_config(page_title="BF Data", layout="wide")
 st.markdown("""
 <style>
 :root {
-    --bf-bg: #06080c;
-    --bf-panel: #10151c;
-    --bf-panel-2: #151b24;
-    --bf-blue: #9fdcff;
-    --bf-blue-deep: #3e8db8;
-    --bf-blue-soft: rgba(159, 220, 255, 0.14);
-    --bf-border: rgba(159, 220, 255, 0.24);
-    --bf-text: #f7f7f7;
-    --bf-muted: #a7b0ba;
-    --bf-red: #ff5d5d;
+    --bf-bg: #050608;
+    --bf-panel: #0e1116;
+    --bf-panel-2: #151922;
+    --bf-border: rgba(255,255,255,0.10);
+    --bf-border-strong: rgba(255,255,255,0.18);
+    --bf-text: #f5f5f5;
+    --bf-muted: #a8adb5;
+    --bf-red: #ff5555;
     --bf-yellow: #ffd166;
-    --bf-green: #3ee281;
+    --bf-green: #35d07f;
 }
-.stApp {
-    background:
-        radial-gradient(circle at 12% 0%, rgba(159, 220, 255, 0.11), transparent 28%),
-        radial-gradient(circle at 88% 8%, rgba(62, 226, 129, 0.035), transparent 24%),
-        linear-gradient(180deg, #05070a 0%, #090d12 100%);
-    color: var(--bf-text);
-}
-.block-container {
-    padding-top: .85rem;
-    padding-bottom: 2rem;
-    max-width: 1560px;
-}
-[data-testid="stMetric"] {
-    background: linear-gradient(145deg, rgba(159,220,255,.10), rgba(255,255,255,.028));
-    border: 1px solid var(--bf-border);
-    border-radius: 14px;
-    padding: 8px 10px;
-    box-shadow: 0 8px 20px rgba(0,0,0,.20);
-}
-[data-testid="stMetricLabel"] p {
-    color: var(--bf-muted) !important;
-    font-size: .78rem !important;
-}
-[data-testid="stMetricValue"] {
-    color: #fff !important;
-    font-size: 1.15rem !important;
-    font-weight: 850;
-}
+.stApp { background: linear-gradient(180deg, #050608 0%, #090b10 54%, #050608 100%); color: var(--bf-text); }
+.block-container { padding-top: .75rem; padding-bottom: 2rem; max-width: 1560px; }
+[data-testid="stMetric"] { background: #10141b; border: 1px solid var(--bf-border); border-radius: 12px; padding: 7px 10px; box-shadow: none; }
+[data-testid="stMetricLabel"] p { color: var(--bf-muted) !important; font-size: .76rem !important; }
+[data-testid="stMetricValue"] { color: #fff !important; font-size: 1.12rem !important; font-weight: 850; }
 .stTabs [data-baseweb="tab-list"] { gap: 6px; }
-.stTabs [data-baseweb="tab"] {
-    background: #10151c;
-    border: 1px solid rgba(255,255,255,.08);
-    border-radius: 999px;
-    padding: 7px 11px;
-}
-.stTabs [aria-selected="true"] {
-    background: linear-gradient(135deg, #9fdcff, #3e8db8) !important;
-    color: #05070a !important;
-    font-weight: 850;
-}
-.bf-hero {
-    border: 1px solid var(--bf-border);
-    border-radius: 20px;
-    padding: 16px 18px;
-    margin-bottom: 12px;
-    background:
-      linear-gradient(135deg, rgba(159,220,255,.14), rgba(255,255,255,.025)),
-      linear-gradient(180deg, rgba(255,255,255,.035), rgba(0,0,0,.10));
-    box-shadow: 0 14px 34px rgba(0,0,0,.30);
-}
-.bf-kicker {
-    color: var(--bf-blue);
-    font-size: .74rem;
-    font-weight: 850;
-    letter-spacing: .16em;
-    text-transform: uppercase;
-}
-.bf-title {
-    font-size: clamp(1.55rem, 3.2vw, 3.2rem);
-    font-weight: 950;
-    line-height: 1;
-    margin: 6px 0 6px 0;
-}
-.bf-subtitle {
-    color: var(--bf-muted);
-    font-size: .92rem;
-    max-width: 900px;
-}
-div[data-testid="stDataFrame"] {
-    border: 1px solid rgba(159,220,255,.16);
-    border-radius: 14px;
-    overflow:hidden;
-}
-div[data-testid="stExpander"] {
-    background: rgba(255,255,255,.018);
-    border-radius: 12px;
-}
-hr {
-    margin-top: .45rem !important;
-    margin-bottom: .45rem !important;
-}
+.stTabs [data-baseweb="tab"] { background: #0f131a; border: 1px solid var(--bf-border); border-radius: 999px; padding: 7px 11px; }
+.stTabs [aria-selected="true"] { background: #151922 !important; border-color: rgba(255,209,102,.65) !important; color: #ffffff !important; font-weight: 850; }
+.bf-hero { border: 1px solid var(--bf-border-strong); border-radius: 18px; padding: 14px 16px; margin-bottom: 10px; background: #0f1319; box-shadow: none; }
+.bf-kicker { color: var(--bf-yellow); font-size: .72rem; font-weight: 850; letter-spacing: .15em; text-transform: uppercase; }
+.bf-title { font-size: clamp(1.45rem, 3vw, 2.85rem); font-weight: 950; line-height: 1; margin: 5px 0 5px 0; }
+.bf-subtitle { color: var(--bf-muted); font-size: .9rem; max-width: 900px; }
+.bf-key { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 6px; margin-top: 2px; margin-bottom: 3px; }
+.bf-chip, .bf-key-chip { display: inline-flex; align-items: center; gap: 5px; border-radius: 999px; padding: 3px 8px; font-size: .72rem; font-weight: 800; border: 1px solid rgba(255,255,255,.12); background: rgba(255,255,255,.035); color: #ececec; white-space: nowrap; }
+.bf-chip-green, .bf-key-green { color: #bcffd6; border-color: rgba(53,208,127,.55); background: rgba(53,208,127,.09); }
+.bf-chip-yellow, .bf-key-yellow { color: #ffe4a3; border-color: rgba(255,209,102,.55); background: rgba(255,209,102,.10); }
+.bf-chip-red, .bf-key-red { color: #ffb8b8; border-color: rgba(255,85,85,.55); background: rgba(255,85,85,.09); }
+.bf-chip-gray { color: #c4c8cf; border-color: rgba(255,255,255,.12); background: rgba(255,255,255,.04); }
+.bf-mini-row { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; margin: 4px 0 5px 0; }
+.bf-signal-line { font-size: .82rem; line-height: 1.3; margin: 3px 0 5px 0; color: #e9e9e9; }
+.bf-signal-line strong { color: #ffffff; }
+.bf-signal-value-green { color: var(--bf-green); font-weight: 900; }
+.bf-signal-value-yellow { color: var(--bf-yellow); font-weight: 900; }
+.bf-signal-value-red { color: var(--bf-red); font-weight: 900; }
+.bf-bar-wrap { margin: 7px 0 9px 0; }
+.bf-bar-head { display: flex; justify-content: space-between; gap: 8px; font-size: .78rem; font-weight: 850; color: #e8e8e8; margin-bottom: 4px; }
+.bf-track { height: 8px; border-radius: 999px; overflow: hidden; background: #252a33; border: 1px solid rgba(255,255,255,.08); }
+.bf-fill { height: 100%; border-radius: 999px; }
+.bf-fill-green { background: var(--bf-green); }
+.bf-fill-yellow { background: var(--bf-yellow); }
+.bf-fill-red { background: var(--bf-red); }
+div[data-testid="stDataFrame"] { border: 1px solid rgba(255,255,255,.12); border-radius: 14px; overflow:hidden; }
+div[data-testid="stExpander"] { background: rgba(255,255,255,.018); border-radius: 12px; }
+hr { margin-top: .38rem !important; margin-bottom: .38rem !important; }
 </style>
 <div class="bf-hero">
     <div class="bf-kicker">BF DATA PRO LAB</div>
     <div class="bf-title">Daily Home Run Probability Engine</div>
-    <div class="bf-subtitle">
-        Dark slate, compact player cards, colored risk signals, matchup context,
-        and transparent tracking built around the actual surfaced picks.
-    </div>
+    <div class="bf-subtitle">Matte dark board, compact player cards, green/yellow/red risk signals, and transparent tracking built around the actual surfaced picks.</div>
 </div>
 """, unsafe_allow_html=True)
 
@@ -3856,34 +3804,31 @@ def _signal_from_value(value, good_at, warn_at=None, lower_is_better=False):
     val = safe_float(value, 0.0)
     if warn_at is None:
         warn_at = good_at * 0.65
-
     if lower_is_better:
         if val <= good_at:
-            return "🟢", "green"
+            return "STRONG", "green"
         if val <= warn_at:
-            return "🟡", "orange"
-        return "🔴", "red"
-
+            return "CAUTION", "yellow"
+        return "POOR", "red"
     if val >= good_at:
-        return "🟢", "green"
+        return "STRONG", "green"
     if val >= warn_at:
-        return "🟡", "orange"
-    return "🔴", "red"
+        return "CAUTION", "yellow"
+    return "POOR", "red"
 
 
-def _color_text(text, color="blue"):
-    safe = _display_value(text)
-    allowed = {"blue", "green", "orange", "red", "gray"}
-    color = color if color in allowed else "blue"
-    return f":{color}[{safe}]"
+def _chip_html(text, color="gray"):
+    safe = escape(_display_value(text))
+    color = color if color in {"green", "yellow", "red", "gray"} else "gray"
+    return f'<span class="bf-chip bf-chip-{color}">{safe}</span>'
 
 
 def _tier_color(tier: str):
     tier = str(tier).upper()
     if tier in {"CORE TARGET", "STRONG LOOK"}:
-        return "blue"
+        return "green"
     if tier == "SLEEPER":
-        return "orange"
+        return "yellow"
     return "gray"
 
 
@@ -3892,7 +3837,7 @@ def _matchup_color(matchup: str):
     if matchup == "HIGH":
         return "green"
     if matchup == "MED":
-        return "orange"
+        return "yellow"
     return "red"
 
 
@@ -3900,30 +3845,49 @@ def _gb_color(ground_ball: float):
     if ground_ball >= 50:
         return "red"
     if ground_ball >= 45:
-        return "orange"
+        return "yellow"
     return "green"
 
 
-def _native_bar(label: str, value, max_value: float = 100.0, suffix: str = "", good_at: float | None = None, warn_at: float | None = None, lower_is_better: bool = False):
+def _value_span(value, color):
+    color = color if color in {"green", "yellow", "red"} else "yellow"
+    return f'<span class="bf-signal-value-{color}">{escape(str(value))}</span>'
+
+
+def _signal_bar_html(label: str, value, max_value: float = 100.0, suffix: str = "", good_at: float | None = None, warn_at: float | None = None, lower_is_better: bool = False):
     val = safe_float(value, 0.0)
-    pct = int(round(_pct_width(val, max_value)))
+    pct = _pct_width(val, max_value)
     if good_at is None:
         good_at = max_value * 0.67
     if warn_at is None:
         warn_at = max_value * 0.42
     signal, color = _signal_from_value(val, good_at=good_at, warn_at=warn_at, lower_is_better=lower_is_better)
-    st.markdown(f"{signal} **{label}:** :{color}[{val:.1f}{suffix}]")
-    st.progress(pct)
+    pretty = f"{val:.1f}{suffix}"
+    return (
+        '<div class="bf-bar-wrap">'
+        f'<div class="bf-bar-head"><span>{escape(str(label))}</span><span>{signal} · {_value_span(pretty, color)}</span></div>'
+        f'<div class="bf-track"><div class="bf-fill bf-fill-{color}" style="width:{pct:.1f}%"></div></div>'
+        '</div>'
+    )
+
+
+def render_board_key():
+    st.markdown(
+        '<div class="bf-key">'
+        '<span class="bf-key-chip bf-key-green">Green = strong attack</span>'
+        '<span class="bf-key-chip bf-key-yellow">Yellow = caution / mixed</span>'
+        '<span class="bf-key-chip bf-key-red">Red = poor look / risk</span>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
 
 
 def render_bar(label: str, value, max_value: float = 100.0, suffix: str = "", fill_class: str = "") -> str:
-    """Legacy-safe helper kept for compatibility. Card rendering is native Streamlit now."""
     val = safe_float(value, 0.0)
     return f"{label}: {val:.1f}{suffix}"
 
 
 def render_player_card(row: pd.Series, rank_override=None):
-    """Compact Streamlit-native card. No raw card HTML is returned or printed."""
     rank = rank_override if rank_override is not None else row.get("Rank", "—")
     player = _display_value(row.get("Player"))
     team = _display_value(row.get("Team"))
@@ -3952,16 +3916,17 @@ def render_player_card(row: pd.Series, rank_override=None):
     xslg = safe_float(row.get("xSLG"), 0.0)
     actual_hr = safe_int(row.get("Actual HR Today"), 0)
 
-    tier_md = _color_text(tier, _tier_color(tier))
-    matchup_md = _color_text(matchup, _matchup_color(matchup))
-    gb_md = _color_text(gb_rule, _gb_color(ground_ball))
-
     st.markdown(f"**#{rank} {player}**  \n`{team}` • {game}")
     st.caption(f"vs {pitcher}")
 
-    st.markdown(
-        f"{tier_md} · LU `{lineup}` · `{lineup_source}` · Matchup {matchup_md} · GB {gb_md}"
-    )
+    chip_row = "".join([
+        _chip_html(tier, _tier_color(tier)),
+        _chip_html(f"LU {lineup}", "gray"),
+        _chip_html(lineup_source, "gray"),
+        _chip_html(f"Matchup {matchup}", _matchup_color(matchup)),
+        _chip_html(f"GB {gb_rule}", _gb_color(ground_ball)),
+    ])
+    st.markdown(f'<div class="bf-mini-row">{chip_row}</div>', unsafe_allow_html=True)
 
     hr_signal, hr_color = _signal_from_value(hr_prob, good_at=14, warn_at=9)
     matchup_signal, matchup_color = _signal_from_value(matchup_score, good_at=55, warn_at=38)
@@ -3969,24 +3934,27 @@ def render_player_card(row: pd.Series, rank_override=None):
     authority_signal, authority_color = _signal_from_value(authority_score, good_at=30, warn_at=17)
 
     st.markdown(
-        f"{hr_signal} HR :{hr_color}[{hr_prob:.1f}%]  ·  "
-        f"{matchup_signal} Matchup :{matchup_color}[{matchup_score:.1f}]  ·  "
-        f"{pitcher_signal} Pitcher :{pitcher_color}[{pitcher_target:.1f}]  ·  "
-        f"{authority_signal} Auth :{authority_color}[{authority_score:.1f}]"
+        '<div class="bf-signal-line">'
+        f'<strong>HR</strong> {hr_signal} {_value_span(f"{hr_prob:.1f}%", hr_color)} · '
+        f'<strong>Matchup</strong> {matchup_signal} {_value_span(f"{matchup_score:.1f}", matchup_color)} · '
+        f'<strong>Pitcher</strong> {pitcher_signal} {_value_span(f"{pitcher_target:.1f}", pitcher_color)} · '
+        f'<strong>Auth</strong> {authority_signal} {_value_span(f"{authority_score:.1f}", authority_color)}'
+        '</div>',
+        unsafe_allow_html=True,
     )
 
     if actual_hr > 0:
-        st.success(f"✅ HR HIT TODAY: {actual_hr}")
+        st.success(f"HR HIT TODAY: {actual_hr}")
 
     with st.expander("Bars + matchup details", expanded=False):
-        _native_bar("HR Probability", hr_prob, 28, "%", good_at=14, warn_at=9)
-        _native_bar("Matchup Score", matchup_score, 75, good_at=55, warn_at=38)
-        _native_bar("Pitcher Target", pitcher_target, 45, good_at=28, warn_at=16)
-        _native_bar("Statcast Authority", authority_score, 55, good_at=30, warn_at=17)
-        _native_bar("Barrel", barrel, 20, "%", good_at=11, warn_at=8)
-        _native_bar("Hard Hit", hard_hit, 60, "%", good_at=42, warn_at=35)
-        _native_bar("Air Ball", air_pct, 75, "%", good_at=55, warn_at=48)
-        _native_bar("Ground Ball Risk", ground_ball, 60, "%", good_at=44, warn_at=50, lower_is_better=True)
+        st.markdown(_signal_bar_html("HR Probability", hr_prob, 28, "%", good_at=14, warn_at=9), unsafe_allow_html=True)
+        st.markdown(_signal_bar_html("Matchup Score", matchup_score, 75, good_at=55, warn_at=38), unsafe_allow_html=True)
+        st.markdown(_signal_bar_html("Pitcher Target", pitcher_target, 45, good_at=28, warn_at=16), unsafe_allow_html=True)
+        st.markdown(_signal_bar_html("Statcast Authority", authority_score, 55, good_at=30, warn_at=17), unsafe_allow_html=True)
+        st.markdown(_signal_bar_html("Barrel", barrel, 20, "%", good_at=11, warn_at=8), unsafe_allow_html=True)
+        st.markdown(_signal_bar_html("Hard Hit", hard_hit, 60, "%", good_at=42, warn_at=35), unsafe_allow_html=True)
+        st.markdown(_signal_bar_html("Air Ball", air_pct, 75, "%", good_at=55, warn_at=48), unsafe_allow_html=True)
+        st.markdown(_signal_bar_html("Ground Ball Risk", ground_ball, 60, "%", good_at=44, warn_at=50, lower_is_better=True), unsafe_allow_html=True)
 
         st.caption(f"Pitch Mix: {pitch_mode} • {pitch_mix} | xSLG: {xslg:.3f} | Trend: {recent}")
         st.caption(f"Weather: {weather}")
@@ -4011,7 +3979,6 @@ def render_card_grid(df: pd.DataFrame, max_cards: int = 24, columns: int = 3, ti
     except Exception:
         columns = 3
 
-    # Use denser desktop layout for slate boards, but keep per-game team sections single-column when requested.
     if columns >= 3:
         columns = 4
     columns = max(1, min(columns, 4))
@@ -4021,7 +3988,6 @@ def render_card_grid(df: pd.DataFrame, max_cards: int = 24, columns: int = 3, ti
         rank = row.get("Rank", i + 1)
         with col_objs[i % columns]:
             render_player_card(row, rank_override=rank)
-
 
 
 c1, c2, c3, c4 = st.columns([1, 1, 1, 2])
@@ -4073,6 +4039,7 @@ with c4:
         st.caption(f"Projected teams stay live • confirmed teams pregame-rebuild on update • locked confirmed rows: {confirmed_locked}")
     else:
         st.caption(f"Projected teams live • update rebuilds pregame confirmed locks • last refresh: {datetime.now().strftime('%Y-%m-%d %I:%M %p')}")
+    render_board_key()
 
 if locked_df.empty:
     st.warning("No games or hitter data loaded.")
