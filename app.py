@@ -63,7 +63,7 @@ hr { margin-top: .38rem !important; margin-bottom: .38rem !important; }
 <div class="bf-hero">
     <div class="bf-kicker">BF DATA PRO LAB</div>
     <div class="bf-title">Daily Home Run Probability Engine</div>
-    <div class="bf-subtitle">Matte dark board, compact player cards, green/yellow/red risk signals, and transparent tracking built around the actual surfaced picks.</div>
+    <div class="bf-subtitle">Matte dark board, compact player cards, green/yellow/red HR attackability signals, and transparent tracking built around the actual surfaced picks.</div>
 </div>
 """, unsafe_allow_html=True)
 
@@ -1580,12 +1580,28 @@ def compute_hitter_live_metrics_from_map(player_id: int, stats_map: dict):
 
 
 def compute_pitcher_live_metrics_from_map(pitcher_id: int, pitcher_name: str, stats_map: dict):
+    """HR-focused pitcher damage profile.
+
+    This intentionally answers: can this pitcher be taken deep?
+    It blends season HR leakage with the recent starter window so a pitcher who
+    is generally good but still allows HR damage does not get incorrectly marked
+    as a poor target.
+    """
     if pd.isna(pitcher_id):
         return None
 
     data = stats_map.get(pitcher_id, {"season": {}, "gamelog": []})
     season_stat = data.get("season", {}) or {}
     gamelog = data.get("gamelog", []) or []
+
+    season_ip = ip_to_float(season_stat.get("inningsPitched", 0))
+    season_hr_allowed = safe_int(season_stat.get("homeRuns", 0))
+    season_hits_allowed = safe_int(season_stat.get("hits", 0))
+    season_walks_allowed = safe_int(season_stat.get("baseOnBalls", 0))
+
+    season_hr9 = (season_hr_allowed * 9 / season_ip) if season_ip > 0 else stable_float(f"{pitcher_name}-season-hr9-fallback", 0.8, 1.6)
+    season_hit9 = (season_hits_allowed * 9 / season_ip) if season_ip > 0 else stable_float(f"{pitcher_name}-season-hit9-fallback", 6.5, 10.5)
+    season_whip = ((season_hits_allowed + season_walks_allowed) / season_ip) if season_ip > 0 else stable_float(f"{pitcher_name}-season-whip-fallback", 1.0, 1.5)
 
     if gamelog:
         starts_only = [g for g in gamelog if safe_int(g["stat"].get("gamesStarted", 0)) > 0]
@@ -1594,32 +1610,37 @@ def compute_pitcher_live_metrics_from_map(pitcher_id: int, pitcher_name: str, st
         use_logs = []
 
     if use_logs:
-        ip = sum(ip_to_float(g["stat"].get("inningsPitched", 0)) for g in use_logs)
-        hr_allowed = sum(safe_int(g["stat"].get("homeRuns", 0)) for g in use_logs)
-        hits_allowed = sum(safe_int(g["stat"].get("hits", 0)) for g in use_logs)
-        walks_allowed = sum(safe_int(g["stat"].get("baseOnBalls", 0)) for g in use_logs)
+        recent_ip = sum(ip_to_float(g["stat"].get("inningsPitched", 0)) for g in use_logs)
+        recent_hr_allowed = sum(safe_int(g["stat"].get("homeRuns", 0)) for g in use_logs)
+        recent_hits_allowed = sum(safe_int(g["stat"].get("hits", 0)) for g in use_logs)
+        recent_walks_allowed = sum(safe_int(g["stat"].get("baseOnBalls", 0)) for g in use_logs)
 
-        hr9 = (hr_allowed * 9 / ip) if ip > 0 else 0.0
-        hit9 = (hits_allowed * 9 / ip) if ip > 0 else 0.0
-        whip = ((hits_allowed + walks_allowed) / ip) if ip > 0 else 0.0
+        recent_hr9 = (recent_hr_allowed * 9 / recent_ip) if recent_ip > 0 else season_hr9
+        recent_hit9 = (recent_hits_allowed * 9 / recent_ip) if recent_ip > 0 else season_hit9
+        recent_whip = ((recent_hits_allowed + recent_walks_allowed) / recent_ip) if recent_ip > 0 else season_whip
     else:
-        ip = ip_to_float(season_stat.get("inningsPitched", 0))
-        hr_allowed = safe_int(season_stat.get("homeRuns", 0))
-        hits_allowed = safe_int(season_stat.get("hits", 0))
-        walks_allowed = safe_int(season_stat.get("baseOnBalls", 0))
+        recent_hr9 = season_hr9
+        recent_hit9 = season_hit9
+        recent_whip = season_whip
 
-        hr9 = (hr_allowed * 9 / ip) if ip > 0 else stable_float(f"{pitcher_name}-hr9-fallback", 0.8, 1.6)
-        hit9 = (hits_allowed * 9 / ip) if ip > 0 else stable_float(f"{pitcher_name}-hit9-fallback", 6.5, 10.5)
-        whip = ((hits_allowed + walks_allowed) / ip) if ip > 0 else stable_float(f"{pitcher_name}-whip-fallback", 1.0, 1.5)
+    # Blend recent with season. Use the higher HR leakage when it is meaningfully above the blend,
+    # because HR props care about damage allowed more than real-life run prevention.
+    blended_hr9 = (recent_hr9 * 0.55) + (season_hr9 * 0.45)
+    hr9 = max(blended_hr9, season_hr9 * 0.92, recent_hr9 * 0.85)
+    hit9 = (recent_hit9 * 0.50) + (season_hit9 * 0.50)
+    whip = (recent_whip * 0.50) + (season_whip * 0.50)
 
-    barrel_allowed = clip(2.5 + hr9 * 4.0 + (hit9 - 6) * 0.5, 3, 15)
-    hard_hit_allowed = clip(26 + hr9 * 8 + (whip - 1.0) * 18, 25, 50)
+    barrel_allowed = clip(2.2 + hr9 * 4.8 + (hit9 - 6) * 0.55, 3, 16)
+    hard_hit_allowed = clip(25 + hr9 * 9.2 + (whip - 1.0) * 18, 25, 52)
 
     return {
         "Pitcher_HR9_Last7": round(hr9, 2),
+        "Pitcher_Season_HR9": round(season_hr9, 2),
+        "Pitcher_Recent_HR9": round(recent_hr9, 2),
         "Pitcher_Barrel_Allowed": round(barrel_allowed, 1),
         "Pitcher_HardHit_Allowed": round(hard_hit_allowed, 1),
     }
+
 
 
 def extract_boxscore_team_hitters(game_pk: int, side: str):
@@ -1993,48 +2014,84 @@ def compute_pitcher_target_score(
     park_factor: float,
     weather_boost: float,
 ) -> tuple[float, str]:
+    """HR Attackability score.
+
+    Green/high means GOOD for the hitter because the pitcher leaks HR damage.
+    Red/low means the pitcher is suppressing the HR profile.
+    """
     score = 0.0
     bits = []
 
-    if pitch_hr9 >= 2.4:
-        score += 18.0
-        bits.append("elite HR/9 target")
-    elif pitch_hr9 >= 2.0:
-        score += 13.0
-        bits.append("very high HR/9")
-    elif pitch_hr9 >= 1.6:
-        score += 8.0
-        bits.append("high HR/9")
+    # HR/9 is the anchor. A pitcher around 1.25+ HR/9 is attackable for HR props.
+    if pitch_hr9 >= 2.00:
+        score += 22.0
+        bits.append("elite HR leak")
+    elif pitch_hr9 >= 1.60:
+        score += 17.0
+        bits.append("high HR/9 leak")
     elif pitch_hr9 >= 1.25:
-        score += 4.0
+        score += 12.0
         bits.append("attackable HR/9")
+    elif pitch_hr9 >= 1.05:
+        score += 7.0
+        bits.append("mild HR leakage")
+    elif pitch_hr9 >= 0.85:
+        score += 3.0
+        bits.append("below-target HR/9")
     else:
-        bits.append("normal HR/9")
+        bits.append("HR suppressor")
 
+    # Barrel / hard-contact allowed should push a pitcher into target range even if ERA looks fine.
     if pitch_barrel_allowed >= 11:
-        score += 9.0
+        score += 12.0
         bits.append("barrel-prone pitcher")
     elif pitch_barrel_allowed >= 8:
-        score += 5.0
+        score += 8.0
         bits.append("allows barrels")
+    elif pitch_barrel_allowed >= 6.5:
+        score += 4.0
+        bits.append("some barrel leakage")
+    else:
+        bits.append("low barrel leak")
 
     if pitch_hard_hit_allowed >= 44:
-        score += 7.0
+        score += 9.0
         bits.append("hard contact allowed")
     elif pitch_hard_hit_allowed >= 40:
-        score += 4.0
+        score += 6.0
         bits.append("contact damage allowed")
+    elif pitch_hard_hit_allowed >= 36:
+        score += 3.0
+        bits.append("some hard contact")
+    else:
+        bits.append("contact suppressor")
 
     park_boost = (park_factor - 1.0) * 20
     if park_boost >= 1.0:
         score += park_boost
         bits.append("HR-friendly park")
+    elif park_boost <= -1.0:
+        score += park_boost * 0.6
+        bits.append("park suppresses HR")
 
     if weather_boost >= 1.5:
         score += weather_boost * 2.0
         bits.append("carry weather")
+    elif weather_boost <= -1.0:
+        score += weather_boost * 0.9
+        bits.append("weather suppresses carry")
 
-    return round(score, 2), " | ".join(bits[:4])
+    score = clip(score, 0.0, 45.0)
+
+    if score >= 24:
+        label = "STRONG HR ATTACK"
+    elif score >= 13:
+        label = "MIXED / ATTACKABLE"
+    else:
+        label = "POOR HR TARGET"
+
+    return round(score, 2), f"{label}: " + " | ".join(bits[:4])
+
 
 
 def compute_matchup_advantage_score(
@@ -2222,8 +2279,10 @@ def get_best_hr_matchups(df: pd.DataFrame, limit: int = 25) -> pd.DataFrame:
     board = df.copy()
     if "Matchup Advantage Score" not in board.columns:
         board["Matchup Advantage Score"] = safe_numeric_series(board, "Model Rank Score", 0.0)
-    if "Pitcher Target Score" not in board.columns:
-        board["Pitcher Target Score"] = safe_numeric_series(board, "Pitcher_HR9_Last7", 0.0) * 10
+    if "HR Attackability Score" not in board.columns:
+        board["HR Attackability Score"] = safe_numeric_series(board, "Pitcher_HR9_Last7", 0.0) * 10
+    if "HR Attackability Score" not in board.columns:
+        board["HR Attackability Score"] = board["HR Attackability Score"]
 
     eligible = board[board["HR Eligible"].astype(bool)].copy()
     if eligible.empty:
@@ -2231,7 +2290,7 @@ def get_best_hr_matchups(df: pd.DataFrame, limit: int = 25) -> pd.DataFrame:
 
     eligible["_global_score"] = (
         safe_numeric_series(eligible, "Matchup Advantage Score", 0.0) * 1.35
-        + safe_numeric_series(eligible, "Pitcher Target Score", 0.0) * 1.10
+        + safe_numeric_series(eligible, "HR Attackability Score", 0.0) * 1.10
         + safe_numeric_series(eligible, "Statcast Authority Score", 0.0) * 0.85
         + safe_numeric_series(eligible, "Model Rank Score", 0.0) * 0.05
         + safe_numeric_series(eligible, "HR Probability %", 0.0) * 1.4
@@ -2248,7 +2307,7 @@ def get_pitchers_to_target(df: pd.DataFrame) -> pd.DataFrame:
     work = df.copy()
     for col in [
         "Game", "Pitcher", "Pitcher_HR9_Last7", "Pitcher_Barrel_Allowed",
-        "Pitcher_HardHit_Allowed", "TempF", "WindMPH", "WeatherNote", "WeatherBoost"
+        "Pitcher_HardHit_Allowed", "Pitcher_Season_HR9", "Pitcher_Recent_HR9", "TempF", "WindMPH", "WeatherNote", "WeatherBoost"
     ]:
         if col not in work.columns:
             work[col] = pd.NA
@@ -2266,10 +2325,11 @@ def get_pitchers_to_target(df: pd.DataFrame) -> pd.DataFrame:
         .head(15)
         .copy()
     )
-    out["Pitcher Target Score"] = pd.to_numeric(out["_bf_pitcher_target_score"], errors="coerce").fillna(0.0).round(2)
+    out["HR Attackability Score"] = pd.to_numeric(out["_bf_pitcher_target_score"], errors="coerce").fillna(0.0).round(2)
+    out["HR Attackability Score"] = out["HR Attackability Score"]
 
     final_cols = [
-        "Game", "Pitcher", "Pitcher Target Score", "Pitcher_HR9_Last7",
+        "Game", "Pitcher", "HR Attackability Score", "Pitcher_HR9_Last7", "Pitcher_Season_HR9", "Pitcher_Recent_HR9",
         "Pitcher_Barrel_Allowed", "Pitcher_HardHit_Allowed",
         "WeatherNote", "TempF", "WindMPH"
     ]
@@ -2895,8 +2955,10 @@ def build_hitter_metrics(
         "BullpenArmsPrev": int(bullpen_arms_prev),
         "Statcast Authority Score": round(statcast_authority_score, 2),
         "Statcast Authority Tier": statcast_authority_tier,
-        "Pitcher Target Score": round(pitcher_target_score, 2),
-        "Pitcher Target Label": pitcher_target_label,
+        "HR Attackability Score": round(pitcher_target_score, 2),
+        "HR Attackability Label": pitcher_target_label,
+        "HR Attackability Score": round(pitcher_target_score, 2),
+        "HR Attackability Label": pitcher_target_label,
         "Matchup Advantage Score": round(matchup_advantage_score, 2),
         "Matchup Advantage": matchup_advantage_tier,
         "Ranking Reasons": ranking_reasons,
@@ -2946,7 +3008,7 @@ def sort_for_hr(df: pd.DataFrame) -> pd.DataFrame:
     sortable["_hrr_sort"] = safe_numeric_series(sortable, "HRR Score", 0.0)
     sortable["_multi_pitch_sort"] = safe_numeric_series(sortable, "Multi Pitch Authority Score", 0.0)
     sortable["_elite_hr_sort"] = sortable.get("Elite HR Look", pd.Series(["No"] * len(sortable), index=sortable.index)).map({"Yes": 1, "No": 0}).fillna(0)
-    sortable["_pitcher_target_sort"] = safe_numeric_series(sortable, "Pitcher Target Score", 0.0)
+    sortable["_pitcher_target_sort"] = safe_numeric_series(sortable, "HR Attackability Score", safe_numeric_series(sortable, "HR Attackability Score", 0.0).iloc[0] if len(sortable) else 0.0) if "HR Attackability Score" in sortable.columns else safe_numeric_series(sortable, "HR Attackability Score", 0.0)
     sortable["_matchup_adv_sort"] = safe_numeric_series(sortable, "Matchup Advantage Score", 0.0)
 
     sortable = sortable.sort_values(
@@ -3874,9 +3936,9 @@ def _signal_bar_html(label: str, value, max_value: float = 100.0, suffix: str = 
 def render_board_key():
     st.markdown(
         '<div class="bf-key">'
-        '<span class="bf-key-chip bf-key-green">Green = strong attack</span>'
+        '<span class="bf-key-chip bf-key-green">Green = attackable / good for hitter</span>'
         '<span class="bf-key-chip bf-key-yellow">Yellow = caution / mixed</span>'
-        '<span class="bf-key-chip bf-key-red">Red = poor look / risk</span>'
+        '<span class="bf-key-chip bf-key-red">Red = HR suppressor / bad for hitter</span>'
         '</div>',
         unsafe_allow_html=True,
     )
@@ -3907,7 +3969,7 @@ def render_player_card(row: pd.Series, rank_override=None):
 
     hr_prob = safe_float(row.get("HR Probability %"), 0.0)
     matchup_score = safe_float(row.get("Matchup Advantage Score"), 0.0)
-    pitcher_target = safe_float(row.get("Pitcher Target Score"), 0.0)
+    hr_attackability = safe_float(row.get("HR Attackability Score", 0.0), 0.0)
     authority_score = safe_float(row.get("Statcast Authority Score"), 0.0)
     barrel = safe_float(row.get("Barrel%"), 0.0)
     hard_hit = safe_float(row.get("HardHit%"), 0.0)
@@ -3930,14 +3992,14 @@ def render_player_card(row: pd.Series, rank_override=None):
 
     hr_signal, hr_color = _signal_from_value(hr_prob, good_at=14, warn_at=9)
     matchup_signal, matchup_color = _signal_from_value(matchup_score, good_at=55, warn_at=38)
-    pitcher_signal, pitcher_color = _signal_from_value(pitcher_target, good_at=28, warn_at=16)
+    attack_signal, attack_color = _signal_from_value(hr_attackability, good_at=24, warn_at=13)
     authority_signal, authority_color = _signal_from_value(authority_score, good_at=30, warn_at=17)
 
     st.markdown(
         '<div class="bf-signal-line">'
         f'<strong>HR</strong> {hr_signal} {_value_span(f"{hr_prob:.1f}%", hr_color)} · '
         f'<strong>Matchup</strong> {matchup_signal} {_value_span(f"{matchup_score:.1f}", matchup_color)} · '
-        f'<strong>Pitcher</strong> {pitcher_signal} {_value_span(f"{pitcher_target:.1f}", pitcher_color)} · '
+        f'<strong>HR Attack</strong> {attack_signal} {_value_span(f"{hr_attackability:.1f}", attack_color)} · '
         f'<strong>Auth</strong> {authority_signal} {_value_span(f"{authority_score:.1f}", authority_color)}'
         '</div>',
         unsafe_allow_html=True,
@@ -3949,7 +4011,7 @@ def render_player_card(row: pd.Series, rank_override=None):
     with st.expander("Bars + matchup details", expanded=False):
         st.markdown(_signal_bar_html("HR Probability", hr_prob, 28, "%", good_at=14, warn_at=9), unsafe_allow_html=True)
         st.markdown(_signal_bar_html("Matchup Score", matchup_score, 75, good_at=55, warn_at=38), unsafe_allow_html=True)
-        st.markdown(_signal_bar_html("Pitcher Target", pitcher_target, 45, good_at=28, warn_at=16), unsafe_allow_html=True)
+        st.markdown(_signal_bar_html("HR Attackability", hr_attackability, 45, good_at=24, warn_at=13), unsafe_allow_html=True)
         st.markdown(_signal_bar_html("Statcast Authority", authority_score, 55, good_at=30, warn_at=17), unsafe_allow_html=True)
         st.markdown(_signal_bar_html("Barrel", barrel, 20, "%", good_at=11, warn_at=8), unsafe_allow_html=True)
         st.markdown(_signal_bar_html("Hard Hit", hard_hit, 60, "%", good_at=42, warn_at=35), unsafe_allow_html=True)
@@ -4039,13 +4101,12 @@ with c4:
         st.caption(f"Projected teams stay live • confirmed teams pregame-rebuild on update • locked confirmed rows: {confirmed_locked}")
     else:
         st.caption(f"Projected teams live • update rebuilds pregame confirmed locks • last refresh: {datetime.now().strftime('%Y-%m-%d %I:%M %p')}")
-    render_board_key()
 
 if locked_df.empty:
     st.warning("No games or hitter data loaded.")
     st.stop()
 
-base_tabs = ["HR Probability", "Top 12", "Top HR Targets", "Pitchers to Target", "HR Combos", "Hits + Runs + RBIs", "Batter Breakdown", "Accuracy Tracker"]
+base_tabs = ["HR Probability", "Top 12", "Top HR Targets", "Pitchers to Attack", "HR Combos", "Hits + Runs + RBIs", "Batter Breakdown", "Accuracy Tracker"]
 schedule = sort_schedule_rows(schedule)
 game_tabs = [f"{format_game_time_et(g.get('game_time', ''))} | {g['game_key']}" for g in schedule]
 tabs = st.tabs(base_tabs + game_tabs)
@@ -4060,7 +4121,7 @@ with tabs[0]:
             hr_df[[
                 "Rank", "Player", "Team", "Game", "Pitcher", "Lineup Spot",
                 "Lineup Source", "Actual HR Today", "HR Probability %", "HR Tier", "GroundBall%",
-                "GB Rule", "GB Note", "Matchup Advantage", "Pitcher Target Score", "WeatherNote", "BullpenFatigueNote", "HardHit%", "FlyBall%", "AIR%", "xSLG", "xwOBA", "Barrel%", "Ranking Reasons", "Why"
+                "GB Rule", "GB Note", "Matchup Advantage", "HR Attackability Score", "WeatherNote", "BullpenFatigueNote", "HardHit%", "FlyBall%", "AIR%", "xSLG", "xwOBA", "Barrel%", "Ranking Reasons", "Why"
             ]],
             use_container_width=True,
             hide_index=True
@@ -4076,7 +4137,7 @@ with tabs[1]:
             top12[[
                 "Rank", "Player", "Team", "Game", "Pitcher", "Lineup Spot",
                 "Lineup Source", "Actual HR Today", "HR Probability %", "HR Tier", "GroundBall%",
-                "GB Rule", "GB Note", "Matchup Advantage", "Pitcher Target Score", "WeatherNote", "BullpenFatigueNote", "HardHit%", "FlyBall%", "AIR%", "xSLG", "xwOBA", "Barrel%", "Ranking Reasons", "Why"
+                "GB Rule", "GB Note", "Matchup Advantage", "HR Attackability Score", "WeatherNote", "BullpenFatigueNote", "HardHit%", "FlyBall%", "AIR%", "xSLG", "xwOBA", "Barrel%", "Ranking Reasons", "Why"
             ]],
             use_container_width=True,
             hide_index=True
@@ -4088,7 +4149,7 @@ with tabs[2]:
     top_targets = get_best_hr_matchups(locked_df, 25)
     target_cols = [
         "Rank", "Player", "Team", "Game", "Pitcher", "Lineup Spot", "Lineup Source",
-        "Matchup Advantage", "Matchup Advantage Score", "Pitcher Target Score", "Pitcher_HR9_Last7",
+        "Matchup Advantage", "Matchup Advantage Score", "HR Attackability Score", "Pitcher_HR9_Last7",
         "EV", "Barrel%", "HardHit%", "AIR%", "xSLG", "xwOBA",
         "Pitch Mix Mode", "Relevant Pitch Mix", "Primary Pitch Usage",
         "Actual HR Today", "HR Probability %", "HR Tier", "Ranking Reasons"
@@ -4098,12 +4159,12 @@ with tabs[2]:
         display_existing_columns(top_targets, target_cols)
 
 with tabs[3]:
-    st.subheader("Pitchers to Target Today")
+    st.subheader("Pitchers to Attack Today")
     st.caption("Attackability board emphasizing HR/9, barrel allowed, hard contact allowed, park/weather carry, and matchup vulnerability.")
     pitcher_targets = get_pitchers_to_target(locked_df)
     display_existing_columns(
         pitcher_targets,
-        ["Game", "Pitcher", "Pitcher Target Score", "Pitcher_HR9_Last7", "Pitcher_Barrel_Allowed", "Pitcher_HardHit_Allowed", "WeatherNote", "TempF", "WindMPH"]
+        ["Game", "Pitcher", "HR Attackability Score", "Pitcher_HR9_Last7", "Pitcher_Barrel_Allowed", "Pitcher_HardHit_Allowed", "WeatherNote", "TempF", "WindMPH"]
     )
 
 with tabs[4]:
@@ -4165,7 +4226,7 @@ with tabs[6]:
             "EV", "HardHit%", "FlyBall%", "AIR%", "LaunchAngle", "Recent Trend", "LineDrive%", "GroundBall%", "Barrel%",
             "xSLG", "xwOBA",
             "Pitcher_HR9_Last7", "Pitcher_Barrel_Allowed", "Pitcher_HardHit_Allowed",
-            "Pitcher Target Score", "Pitcher Target Label", "Matchup Advantage Score", "Matchup Advantage", "Ranking Reasons",
+            "HR Attackability Score", "HR Attackability Label", "Matchup Advantage Score", "Matchup Advantage", "Ranking Reasons",
             "Statcast Pass", "Strict Statcast", "Recent Form Pass", "Pitcher Attackable",
             "Pitch_Isolation_Valid", "GB Rule", "GB Note", "WeatherNote", "BullpenFatigueNote", "BullpenFatigueScore", "TempF", "WindMPH", "HR Eligible",
             "HR Probability %", "HRR Score", "Why"
@@ -4245,7 +4306,7 @@ with tabs[7]:
         snapshot_cols = [
             "Tracker Source", "Player", "Team", "Game", "Pitcher", "Lineup Spot",
             "HR Probability %", "HR Tier", "Actual HR Today", "Matchup Advantage",
-            "Pitcher Target Score", "EV", "Barrel%", "HardHit%", "AIR%",
+            "HR Attackability Score", "EV", "Barrel%", "HardHit%", "AIR%",
             "Ranking Reasons", "Why"
         ]
         display_existing_columns(selected_board_snapshot, snapshot_cols)
