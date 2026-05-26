@@ -4190,7 +4190,6 @@ def sync_tracker_with_board(tracked_df: pd.DataFrame):
             continue
 
         new_rows.append({
-            "row_id": make_tracker_row_id(date_key, player_name, row["Team"], row["Game"], source),
             "date": date_key,
             "player": player_name,
             "team": row["Team"],
@@ -4377,7 +4376,6 @@ def sync_combo_tracker_with_board(combo_df: pd.DataFrame):
             continue
         legs = str(row["Players"]).split(" | ")
         new_rows.append({
-            "row_id": make_tracker_row_id(date_key, player_name, row["Team"], row["Game"], source),
             "date": date_key,
             "combo_id": combo_id,
             "combo_label": row["Combo Label"],
