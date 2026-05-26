@@ -10,6 +10,13 @@ import requests
 import streamlit as st
 import time
 import tempfile
+import json
+
+try:
+    from supabase import create_client
+except Exception:
+    create_client = None
+
 st.set_page_config(page_title="BF Data", layout="wide")
 
 st.markdown("""
@@ -86,6 +93,232 @@ CURRENT_SEASON = datetime.now().year
 SNAPSHOT_DIR = "tracker_snapshots"
 
 
+TRACKER_COLUMNS = [
+    "row_id", "date", "player", "team", "game", "game_pk",
+    "hr_probability", "hr_tier", "hr_eligible", "tracker_source",
+    "result", "hr_count", "result_state", "game_state", "updated_at"
+]
+
+COMBO_TRACKER_COLUMNS = [
+    "date", "combo_id", "combo_label", "combo_size", "legs", "games",
+    "avg_leg_probability", "combined_score", "source_pool", "result",
+    "result_state", "legs_hit", "total_legs", "updated_at"
+]
+
+SUPABASE_ENABLED = True
+_SUPABASE_CLIENT = None
+_SUPABASE_ERROR_SHOWN = False
+
+
+def make_tracker_row_id(date_key, player, team, game, tracker_source="CORE_BOARD") -> str:
+    raw = f"{date_key}|{normalize_name(str(player))}|{team}|{game}|{tracker_source}"
+    return hashlib.md5(raw.encode("utf-8")).hexdigest()
+
+
+def make_board_snapshot_row_id(date_key, player, team, game, tracker_source="CORE_BOARD") -> str:
+    raw = f"board|{date_key}|{normalize_name(str(player))}|{team}|{game}|{tracker_source}"
+    return hashlib.md5(raw.encode("utf-8")).hexdigest()
+
+
+def get_supabase_client():
+    """Return Supabase client from Streamlit secrets, or None if not configured.
+
+    This is intentionally optional. BF Data must keep running from CSV backup if
+    Supabase secrets, tables, or columns are not ready yet.
+    """
+    global _SUPABASE_CLIENT, _SUPABASE_ERROR_SHOWN
+    if not SUPABASE_ENABLED or create_client is None:
+        return None
+    if _SUPABASE_CLIENT is not None:
+        return _SUPABASE_CLIENT
+    try:
+        url = st.secrets.get("SUPABASE_URL", "")
+        key = st.secrets.get("SUPABASE_KEY", "")
+        if not url or not key:
+            return None
+        _SUPABASE_CLIENT = create_client(str(url), str(key))
+        return _SUPABASE_CLIENT
+    except Exception as exc:
+        if not _SUPABASE_ERROR_SHOWN:
+            st.caption(f"Supabase tracker backup not connected yet; using local CSV backup. ({type(exc).__name__})")
+            _SUPABASE_ERROR_SHOWN = True
+        return None
+
+
+def clean_for_supabase(value):
+    if pd.isna(value):
+        return None
+    if isinstance(value, (pd.Timestamp, datetime)):
+        return value.isoformat()
+    if hasattr(value, "item"):
+        try:
+            return value.item()
+        except Exception:
+            pass
+    return value
+
+
+def df_records_for_supabase(df: pd.DataFrame, columns: list[str]) -> list[dict]:
+    if df is None or df.empty:
+        return []
+    work = df.copy()
+    for col in columns:
+        if col not in work.columns:
+            work[col] = None
+    records = []
+    for _, row in work[columns].iterrows():
+        records.append({col: clean_for_supabase(row.get(col)) for col in columns})
+    return records
+
+
+def load_supabase_table(table_name: str, columns: list[str]) -> pd.DataFrame:
+    client = get_supabase_client()
+    if client is None:
+        return pd.DataFrame(columns=columns)
+    try:
+        result = client.table(table_name).select("*").execute()
+        data = getattr(result, "data", None) or []
+        df = pd.DataFrame(data)
+        for col in columns:
+            if col not in df.columns:
+                df[col] = pd.NA
+        return df[columns]
+    except Exception:
+        return pd.DataFrame(columns=columns)
+
+
+def upsert_supabase_records(table_name: str, records: list[dict], conflict_col: str, fallback_columns: list[str] | None = None) -> bool:
+    client = get_supabase_client()
+    if client is None or not records:
+        return False
+    try:
+        client.table(table_name).upsert(records, on_conflict=conflict_col).execute()
+        return True
+    except Exception:
+        if fallback_columns:
+            try:
+                trimmed = [{k: rec.get(k) for k in fallback_columns if k in rec} for rec in records]
+                client.table(table_name).upsert(trimmed, on_conflict=conflict_col).execute()
+                return True
+            except Exception:
+                return False
+        return False
+
+
+def save_tracker_to_supabase(df: pd.DataFrame) -> bool:
+    if df is None or df.empty:
+        return False
+    work = df.copy()
+    for col in TRACKER_COLUMNS:
+        if col not in work.columns:
+            work[col] = pd.NA
+    work["tracker_source"] = work["tracker_source"].fillna("CORE_BOARD").astype(str)
+    work["row_id"] = work.apply(
+        lambda r: r.get("row_id") if pd.notna(r.get("row_id")) and str(r.get("row_id")).strip() else make_tracker_row_id(
+            r.get("date"), r.get("player"), r.get("team"), r.get("game"), r.get("tracker_source")
+        ),
+        axis=1,
+    )
+    records = df_records_for_supabase(work, TRACKER_COLUMNS)
+    # Fallback matches the manual table you created first. Full table support starts once
+    # game_pk and hr_eligible are added, but this still preserves history if they are absent.
+    fallback_cols = [
+        "row_id", "date", "player", "team", "game", "hr_probability", "hr_tier",
+        "result", "hr_count", "result_state", "game_state", "tracker_source", "updated_at"
+    ]
+    return upsert_supabase_records("hr_tracker", records, "row_id", fallback_columns=fallback_cols)
+
+
+def load_tracker_from_supabase() -> pd.DataFrame:
+    return load_supabase_table("hr_tracker", TRACKER_COLUMNS)
+
+
+def save_combo_tracker_to_supabase(df: pd.DataFrame) -> bool:
+    records = df_records_for_supabase(df, COMBO_TRACKER_COLUMNS)
+    return upsert_supabase_records("hr_combo_tracker", records, "combo_id")
+
+
+def load_combo_tracker_from_supabase() -> pd.DataFrame:
+    return load_supabase_table("hr_combo_tracker", COMBO_TRACKER_COLUMNS)
+
+
+def save_board_locks_to_supabase(df: pd.DataFrame) -> bool:
+    if df is None or df.empty:
+        return False
+    records = []
+    work = df.copy()
+    for _, row in work.iterrows():
+        date_key = str(row.get("date", today_str()))
+        player = str(row.get("Player", row.get("player", "")))
+        team = str(row.get("Team", row.get("team", "")))
+        game = str(row.get("Game", row.get("game", "")))
+        row_id = make_board_snapshot_row_id(date_key, player, team, game, str(row.get("lock_scope", "LOCK")))
+        payload = {str(k): clean_for_supabase(v) for k, v in row.to_dict().items()}
+        records.append({
+            "row_id": row_id,
+            "date": date_key,
+            "game": game,
+            "team": team,
+            "player": player,
+            "payload": payload,
+            "lock_created_at": str(row.get("lock_created_at", now_et_string())),
+            "lock_scope": str(row.get("lock_scope", "CONFIRMED_TEAM")),
+        })
+    return upsert_supabase_records("daily_hr_board_lock", records, "row_id")
+
+
+def load_board_locks_from_supabase() -> pd.DataFrame:
+    client = get_supabase_client()
+    if client is None:
+        return pd.DataFrame()
+    try:
+        result = client.table("daily_hr_board_lock").select("*").execute()
+        rows = getattr(result, "data", None) or []
+        payloads = [r.get("payload") for r in rows if isinstance(r.get("payload"), dict)]
+        return pd.DataFrame(payloads) if payloads else pd.DataFrame()
+    except Exception:
+        return pd.DataFrame()
+
+
+def save_board_snapshot_to_supabase(board_df: pd.DataFrame, snapshot_date: str) -> bool:
+    if board_df is None or board_df.empty:
+        return False
+    records = []
+    work = board_df.copy()
+    if "Actual HR Today" in work.columns:
+        work = work.drop(columns=["Actual HR Today"])
+    for _, row in work.iterrows():
+        source = str(row.get("Tracker Source", row.get("tracker_source", "CORE_BOARD")))
+        player = str(row.get("Player", row.get("player", "")))
+        team = str(row.get("Team", row.get("team", "")))
+        game = str(row.get("Game", row.get("game", "")))
+        row_id = make_board_snapshot_row_id(snapshot_date, player, team, game, source)
+        records.append({
+            "row_id": row_id,
+            "date": str(snapshot_date),
+            "player": player,
+            "team": team,
+            "game": game,
+            "tracker_source": source,
+            "payload": {str(k): clean_for_supabase(v) for k, v in row.to_dict().items()},
+        })
+    return upsert_supabase_records("hr_board_snapshots", records, "row_id")
+
+
+def load_board_snapshot_from_supabase(snapshot_date: str) -> pd.DataFrame:
+    client = get_supabase_client()
+    if client is None:
+        return pd.DataFrame()
+    try:
+        result = client.table("hr_board_snapshots").select("*").eq("date", str(snapshot_date)).execute()
+        rows = getattr(result, "data", None) or []
+        payloads = [r.get("payload") for r in rows if isinstance(r.get("payload"), dict)]
+        return pd.DataFrame(payloads) if payloads else pd.DataFrame()
+    except Exception:
+        return pd.DataFrame()
+
+
+
 def ensure_snapshot_folder():
     os.makedirs(SNAPSHOT_DIR, exist_ok=True)
 
@@ -140,22 +373,26 @@ def save_daily_tracker_snapshot(tracker_df: pd.DataFrame, snapshot_date: str):
     ensure_snapshot_folder()
     tracker_path = os.path.join(SNAPSHOT_DIR, f"hr_tracker_{snapshot_date}.csv")
     atomic_write_csv(tracker_df, tracker_path)
+    save_tracker_to_supabase(tracker_df)
 
 
 def save_daily_board_snapshot(board_df: pd.DataFrame, snapshot_date: str):
     """Persist the original surfaced HR board once per day so historical predictions cannot be rewritten."""
     ensure_snapshot_folder()
     board_path = os.path.join(SNAPSHOT_DIR, f"hr_board_{snapshot_date}.csv")
-    if os.path.exists(board_path):
-        return
-    clean_board = board_df.copy()
-    if "Actual HR Today" in clean_board.columns:
-        clean_board = clean_board.drop(columns=["Actual HR Today"])
-    atomic_write_csv(clean_board, board_path)
+    if not os.path.exists(board_path):
+        clean_board = board_df.copy()
+        if "Actual HR Today" in clean_board.columns:
+            clean_board = clean_board.drop(columns=["Actual HR Today"])
+        atomic_write_csv(clean_board, board_path)
+    save_board_snapshot_to_supabase(board_df, snapshot_date)
 
 
 def load_daily_board_snapshot(snapshot_date: str) -> pd.DataFrame:
     ensure_snapshot_folder()
+    supa = load_board_snapshot_from_supabase(snapshot_date)
+    if supa is not None and not supa.empty:
+        return supa
     board_path = os.path.join(SNAPSHOT_DIR, f"hr_board_{snapshot_date}.csv")
     if os.path.exists(board_path):
         try:
@@ -395,12 +632,13 @@ def read_html_best_table(urls: list[str], must_have_any: list[str]) -> pd.DataFr
 
 
 def load_tracker() -> pd.DataFrame:
-    columns = [
-        "date", "player", "team", "game", "game_pk",
-        "hr_probability", "hr_tier", "hr_eligible", "tracker_source",
-        "result", "hr_count", "result_state", "game_state", "updated_at"
-    ]
+    columns = TRACKER_COLUMNS
     frames = []
+
+    supa = load_tracker_from_supabase()
+    if supa is not None and not supa.empty:
+        frames.append(supa[columns])
+
     if os.path.exists(TRACKER_FILE):
         try:
             df = pd.read_csv(TRACKER_FILE)
@@ -417,52 +655,97 @@ def load_tracker() -> pd.DataFrame:
 
     if frames:
         merged = pd.concat(frames, ignore_index=True)
-        merged = merged.drop_duplicates(
-            subset=["date", "player", "team", "game", "tracker_source"],
-            keep="last"
-        ).reset_index(drop=True)
+        for col in columns:
+            if col not in merged.columns:
+                merged[col] = pd.NA
+        merged["tracker_source"] = merged["tracker_source"].fillna("CORE_BOARD").astype(str)
+        merged["row_id"] = merged.apply(
+            lambda r: r.get("row_id") if pd.notna(r.get("row_id")) and str(r.get("row_id")).strip() else make_tracker_row_id(
+                r.get("date"), r.get("player"), r.get("team"), r.get("game"), r.get("tracker_source")
+            ),
+            axis=1,
+        )
+        merged = merged.drop_duplicates(subset=["row_id"], keep="last").reset_index(drop=True)
         return merged[columns]
 
     return pd.DataFrame(columns=columns)
 
 
 def save_tracker(df: pd.DataFrame):
-    atomic_write_csv(df, TRACKER_FILE)
+    if df is None:
+        return
+    work = df.copy()
+    for col in TRACKER_COLUMNS:
+        if col not in work.columns:
+            work[col] = pd.NA
+    if not work.empty:
+        work["tracker_source"] = work["tracker_source"].fillna("CORE_BOARD").astype(str)
+        work["row_id"] = work.apply(
+            lambda r: r.get("row_id") if pd.notna(r.get("row_id")) and str(r.get("row_id")).strip() else make_tracker_row_id(
+                r.get("date"), r.get("player"), r.get("team"), r.get("game"), r.get("tracker_source")
+            ),
+            axis=1,
+        )
+    atomic_write_csv(work[TRACKER_COLUMNS], TRACKER_FILE)
+    save_tracker_to_supabase(work[TRACKER_COLUMNS])
 
 
 def load_combo_tracker() -> pd.DataFrame:
-    columns = [
-        "date", "combo_id", "combo_label", "combo_size", "legs", "games",
-        "avg_leg_probability", "combined_score", "source_pool", "result",
-        "result_state", "legs_hit", "total_legs", "updated_at"
-    ]
+    columns = COMBO_TRACKER_COLUMNS
+    frames = []
+
+    supa = load_combo_tracker_from_supabase()
+    if supa is not None and not supa.empty:
+        frames.append(supa[columns])
+
     if os.path.exists(COMBO_TRACKER_FILE):
         try:
             df = pd.read_csv(COMBO_TRACKER_FILE)
             for col in columns:
                 if col not in df.columns:
                     df[col] = pd.NA
-            return df[columns]
+            frames.append(df[columns])
         except Exception:
             pass
+
+    if frames:
+        merged = pd.concat(frames, ignore_index=True)
+        merged = merged.drop_duplicates(subset=["combo_id"], keep="last").reset_index(drop=True)
+        return merged[columns]
     return pd.DataFrame(columns=columns)
 
 
 def save_combo_tracker(df: pd.DataFrame):
-    atomic_write_csv(df, COMBO_TRACKER_FILE)
+    if df is None:
+        return
+    work = df.copy()
+    for col in COMBO_TRACKER_COLUMNS:
+        if col not in work.columns:
+            work[col] = pd.NA
+    atomic_write_csv(work[COMBO_TRACKER_COLUMNS], COMBO_TRACKER_FILE)
+    save_combo_tracker_to_supabase(work[COMBO_TRACKER_COLUMNS])
 
 
 def load_board_locks() -> pd.DataFrame:
+    frames = []
+    supa = load_board_locks_from_supabase()
+    if supa is not None and not supa.empty:
+        frames.append(supa)
     if os.path.exists(LOCK_FILE):
         try:
-            return pd.read_csv(LOCK_FILE)
+            frames.append(pd.read_csv(LOCK_FILE))
         except Exception:
             pass
+    if frames:
+        return pd.concat(frames, ignore_index=True).drop_duplicates(keep="last").reset_index(drop=True)
     return pd.DataFrame()
 
 
 def save_board_locks(df: pd.DataFrame):
+    if df is None:
+        return
     atomic_write_csv(df, LOCK_FILE)
+    save_board_locks_to_supabase(df)
 
 
 def get_locked_board_for_date(date_key: str) -> pd.DataFrame:
@@ -3907,6 +4190,7 @@ def sync_tracker_with_board(tracked_df: pd.DataFrame):
             continue
 
         new_rows.append({
+            "row_id": make_tracker_row_id(date_key, player_name, row["Team"], row["Game"], source),
             "date": date_key,
             "player": player_name,
             "team": row["Team"],
@@ -3946,7 +4230,12 @@ def auto_update_tracker_results(tracker: pd.DataFrame, schedule: list[dict]):
         game_state = game.get("game_state", "Preview")
         detailed_state = game.get("detailed_state", "Scheduled")
 
-        rows_mask = today_mask & (tracker["game_pk"] == game_pk)
+        game_key = game.get("game_key")
+        game_pk_num = pd.to_numeric(tracker.get("game_pk", pd.Series([pd.NA] * len(tracker))), errors="coerce")
+        rows_mask = today_mask & (
+            (game_pk_num == safe_int(game_pk, -1))
+            | (tracker.get("game", pd.Series([""] * len(tracker))).astype(str) == str(game_key))
+        )
         if not rows_mask.any():
             continue
 
@@ -4088,6 +4377,7 @@ def sync_combo_tracker_with_board(combo_df: pd.DataFrame):
             continue
         legs = str(row["Players"]).split(" | ")
         new_rows.append({
+            "row_id": make_tracker_row_id(date_key, player_name, row["Team"], row["Game"], source),
             "date": date_key,
             "combo_id": combo_id,
             "combo_label": row["Combo Label"],
