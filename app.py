@@ -2,14 +2,13 @@ import hashlib
 import os
 import re
 from html import escape
-from datetime import datetime, timedelta
+from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import pandas as pd
 import requests
 import streamlit as st
-import time
-import tempfile
+import time 
 st.set_page_config(page_title="BF Data", layout="wide")
 
 st.markdown("""
@@ -90,56 +89,11 @@ def ensure_snapshot_folder():
     os.makedirs(SNAPSHOT_DIR, exist_ok=True)
 
 
-def atomic_write_csv(df: pd.DataFrame, path: str):
-    """Write CSV safely so refresh/restart does not leave a half-written tracker file."""
-    folder = os.path.dirname(path)
-    if folder:
-        os.makedirs(folder, exist_ok=True)
-    tmp_folder = folder if folder else "."
-    fd, tmp_path = tempfile.mkstemp(prefix=".bfdata_", suffix=".csv", dir=tmp_folder)
-    os.close(fd)
-    try:
-        df.to_csv(tmp_path, index=False)
-        os.replace(tmp_path, path)
-    finally:
-        if os.path.exists(tmp_path):
-            try:
-                os.remove(tmp_path)
-            except Exception:
-                pass
-
-
-def load_tracker_snapshots(columns: list[str]) -> pd.DataFrame:
-    """Recover tracker rows from daily snapshots if Streamlit/GitHub storage reloads oddly."""
-    ensure_snapshot_folder()
-    frames = []
-    if not os.path.exists(SNAPSHOT_DIR):
-        return pd.DataFrame(columns=columns)
-    for name in os.listdir(SNAPSHOT_DIR):
-        if not re.match(r"hr_tracker_\d{4}-\d{2}-\d{2}\.csv$", name):
-            continue
-        try:
-            snap = pd.read_csv(os.path.join(SNAPSHOT_DIR, name))
-            for col in columns:
-                if col not in snap.columns:
-                    snap[col] = pd.NA
-            frames.append(snap[columns])
-        except Exception:
-            continue
-    if not frames:
-        return pd.DataFrame(columns=columns)
-    merged = pd.concat(frames, ignore_index=True)
-    return merged.drop_duplicates(
-        subset=["date", "player", "team", "game", "tracker_source"],
-        keep="last"
-    ).reset_index(drop=True)
-
-
 def save_daily_tracker_snapshot(tracker_df: pd.DataFrame, snapshot_date: str):
     """Persist the day's tracker state so historical results never disappear."""
     ensure_snapshot_folder()
     tracker_path = os.path.join(SNAPSHOT_DIR, f"hr_tracker_{snapshot_date}.csv")
-    atomic_write_csv(tracker_df, tracker_path)
+    tracker_df.to_csv(tracker_path, index=False)
 
 
 def save_daily_board_snapshot(board_df: pd.DataFrame, snapshot_date: str):
@@ -151,7 +105,7 @@ def save_daily_board_snapshot(board_df: pd.DataFrame, snapshot_date: str):
     clean_board = board_df.copy()
     if "Actual HR Today" in clean_board.columns:
         clean_board = clean_board.drop(columns=["Actual HR Today"])
-    atomic_write_csv(clean_board, board_path)
+    clean_board.to_csv(board_path, index=False)
 
 
 def load_daily_board_snapshot(snapshot_date: str) -> pd.DataFrame:
@@ -400,34 +354,20 @@ def load_tracker() -> pd.DataFrame:
         "hr_probability", "hr_tier", "hr_eligible", "tracker_source",
         "result", "hr_count", "result_state", "game_state", "updated_at"
     ]
-    frames = []
     if os.path.exists(TRACKER_FILE):
         try:
             df = pd.read_csv(TRACKER_FILE)
             for col in columns:
                 if col not in df.columns:
                     df[col] = pd.NA
-            frames.append(df[columns])
+            return df[columns]
         except Exception:
             pass
-
-    snapshots = load_tracker_snapshots(columns)
-    if snapshots is not None and not snapshots.empty:
-        frames.append(snapshots[columns])
-
-    if frames:
-        merged = pd.concat(frames, ignore_index=True)
-        merged = merged.drop_duplicates(
-            subset=["date", "player", "team", "game", "tracker_source"],
-            keep="last"
-        ).reset_index(drop=True)
-        return merged[columns]
-
     return pd.DataFrame(columns=columns)
 
 
 def save_tracker(df: pd.DataFrame):
-    atomic_write_csv(df, TRACKER_FILE)
+    df.to_csv(TRACKER_FILE, index=False)
 
 
 def load_combo_tracker() -> pd.DataFrame:
@@ -449,7 +389,7 @@ def load_combo_tracker() -> pd.DataFrame:
 
 
 def save_combo_tracker(df: pd.DataFrame):
-    atomic_write_csv(df, COMBO_TRACKER_FILE)
+    df.to_csv(COMBO_TRACKER_FILE, index=False)
 
 
 def load_board_locks() -> pd.DataFrame:
@@ -462,7 +402,7 @@ def load_board_locks() -> pd.DataFrame:
 
 
 def save_board_locks(df: pd.DataFrame):
-    atomic_write_csv(df, LOCK_FILE)
+    df.to_csv(LOCK_FILE, index=False)
 
 
 def get_locked_board_for_date(date_key: str) -> pd.DataFrame:
@@ -1470,10 +1410,8 @@ def fetch_people_stats(person_ids_tuple: tuple, group: str):
                 elif stat_type == "gamelog":
                     game_rows = []
                     for split in splits:
-                        game_info = split.get("game", {}) or {}
                         game_rows.append({
                             "date": split.get("date"),
-                            "game_pk": game_info.get("gamePk") or game_info.get("gamePkId"),
                             "stat": split.get("stat", {}) or {}
                         })
                     game_rows = sorted(game_rows, key=lambda x: x.get("date") or "", reverse=True)
@@ -1575,13 +1513,12 @@ def fetch_savant_batter_map(year: int):
     return result
 
 
+@st.cache_data(ttl=21600)
+def fetch_l10_bbe_profile_from_savant_csv(player_id: int, days_back: int = 30) -> dict:
+    """Fast true-L10 BBE pull for final board hitters only.
 
-
-@st.cache_data(ttl=900)
-def fetch_l10_bbe_profile_from_savant_csv(player_id: int, days_back: int = 45) -> dict:
-    """Build a true last-10 BBE profile from pitch-level recent batted-ball rows.
-
-    This feeds the model only. No data-source wording is shown on user cards.
+    This is intentionally cached and only called after the app has reduced the
+    slate to real candidate hitters. Nothing about the source is shown on cards.
     """
     empty = {
         "found": False,
@@ -1613,13 +1550,12 @@ def fetch_l10_bbe_profile_from_savant_csv(player_id: int, days_back: int = 45) -
             "type": "details",
             "min_pitches": "0",
             "min_results": "0",
-            "group_by": "name",
         }
         resp = requests.get(
             "https://baseballsavant.mlb.com/statcast_search/csv",
             params=params,
             headers={"User-Agent": "Mozilla/5.0"},
-            timeout=25,
+            timeout=8,
         )
         resp.raise_for_status()
         from io import StringIO
@@ -1639,7 +1575,6 @@ def fetch_l10_bbe_profile_from_savant_csv(player_id: int, days_back: int = 45) -
     if "bb_type" not in df.columns:
         df["bb_type"] = ""
 
-    # Batted-ball events are the player's most recent balls in play with contact shape.
     bbe = df[
         df["launch_speed"].notna()
         | df["launch_angle"].notna()
@@ -1648,8 +1583,6 @@ def fetch_l10_bbe_profile_from_savant_csv(player_id: int, days_back: int = 45) -
     if bbe.empty:
         return empty
 
-    # Sort newest first. These columns are present on most Statcast CSV exports, but
-    # the checks keep the app safe if the export shape changes.
     sort_cols = [c for c in ["game_date", "game_pk", "at_bat_number", "pitch_number"] if c in bbe.columns]
     if sort_cols:
         bbe = bbe.sort_values(sort_cols, ascending=[False] * len(sort_cols))
@@ -1695,8 +1628,6 @@ def fetch_l10_bbe_profile_from_savant_csv(player_id: int, days_back: int = 45) -
         la = safe_float(row.get("launch_angle"), None)
         if ev is not None and ev >= 95.0:
             hard += 1
-        # Practical barrel proxy for recent BBE cards: hard + useful launch window.
-        # It intentionally stays internal and only powers the model/cards.
         if ev is not None and la is not None and ev >= 98.0 and 8.0 <= la <= 50.0:
             barrels += 1
 
@@ -1720,150 +1651,22 @@ def fetch_l10_bbe_profile_from_savant_csv(player_id: int, days_back: int = 45) -
     }
 
 
-@st.cache_data(ttl=900)
-def fetch_l10_bbe_profile_from_playbyplay(player_id: int, game_pks_tuple: tuple) -> dict:
-    """Build a true last-10 batted-ball-event profile from MLB play data when available.
 
-    This does not display any data-source wording in the UI. It only feeds the
-    model with recent contact shape: EV, barrel-like contact, hard-hit, FB, LD,
-    GB, popup, and air-ball rate.
-    """
-    empty = {
-        "found": False,
-        "events": 0,
-        "EV": None,
-        "HardHit%": None,
-        "Barrel%": None,
-        "FlyBall%": None,
-        "LineDrive%": None,
-        "GroundBall%": None,
-        "Popup%": None,
-        "AIR%": None,
-        "AvgLA": None,
-    }
-    try:
-        pid = int(player_id)
-    except Exception:
-        return empty
-
-    bbes = []
-    # Game logs are already newest first in the caller. Looking back through 15 games
-    # is enough to collect 10 actual batted balls without hammering requests.
-    for game_pk in list(game_pks_tuple or [])[:15]:
-        if len(bbes) >= 10:
-            break
-        if not game_pk:
-            continue
-        try:
-            url = f"https://statsapi.mlb.com/api/v1.1/game/{int(game_pk)}/feed/live"
-            resp = requests.get(url, timeout=18)
-            resp.raise_for_status()
-            data = resp.json()
-        except Exception:
-            continue
-
-        plays = ((data.get("liveData") or {}).get("plays") or {}).get("allPlays", []) or []
-        # Walk plays backwards so the newest BBE in that game is collected first.
-        for play in reversed(plays):
-            if len(bbes) >= 10:
-                break
-            matchup = play.get("matchup", {}) or {}
-            batter = matchup.get("batter", {}) or {}
-            if batter.get("id") != pid:
-                continue
-
-            hit_data = play.get("hitData", {}) or {}
-            launch_speed = hit_data.get("launchSpeed")
-            launch_angle = hit_data.get("launchAngle")
-            trajectory = str(hit_data.get("trajectory") or "").lower().strip()
-
-            # A batted ball event needs hitData shape or a known batted-ball trajectory.
-            if launch_speed is None and launch_angle is None and not trajectory:
-                continue
-
-            try:
-                ev = float(launch_speed) if launch_speed is not None else None
-            except Exception:
-                ev = None
-            try:
-                la = float(launch_angle) if launch_angle is not None else None
-            except Exception:
-                la = None
-
-            if trajectory in {"ground_ball", "groundball", "grounder"}:
-                btype = "GB"
-            elif trajectory in {"line_drive", "linedrive", "liner"}:
-                btype = "LD"
-            elif trajectory in {"fly_ball", "flyball"}:
-                btype = "FB"
-            elif trajectory in {"popup", "pop_up", "pop fly", "popfly"}:
-                btype = "PU"
-            else:
-                # Fallback from launch angle when MLB does not provide trajectory text.
-                if la is None:
-                    continue
-                if la < 10:
-                    btype = "GB"
-                elif la < 25:
-                    btype = "LD"
-                elif la < 50:
-                    btype = "FB"
-                else:
-                    btype = "PU"
-
-            # Barrel-like approximation using public EV/LA shape. Conservative enough
-            # to avoid inflating every hard contact event.
-            barrel_like = False
-            if ev is not None and la is not None:
-                barrel_like = ev >= 98 and 24 <= la <= 34
-
-            bbes.append({"ev": ev, "la": la, "type": btype, "barrel_like": barrel_like})
-
-    if not bbes:
-        return empty
-
-    n = len(bbes)
-    evs = [x["ev"] for x in bbes if x.get("ev") is not None]
-    las = [x["la"] for x in bbes if x.get("la") is not None]
-    count = lambda t: sum(1 for x in bbes if x.get("type") == t)
-    hard = sum(1 for x in bbes if x.get("ev") is not None and x["ev"] >= 95.0)
-    barrels = sum(1 for x in bbes if x.get("barrel_like"))
-    gb = count("GB") / n * 100
-    fb = count("FB") / n * 100
-    ld = count("LD") / n * 100
-    pu = count("PU") / n * 100
-    return {
-        "found": True,
-        "events": n,
-        "EV": round(sum(evs) / len(evs), 1) if evs else None,
-        "HardHit%": round(hard / n * 100, 1),
-        "Barrel%": round(barrels / n * 100, 1),
-        "FlyBall%": round(fb, 1),
-        "LineDrive%": round(ld, 1),
-        "GroundBall%": round(gb, 1),
-        "Popup%": round(pu, 1),
-        "AIR%": round(fb + ld, 1),
-        "AvgLA": round(sum(las) / len(las), 1) if las else None,
-    }
-
-def compute_hitter_live_metrics_from_map(player_id: int, stats_map: dict):
+def compute_hitter_live_metrics_from_map(player_id: int, stats_map: dict, use_true_bbe: bool = False):
     data = stats_map.get(player_id, {"season": {}, "gamelog": []})
     season_stat = data.get("season", {}) or {}
-    gamelog_all = (data.get("gamelog", []) or [])
-    gamelog = gamelog_all[:10]
+    gamelog = (data.get("gamelog", []) or [])[:10]
 
     if not gamelog:
         return None
 
-    recent_game_pks = tuple(
-        g.get("game_pk") for g in gamelog_all[:15]
-        if g.get("game_pk") is not None
-    )
-    true_bbe = fetch_l10_bbe_profile_from_savant_csv(player_id)
-    if (not true_bbe.get("found")) and recent_game_pks:
-        true_bbe = fetch_l10_bbe_profile_from_playbyplay(player_id, recent_game_pks)
-    if not isinstance(true_bbe, dict):
-        true_bbe = {"found": False}
+    true_bbe = {"found": False}
+    # SPEED FIX: only final board hitters should trigger this live CSV lookup.
+    # Roster/projection screening calls this function with use_true_bbe=False.
+    if use_true_bbe:
+        true_bbe = fetch_l10_bbe_profile_from_savant_csv(player_id, days_back=30)
+        if not isinstance(true_bbe, dict):
+            true_bbe = {"found": False}
 
     ab = sum(safe_int(g["stat"].get("atBats", 0)) for g in gamelog)
     hits = sum(safe_int(g["stat"].get("hits", 0)) for g in gamelog)
@@ -1883,8 +1686,8 @@ def compute_hitter_live_metrics_from_map(player_id: int, stats_map: dict):
     iso = max(slg - avg, 0.0)
     xbh = doubles + triples + hrs
 
-    # Use RECENT game-log batted-ball shape first. This keeps BF Data aligned with
-    # PropFinder-style L10 BBE research instead of letting season GB% override the card.
+    # Fast fallback shape from L10/season box stats. This keeps the app responsive
+    # before true L10 BBE is applied to final board hitters.
     recent_ground_outs = sum(safe_int(g["stat"].get("groundOuts", 0)) for g in gamelog)
     recent_air_outs = sum(safe_int(g["stat"].get("airOuts", 0)) for g in gamelog)
     recent_shape_total = recent_ground_outs + recent_air_outs
@@ -1898,38 +1701,27 @@ def compute_hitter_live_metrics_from_map(player_id: int, stats_map: dict):
     barrel = clip(2 + iso * 35 + (hrs / pa_proxy) * 160, 1, 20)
 
     if recent_shape_total > 0:
-        raw_gb = (recent_ground_outs / recent_shape_total) * 100
-        gb = clip(raw_gb, 5, 70)
+        gb = clip((recent_ground_outs / recent_shape_total) * 100, 5, 70)
         air_total = clip(100 - gb, 30, 95)
     elif season_shape_total > 0:
-        raw_gb = (season_ground_outs / season_shape_total) * 100
-        gb = clip(raw_gb, 20, 65)
+        gb = clip((season_ground_outs / season_shape_total) * 100, 20, 65)
         air_total = clip(100 - gb, 35, 80)
     else:
         gb = stable_float(f"{player_id}-gb-fallback", 32, 48)
         air_total = clip(100 - gb, 35, 80)
 
-    # Split the non-grounder bucket into LD/FB using recent power/contact clues.
-    # HR/XBH/hard contact push more of the air bucket into true damage contact,
-    # while keeping FB + LD + GB mathematically aligned on the card.
     ld_share = clip(0.32 + (hard_hit - 40) / 140 + (xbh / max(pa_proxy, 1)) * 0.35 + (hrs / max(pa_proxy, 1)) * 0.45, 0.22, 0.68)
     ld = clip(air_total * ld_share, 10, 65)
     fb = clip(air_total - ld, 8, 65)
-    # Rebalance after clipping so visible FB/LD/GB remain coherent.
-    air_total = max(0.0, 100.0 - gb)
     if fb + ld > 0:
-        scale = air_total / (fb + ld)
+        scale = max(0.0, 100.0 - gb) / (fb + ld)
         fb = clip(fb * scale, 0, 80)
         ld = clip(ld * scale, 0, 80)
 
-    # Prefer actual last-10 batted-ball events from play data when available.
-    # Keep this internal only; the card does not reveal collection/source wording.
     if true_bbe.get("found") and safe_int(true_bbe.get("events"), 0) >= 4:
         if true_bbe.get("EV") is not None:
             ev = clip(safe_float(true_bbe.get("EV"), ev), 84, 105)
         hard_hit = clip(safe_float(true_bbe.get("HardHit%"), hard_hit), 0, 100)
-        # Blend true event barrel-like rate with recent production proxy so small samples
-        # do not erase real power, but still make the BBE shape drive GB/FB/LD.
         true_barrel = safe_float(true_bbe.get("Barrel%"), barrel)
         barrel = clip((true_barrel * 0.65) + (barrel * 0.35), 0, 30)
         fb = clip(safe_float(true_bbe.get("FlyBall%"), fb), 0, 100)
@@ -1941,15 +1733,12 @@ def compute_hitter_live_metrics_from_map(player_id: int, stats_map: dict):
             fb = round(fb * scale, 1)
             ld = round(ld * scale, 1)
             gb = round(gb * scale, 1)
-        air_total = clip(fb + ld, 0, 100)
 
-    # L10 BBE-style profile. MLB StatsAPI does not expose true EV-by-BBE in this app,
-    # so this builds a stable last-10 batted-ball-events proxy from recent contact,
-    # extra-base damage, HR rate, ISO, and strikeout drag. This is intentionally
-    # weighted toward the exact recent batted-ball quality the user researches.
+    air_total = clip(fb + ld, 0, 100)
     l10_bbe_events = safe_int(true_bbe.get("events"), 0) if true_bbe.get("found") else max(1, min(10, ab - strikeouts + doubles + triples + hrs))
     l10_damage_per_bbe = (hrs * 4.0 + xbh * 1.6 + total_bases * 0.18) / max(l10_bbe_events, 1)
     l10_contact_rate = max(0.0, (ab - strikeouts) / max(ab, 1))
+
     if true_bbe.get("found"):
         l10_bbe_quality = clip(
             max(0.0, ev - 86.0) * 4.0 +
@@ -1972,6 +1761,7 @@ def compute_hitter_live_metrics_from_map(player_id: int, stats_map: dict):
             0.0,
             100.0,
         )
+
     if l10_bbe_quality >= 72:
         l10_bbe_trend = "ELITE"
     elif l10_bbe_quality >= 55:
@@ -2003,7 +1793,7 @@ def compute_hitter_live_metrics_from_map(player_id: int, stats_map: dict):
         "L10_BBE_Quality": round(l10_bbe_quality, 1),
         "L10_BBE_Trend": l10_bbe_trend,
         "L10_BBE_Damage": round(l10_damage_per_bbe, 2),
-        "L10_BBE_AvgLA": round(safe_float(true_bbe.get("AvgLA"), 14.0), 1) if isinstance(true_bbe, dict) and true_bbe.get("found") else 14.0,
+        "L10_BBE_AvgLA": round(safe_float(true_bbe.get("AvgLA"), 14.0), 1) if true_bbe.get("found") else 14.0,
         "season_games": season_games,
         "season_ab": season_ab,
     }
@@ -2141,18 +1931,16 @@ def get_team_candidate_hitters(game_pk: int, team_id: int, side: str, savant_bat
             continue
 
         sav = savant_batter_map.get(normalize_name(h["player_name"]), {})
-        # Candidate gate uses the same L10-first shape/card inputs so projected pools
-        # do not contradict the player card later.
-        sav_brl = safe_float(metrics.get("Barrel%"), safe_float(sav.get("Savant_Barrel%"), 0.0))
-        sav_hh = safe_float(metrics.get("HardHit%"), safe_float(sav.get("Savant_HardHit%"), 0.0))
-        sav_fb = safe_float(metrics.get("FlyBall%"), safe_float(sav.get("Savant_FB%"), 0.0))
-        sav_ld = safe_float(metrics.get("LineDrive%"), safe_float(sav.get("Savant_LD%"), 0.0))
-        sav_air = round(max(0.0, sav_fb + sav_ld), 1)
+        sav_brl = safe_float(sav.get("Savant_Barrel%"), metrics["Barrel%"])
+        sav_hh = safe_float(sav.get("Savant_HardHit%"), metrics["HardHit%"])
+        sav_fb = safe_float(sav.get("Savant_FB%"), metrics["FlyBall%"])
+        sav_ld = safe_float(sav.get("Savant_LD%"), metrics["LineDrive%"])
+        sav_air = safe_float(sav.get("Savant_AIR%"), max(0.0, sav_fb + sav_ld))
         sav_xslg = safe_float(sav.get("Savant_xSLG"), 0.0)
         sav_xwoba = safe_float(sav.get("Savant_xwOBA"), 0.0)
         sav_la = safe_float(sav.get("Savant_LA"), 14.0)
-        sav_ev = safe_float(metrics.get("EV"), safe_float(sav.get("Savant_EV"), 0.0))
-        sav_gb = safe_float(metrics.get("GroundBall%"), safe_float(sav.get("Savant_GB%"), 0.0))
+        sav_ev = safe_float(sav.get("Savant_EV"), metrics["EV"])
+        sav_gb = safe_float(sav.get("Savant_GB%"), metrics["GroundBall%"])
 
         profile_gate = passes_air_authority_profile(
             hard_hit=sav_hh,
@@ -2758,13 +2546,10 @@ def get_pitchers_to_target(df: pd.DataFrame) -> pd.DataFrame:
         .copy()
     )
     out["HR Attackability Score"] = pd.to_numeric(out["_bf_pitcher_target_score"], errors="coerce").fillna(0.0).round(2)
-    out["HR Attackability %"] = out["HR Attackability Score"].apply(_attackability_pct)
-    out["HR Attackability Status"] = out["HR Attackability %"].apply(lambda v: _attackability_bucket(v, already_pct=True)[0])
-    out["Pitcher HR Profile"] = out["HR Attackability %"].apply(lambda v: _attackability_note(v, already_pct=True))
+    out["HR Attackability Score"] = out["HR Attackability Score"]
 
     final_cols = [
-        "Game", "Pitcher", "HR Attackability %", "HR Attackability Status", "Pitcher HR Profile",
-        "HR Attackability %", "HR Attackability Status", "HR Attackability Score", "Pitcher_HR9_Last7", "Pitcher_Season_HR9", "Pitcher_Recent_HR9",
+        "Game", "Pitcher", "HR Attackability Score", "Pitcher_HR9_Last7", "Pitcher_Season_HR9", "Pitcher_Recent_HR9",
         "Pitcher_Barrel_Allowed", "Pitcher_HardHit_Allowed",
         "WeatherNote", "TempF", "WindMPH"
     ]
@@ -2794,7 +2579,7 @@ def build_hitter_metrics(
     bullpen_ip_prev: float = 0.0,
     bullpen_arms_prev: int = 0,
 ):
-    live_hitter = compute_hitter_live_metrics_from_map(player_id, hitter_stats_map)
+    live_hitter = compute_hitter_live_metrics_from_map(player_id, hitter_stats_map, use_true_bbe=True)
     live_pitcher = compute_pitcher_live_metrics_from_map(
         opp_pitcher_id,
         opp_pitcher,
@@ -2806,19 +2591,14 @@ def build_hitter_metrics(
 
     sav = savant_batter_map.get(normalize_name(player_name), {})
 
-    # Hitter contact quality is L10-BBE-first. Season/Savant values only fill blanks.
-    ev = safe_float(live_hitter.get("EV"), safe_float(sav.get("Savant_EV"), 0.0))
-    hard_hit = safe_float(live_hitter.get("HardHit%"), safe_float(sav.get("Savant_HardHit%"), 0.0))
-
-    # Shape must be L10-first. Do NOT let season/Savant GB% mark a hitter as
-    # GB-heavy when the recent batted-ball profile is showing air/line-drive damage.
-    fly_ball = safe_float(live_hitter.get("FlyBall%"), safe_float(sav.get("Savant_FB%"), 0.0))
-    line_drive = safe_float(live_hitter.get("LineDrive%"), safe_float(sav.get("Savant_LD%"), 0.0))
-    ground_ball = safe_float(live_hitter.get("GroundBall%"), safe_float(sav.get("Savant_GB%"), 0.0))
-
-    barrel = safe_float(live_hitter.get("Barrel%"), safe_float(sav.get("Savant_Barrel%"), 0.0))
-    air_pct = round(max(0.0, fly_ball + line_drive), 1)
-    launch_angle = safe_float(live_hitter.get("L10_BBE_AvgLA"), safe_float(sav.get("Savant_LA"), 14.0))
+    ev = safe_float(sav.get("Savant_EV"), live_hitter["EV"])
+    hard_hit = safe_float(sav.get("Savant_HardHit%"), live_hitter["HardHit%"])
+    fly_ball = safe_float(sav.get("Savant_FB%"), live_hitter["FlyBall%"])
+    line_drive = safe_float(sav.get("Savant_LD%"), live_hitter["LineDrive%"])
+    ground_ball = safe_float(sav.get("Savant_GB%"), live_hitter["GroundBall%"])
+    barrel = safe_float(sav.get("Savant_Barrel%"), live_hitter["Barrel%"])
+    air_pct = safe_float(sav.get("Savant_AIR%"), max(0.0, 100 - ground_ball))
+    launch_angle = safe_float(sav.get("Savant_LA"), 14.0)
     xslg = safe_float(sav.get("Savant_xSLG"), 0.0)
     xwoba = safe_float(sav.get("Savant_xwOBA"), 0.0)
     xiso = safe_float(sav.get("Savant_xISO"), live_hitter["recent_iso"])
@@ -2830,10 +2610,6 @@ def build_hitter_metrics(
     recent_rbi = live_hitter["recent_rbi"]
     recent_runs = live_hitter["recent_runs"]
     recent_pa = live_hitter["recent_pa"]
-    l10_bbe_events = safe_int(live_hitter.get("L10_BBE_Events", 0), 0)
-    l10_bbe_quality = safe_float(live_hitter.get("L10_BBE_Quality", 0.0), 0.0)
-    l10_bbe_trend = str(live_hitter.get("L10_BBE_Trend", "MIXED"))
-    l10_bbe_damage = safe_float(live_hitter.get("L10_BBE_Damage", 0.0), 0.0)
 
     recent_damage_score = (
         (recent_hr * 9.0) +
@@ -2850,11 +2626,6 @@ def build_hitter_metrics(
         recent_trend = "NEUTRAL"
     else:
         recent_trend = "COLD"
-
-    if l10_bbe_trend == "ELITE" and recent_trend in {"NEUTRAL", "LIVE"}:
-        recent_trend = "HOT"
-    elif l10_bbe_trend == "STRONG" and recent_trend == "COLD":
-        recent_trend = "NEUTRAL"
 
     display_spot = display_lineup_spot(lineup_spot)
     bats = estimate_handedness_from_name(player_name, "batter")
@@ -3041,9 +2812,6 @@ def build_hitter_metrics(
         pitch_barrel_allowed=pitch_barrel_allowed,
         pitch_hard_hit_allowed=pitch_hard_hit_allowed,
         lineup_source=lineup_source,
-        fly_ball=fly_ball,
-        line_drive=line_drive,
-        ev=ev,
     )
 
     hr_eligible = qual["hr_eligible"]
@@ -3103,8 +2871,6 @@ def build_hitter_metrics(
         (recent_xbh * 1.5) +
         (recent_iso * 24.0) +
         (recent_damage_score * 0.22) +
-        (l10_bbe_quality * 0.10) +
-        (l10_bbe_damage * 1.75) +
         pullside_boost +
         park_boost +
         weather_score_boost +
@@ -3253,9 +3019,6 @@ def build_hitter_metrics(
     else:
         reasons.append("Neutral recent trend")
 
-    if l10_bbe_trend in {"ELITE", "STRONG"}:
-        reasons.append(f"L10 BBE {l10_bbe_trend.lower()}")
-
     if weather_boost >= 1.5:
         reasons.append("Weather carry boost")
     elif weather_boost <= -1.0:
@@ -3308,8 +3071,6 @@ def build_hitter_metrics(
         (recent_xbh * 1.8) +
         (recent_iso * 24.0) +
         (recent_damage_score * 0.35) +
-        (l10_bbe_quality * 0.75) +
-        (l10_bbe_damage * 4.0) +
         (pitch_matchup_score * 2.1) +
         (handedness_edge * 1.7) +
         (weather_boost * 4.0) +
@@ -3381,17 +3142,10 @@ def build_hitter_metrics(
         "FlyBall%": round(fly_ball, 1),
         "LineDrive%": round(line_drive, 1),
         "GroundBall%": round(ground_ball, 1),
-        "L10 Shape GB%": round(ground_ball, 1),
-        "L10 Shape FB%": round(fly_ball, 1),
-        "L10 Shape LD%": round(line_drive, 1),
         "Barrel%": round(barrel, 1),
         "AIR%": round(air_pct, 1),
         "LaunchAngle": round(launch_angle, 1),
         "Recent Trend": recent_trend,
-        "L10 BBE Quality": round(l10_bbe_quality, 1),
-        "L10 BBE Trend": l10_bbe_trend,
-        "L10 BBE Events": int(l10_bbe_events),
-        "L10 BBE Damage": round(l10_bbe_damage, 2),
         "xSLG": round(xslg, 3) if xslg else 0.0,
         "xwOBA": round(xwoba, 3) if xwoba else 0.0,
         "Pitcher": opp_pitcher,
@@ -3422,12 +3176,9 @@ def build_hitter_metrics(
         "Statcast Authority Score": round(statcast_authority_score, 2),
         "Statcast Authority Tier": statcast_authority_tier,
         "HR Attackability Score": round(pitcher_target_score, 2),
-        "HR Attackability %": _attackability_pct(pitcher_target_score),
         "HR Attackability Label": pitcher_target_label,
-        "HR Attackability Status": _attackability_bucket(pitcher_target_score)[0],
-        "Pitcher HR Profile": _attackability_note(pitcher_target_score),
-        "Pitcher Season HR/9": live_pitcher.get("Pitcher_Season_HR9", round(pitch_hr9, 2)) if live_pitcher else round(pitch_hr9, 2),
-        "Pitcher Recent HR/9": live_pitcher.get("Pitcher_Recent_HR9", round(pitch_hr9, 2)) if live_pitcher else round(pitch_hr9, 2),
+        "HR Attackability Score": round(pitcher_target_score, 2),
+        "HR Attackability Label": pitcher_target_label,
         "Matchup Advantage Score": round(matchup_advantage_score, 2),
         "Matchup Advantage": matchup_advantage_tier,
         "Ranking Reasons": ranking_reasons,
@@ -3479,12 +3230,10 @@ def sort_for_hr(df: pd.DataFrame) -> pd.DataFrame:
     sortable["_elite_hr_sort"] = sortable.get("Elite HR Look", pd.Series(["No"] * len(sortable), index=sortable.index)).map({"Yes": 1, "No": 0}).fillna(0)
     sortable["_pitcher_target_sort"] = safe_numeric_series(sortable, "HR Attackability Score", safe_numeric_series(sortable, "HR Attackability Score", 0.0).iloc[0] if len(sortable) else 0.0) if "HR Attackability Score" in sortable.columns else safe_numeric_series(sortable, "HR Attackability Score", 0.0)
     sortable["_matchup_adv_sort"] = safe_numeric_series(sortable, "Matchup Advantage Score", 0.0)
-    sortable["_l10_bbe_sort"] = safe_numeric_series(sortable, "L10 BBE Quality", 0.0)
 
     sortable = sortable.sort_values(
         by=[
             "_matchup_adv_sort",
-            "_l10_bbe_sort",
             "_pitcher_target_sort",
             "_elite_hr_sort",
             "_authority_tier_sort",
@@ -3511,7 +3260,7 @@ def sort_for_hr(df: pd.DataFrame) -> pd.DataFrame:
             "_trend_sort",
             "_hrr_sort",
         ],
-        ascending=[False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, True, False, False, True, False, False, False, False, False, False],
+        ascending=[False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, True, False, False, True, False, False, False, False, False, False],
     ).reset_index(drop=True)
     return sortable.drop(columns=[
         "_lineup_sort",
@@ -3540,7 +3289,6 @@ def sort_for_hr(df: pd.DataFrame) -> pd.DataFrame:
         "_elite_hr_sort",
         "_pitcher_target_sort",
         "_matchup_adv_sort",
-        "_l10_bbe_sort",
     ])
 
 
@@ -4334,50 +4082,6 @@ def _pct_width(value, max_value):
     return max(0, min(100, (val / max_val) * 100))
 
 
-def _attackability_pct(score) -> float:
-    """Stricter user-facing HR attackability meter.
-
-    Keeps 90+ rare:
-    - 0-13 internal score => suppressive to low-moderate
-    - 13-24 => moderate / attackable transition
-    - 24-36 => attackable
-    - 36-45 => elite attack
-    """
-    s = clip(safe_float(score, 0.0), 0.0, 45.0)
-    if s <= 13.0:
-        pct = (s / 13.0) * 49.0 if s > 0 else 0.0
-    elif s <= 24.0:
-        pct = 50.0 + ((s - 13.0) / 11.0) * 19.0
-    elif s <= 36.0:
-        pct = 70.0 + ((s - 24.0) / 12.0) * 19.0
-    else:
-        pct = 90.0 + ((s - 36.0) / 9.0) * 10.0
-    return round(clip(pct, 0.0, 100.0), 1)
-
-
-def _attackability_bucket(score_or_pct, already_pct: bool = False) -> tuple[str, str]:
-    """Green/yellow/red meaning is from the batter's perspective."""
-    pct = safe_float(score_or_pct, 0.0) if already_pct else _attackability_pct(score_or_pct)
-    if pct >= 85:
-        return "ELITE ATTACK", "green"
-    if pct >= 70:
-        return "ATTACKABLE", "green"
-    if pct >= 50:
-        return "MODERATE", "yellow"
-    return "SUPPRESSIVE", "red"
-
-
-def _attackability_note(score_or_pct, already_pct: bool = False) -> str:
-    pct = safe_float(score_or_pct, 0.0) if already_pct else _attackability_pct(score_or_pct)
-    if pct >= 85:
-        return "Elite HR target for hitters"
-    if pct >= 70:
-        return "Attackable HR profile"
-    if pct >= 50:
-        return "Mixed / moderate HR environment"
-    return "Suppressive HR profile"
-
-
 def _signal_from_value(value, good_at, warn_at=None, lower_is_better=False):
     val = safe_float(value, 0.0)
     if warn_at is None:
@@ -4452,9 +4156,9 @@ def _signal_bar_html(label: str, value, max_value: float = 100.0, suffix: str = 
 def render_board_key():
     st.markdown(
         '<div class="bf-key">'
-        '<span class="bf-key-chip bf-key-green">Green 70–100 = attackable for hitter</span>'
-        '<span class="bf-key-chip bf-key-yellow">Yellow 50–69 = mixed / caution</span>'
-        '<span class="bf-key-chip bf-key-red">Red 0–49 = suppressive / avoid</span>'
+        '<span class="bf-key-chip bf-key-green">Green = attackable / good for hitter</span>'
+        '<span class="bf-key-chip bf-key-yellow">Yellow = caution / mixed</span>'
+        '<span class="bf-key-chip bf-key-red">Red = HR suppressor / bad for hitter</span>'
         '</div>',
         unsafe_allow_html=True,
     )
@@ -4486,19 +4190,7 @@ def render_player_card(row: pd.Series, rank_override=None):
     hr_prob = safe_float(row.get("HR Probability %"), 0.0)
     matchup_score = safe_float(row.get("Matchup Advantage Score"), 0.0)
     hr_attackability = safe_float(row.get("HR Attackability Score", 0.0), 0.0)
-    hr_attack_pct = safe_float(row.get("HR Attackability %", _attackability_pct(hr_attackability)), 0.0)
-    hr_attack_status = _display_value(row.get("HR Attackability Status", _attackability_bucket(hr_attack_pct, already_pct=True)[0]))
-    pitcher_profile = _display_value(row.get("Pitcher HR Profile", _attackability_note(hr_attack_pct, already_pct=True)))
-    pitcher_label = _display_value(row.get("HR Attackability Label", ""))
-    pitch_hr9_l7 = safe_float(row.get("Pitcher_HR9_Last7"), 0.0)
-    pitch_hr9_season = safe_float(row.get("Pitcher Season HR/9", row.get("Pitcher_Season_HR9", 0.0)), 0.0)
-    pitch_hr9_recent = safe_float(row.get("Pitcher Recent HR/9", row.get("Pitcher_Recent_HR9", 0.0)), 0.0)
-    pitch_barrel_allowed = safe_float(row.get("Pitcher_Barrel_Allowed"), 0.0)
-    pitch_hh_allowed = safe_float(row.get("Pitcher_HardHit_Allowed"), 0.0)
     authority_score = safe_float(row.get("Statcast Authority Score"), 0.0)
-    l10_bbe_quality = safe_float(row.get("L10 BBE Quality"), 0.0)
-    l10_bbe_trend = _display_value(row.get("L10 BBE Trend", "—"))
-    l10_bbe_events = safe_int(row.get("L10 BBE Events"), 0)
     barrel = safe_float(row.get("Barrel%"), 0.0)
     hard_hit = safe_float(row.get("HardHit%"), 0.0)
     air_pct = safe_float(row.get("AIR%"), 0.0)
@@ -4520,14 +4212,14 @@ def render_player_card(row: pd.Series, rank_override=None):
 
     hr_signal, hr_color = _signal_from_value(hr_prob, good_at=14, warn_at=9)
     matchup_signal, matchup_color = _signal_from_value(matchup_score, good_at=55, warn_at=38)
-    attack_signal, attack_color = _signal_from_value(hr_attack_pct, good_at=70, warn_at=50)
+    attack_signal, attack_color = _signal_from_value(hr_attackability, good_at=24, warn_at=13)
     authority_signal, authority_color = _signal_from_value(authority_score, good_at=30, warn_at=17)
 
     st.markdown(
         '<div class="bf-signal-line">'
         f'<strong>HR</strong> {hr_signal} {_value_span(f"{hr_prob:.1f}%", hr_color)} · '
         f'<strong>Matchup</strong> {matchup_signal} {_value_span(f"{matchup_score:.1f}", matchup_color)} · '
-        f'<strong>Pitcher</strong> {hr_attack_status} {_value_span(f"{hr_attack_pct:.0f}%", attack_color)} · '
+        f'<strong>HR Attack</strong> {attack_signal} {_value_span(f"{hr_attackability:.1f}", attack_color)} · '
         f'<strong>Auth</strong> {authority_signal} {_value_span(f"{authority_score:.1f}", authority_color)}'
         '</div>',
         unsafe_allow_html=True,
@@ -4539,13 +4231,8 @@ def render_player_card(row: pd.Series, rank_override=None):
     with st.expander("Bars + matchup details", expanded=False):
         st.markdown(_signal_bar_html("HR Probability", hr_prob, 28, "%", good_at=14, warn_at=9), unsafe_allow_html=True)
         st.markdown(_signal_bar_html("Matchup Score", matchup_score, 75, good_at=55, warn_at=38), unsafe_allow_html=True)
-        st.markdown(_signal_bar_html("Pitcher HR Attackability", hr_attack_pct, 100, "%", good_at=70, warn_at=50), unsafe_allow_html=True)
-        st.caption(f"Pitcher profile: {pitcher_profile} | L7 HR/9: {pitch_hr9_l7:.2f} | Season HR/9: {pitch_hr9_season:.2f} | Recent HR/9: {pitch_hr9_recent:.2f} | Barrels allowed: {pitch_barrel_allowed:.1f} | Hard-hit allowed: {pitch_hh_allowed:.1f}")
-        if pitcher_label:
-            st.caption(f"Attackability detail: {pitcher_label}")
+        st.markdown(_signal_bar_html("HR Attackability", hr_attackability, 45, good_at=24, warn_at=13), unsafe_allow_html=True)
         st.markdown(_signal_bar_html("Statcast Authority", authority_score, 55, good_at=30, warn_at=17), unsafe_allow_html=True)
-        st.markdown(_signal_bar_html("L10 BBE Quality", l10_bbe_quality, 100, "%", good_at=70, warn_at=45), unsafe_allow_html=True)
-        st.caption(f"L10 BBE: {l10_bbe_trend} over {l10_bbe_events} recent batted-ball events")
         st.markdown(_signal_bar_html("Barrel", barrel, 20, "%", good_at=11, warn_at=8), unsafe_allow_html=True)
         st.markdown(_signal_bar_html("Hard Hit", hard_hit, 60, "%", good_at=42, warn_at=35), unsafe_allow_html=True)
         st.markdown(_signal_bar_html("Air Ball", air_pct, 75, "%", good_at=55, warn_at=48), unsafe_allow_html=True)
@@ -4639,8 +4326,6 @@ if locked_df.empty:
     st.warning("No games or hitter data loaded.")
     st.stop()
 
-render_board_key()
-
 base_tabs = ["HR Probability", "Top 12", "Top HR Targets", "Pitchers to Attack", "HR Combos", "Hits + Runs + RBIs", "Batter Breakdown", "Accuracy Tracker"]
 schedule = sort_schedule_rows(schedule)
 game_tabs = [f"{format_game_time_et(g.get('game_time', ''))} | {g['game_key']}" for g in schedule]
@@ -4652,11 +4337,15 @@ with tabs[0]:
     hr_df = get_strict_hr_pool(locked_df)
     render_card_grid(hr_df, max_cards=30, columns=3)
     with st.expander("Raw HR Probability Table"):
-        display_existing_columns(hr_df, [
+        st.dataframe(
+            hr_df[[
                 "Rank", "Player", "Team", "Game", "Pitcher", "Lineup Spot",
-                "Lineup Source", "Actual HR Today", "HR Probability %", "HR Tier", "L10 Shape FB%", "L10 Shape LD%", "L10 Shape GB%", "GroundBall%",
-                "GB Rule", "GB Note", "Matchup Advantage", "HR Attackability Score", "HR Attackability %", "HR Attackability Status", "WeatherNote", "BullpenFatigueNote", "L10 BBE Quality", "L10 BBE Trend", "HardHit%", "FlyBall%", "AIR%", "xSLG", "xwOBA", "Barrel%", "Ranking Reasons", "Why"
-            ])
+                "Lineup Source", "Actual HR Today", "HR Probability %", "HR Tier", "GroundBall%",
+                "GB Rule", "GB Note", "Matchup Advantage", "HR Attackability Score", "WeatherNote", "BullpenFatigueNote", "HardHit%", "FlyBall%", "AIR%", "xSLG", "xwOBA", "Barrel%", "Ranking Reasons", "Why"
+            ]],
+            use_container_width=True,
+            hide_index=True
+        )
 
 with tabs[1]:
     st.subheader("Top 12 HR Candidates")
@@ -4664,11 +4353,15 @@ with tabs[1]:
     top12 = get_top12_hybrid(locked_df)
     render_card_grid(top12, max_cards=12, columns=3)
     with st.expander("Raw Top 12 Table"):
-        display_existing_columns(top12, [
+        st.dataframe(
+            top12[[
                 "Rank", "Player", "Team", "Game", "Pitcher", "Lineup Spot",
-                "Lineup Source", "Actual HR Today", "HR Probability %", "HR Tier", "L10 Shape FB%", "L10 Shape LD%", "L10 Shape GB%", "GroundBall%",
-                "GB Rule", "GB Note", "Matchup Advantage", "HR Attackability Score", "HR Attackability %", "HR Attackability Status", "WeatherNote", "BullpenFatigueNote", "L10 BBE Quality", "L10 BBE Trend", "HardHit%", "FlyBall%", "AIR%", "xSLG", "xwOBA", "Barrel%", "Ranking Reasons", "Why"
-            ])
+                "Lineup Source", "Actual HR Today", "HR Probability %", "HR Tier", "GroundBall%",
+                "GB Rule", "GB Note", "Matchup Advantage", "HR Attackability Score", "WeatherNote", "BullpenFatigueNote", "HardHit%", "FlyBall%", "AIR%", "xSLG", "xwOBA", "Barrel%", "Ranking Reasons", "Why"
+            ]],
+            use_container_width=True,
+            hide_index=True
+        )
 
 with tabs[2]:
     st.subheader("Top HR Targets — Slate-Wide Top 25")
@@ -4676,8 +4369,8 @@ with tabs[2]:
     top_targets = get_best_hr_matchups(locked_df, 25)
     target_cols = [
         "Rank", "Player", "Team", "Game", "Pitcher", "Lineup Spot", "Lineup Source",
-        "Matchup Advantage", "Matchup Advantage Score", "HR Attackability %", "HR Attackability Status", "HR Attackability Score", "Pitcher_HR9_Last7",
-        "EV", "L10 BBE Quality", "L10 BBE Trend", "Barrel%", "HardHit%", "AIR%", "xSLG", "xwOBA",
+        "Matchup Advantage", "Matchup Advantage Score", "HR Attackability Score", "Pitcher_HR9_Last7",
+        "EV", "Barrel%", "HardHit%", "AIR%", "xSLG", "xwOBA",
         "Pitch Mix Mode", "Relevant Pitch Mix", "Primary Pitch Usage",
         "Actual HR Today", "HR Probability %", "HR Tier", "Ranking Reasons"
     ]
@@ -4691,7 +4384,7 @@ with tabs[3]:
     pitcher_targets = get_pitchers_to_target(locked_df)
     display_existing_columns(
         pitcher_targets,
-        ["Game", "Pitcher", "HR Attackability %", "HR Attackability Status", "HR Attackability Score", "Pitcher_HR9_Last7", "Pitcher_Barrel_Allowed", "Pitcher_HardHit_Allowed", "WeatherNote", "TempF", "WindMPH"]
+        ["Game", "Pitcher", "HR Attackability Score", "Pitcher_HR9_Last7", "Pitcher_Barrel_Allowed", "Pitcher_HardHit_Allowed", "WeatherNote", "TempF", "WindMPH"]
     )
 
 with tabs[4]:
@@ -4711,7 +4404,11 @@ with tabs[4]:
             if cdf.empty:
                 continue
             st.markdown(f"**{combo_type} HR Combos**")
-            display_existing_columns(cdf, ["Combo #", "Combo Label", "Avg Leg HR %", "Combined Score", "Games"])
+            st.dataframe(
+                cdf[["Combo #", "Combo Label", "Avg Leg HR %", "Combined Score", "Games"]],
+                use_container_width=True,
+                hide_index=True
+            )
 
     if not combo_tracker.empty:
         st.divider()
@@ -4730,27 +4427,33 @@ with tabs[5]:
         ascending=[False, False, False, True]
     ).reset_index(drop=True)
     hrr.insert(0, "Rank", range(1, len(hrr) + 1))
-    display_existing_columns(hrr, [
+    st.dataframe(
+        hrr[[
             "Rank", "Player", "Team", "Game", "Lineup Spot", "Lineup Source",
             "HRR Score", "GroundBall%", "LineDrive%", "EV", "HardHit%", "Why"
-        ])
+        ]],
+        use_container_width=True,
+        hide_index=True
+    )
 
 with tabs[6]:
     st.subheader("Batter Breakdown")
     st.caption("Projected teams stay live until confirmed. Heavy GB bats are downgraded, not blindly erased unless the profile is truly bad.")
     breakdown = sort_for_hr(locked_df.copy())
-    breakdown_cols = [
+    st.dataframe(
+        breakdown[[
             "Player", "Team", "Game", "Pitcher", "Lineup Spot", "Lineup Source", "Pitch Mix Mode", "Relevant Pitch Mix",
-            "EV", "HardHit%", "FlyBall%", "AIR%", "LaunchAngle", "Recent Trend", "LineDrive%", "L10 Shape FB%", "L10 Shape LD%", "L10 Shape GB%", "GroundBall%", "Barrel%",
+            "EV", "HardHit%", "FlyBall%", "AIR%", "LaunchAngle", "Recent Trend", "LineDrive%", "GroundBall%", "Barrel%",
             "xSLG", "xwOBA",
             "Pitcher_HR9_Last7", "Pitcher_Barrel_Allowed", "Pitcher_HardHit_Allowed",
-            "HR Attackability Score", "HR Attackability %", "HR Attackability Status", "Pitcher HR Profile", "HR Attackability Label", "Matchup Advantage Score", "Matchup Advantage", "Ranking Reasons",
+            "HR Attackability Score", "HR Attackability Label", "Matchup Advantage Score", "Matchup Advantage", "Ranking Reasons",
             "Statcast Pass", "Strict Statcast", "Recent Form Pass", "Pitcher Attackable",
             "Pitch_Isolation_Valid", "GB Rule", "GB Note", "WeatherNote", "BullpenFatigueNote", "BullpenFatigueScore", "TempF", "WindMPH", "HR Eligible",
-            "HR Probability %", "HRR Score", "Why",
-            "L10 BBE Quality", "L10 BBE Trend", "L10 BBE Events", "L10 BBE Damage",
-    ]
-    display_existing_columns(breakdown, breakdown_cols)
+            "HR Probability %", "HRR Score", "Why"
+        ]],
+        use_container_width=True,
+        hide_index=True
+    )
 
 with tabs[7]:
     st.subheader("Accuracy Tracker")
@@ -4823,7 +4526,7 @@ with tabs[7]:
         snapshot_cols = [
             "Tracker Source", "Player", "Team", "Game", "Pitcher", "Lineup Spot",
             "HR Probability %", "HR Tier", "Actual HR Today", "Matchup Advantage",
-            "HR Attackability Score", "HR Attackability %", "EV", "L10 BBE Quality", "L10 BBE Trend", "Barrel%", "HardHit%", "AIR%",
+            "HR Attackability Score", "EV", "Barrel%", "HardHit%", "AIR%",
             "Ranking Reasons", "Why"
         ]
         display_existing_columns(selected_board_snapshot, snapshot_cols)
@@ -4880,21 +4583,29 @@ for idx, game in enumerate(schedule, start=8):
                 st.markdown("**Best HR hitters**")
                 render_card_grid(team_hr, max_cards=4, columns=1)
                 with st.expander("Raw team HR table"):
-                    display_existing_columns(team_hr, [
+                    st.dataframe(
+                        team_hr[[
                             "Rank", "Player", "Lineup Spot", "Lineup Source", "Statcast Pass",
                             "Strict Statcast", "Recent Form Pass", "Pitcher Attackable", "Actual HR Today", "HR Probability %",
-                            "HR Tier", "GroundBall%", "GB Rule", "GB Note", "WeatherNote", "BullpenFatigueNote", "L10 BBE Quality", "L10 BBE Trend", "HardHit%", "FlyBall%",
+                            "HR Tier", "GroundBall%", "GB Rule", "GB Note", "WeatherNote", "BullpenFatigueNote", "HardHit%", "FlyBall%",
                             "AIR%", "xSLG", "xwOBA", "Barrel%", "Ranking Reasons", "Why"
-                        ])
+                        ]],
+                        use_container_width=True,
+                        hide_index=True
+                    )
             else:
                 st.caption("No HR-qualified bats surfaced.")
 
             st.markdown("**Best Hits + Runs + RBIs**")
             if not team_hrr.empty:
-                display_existing_columns(team_hrr.head(5), [
+                st.dataframe(
+                    team_hrr[[
                         "Player", "Lineup Spot", "Lineup Source", "HRR Score",
                         "GroundBall%", "LineDrive%", "Why"
-                    ])
+                    ]].head(5),
+                    use_container_width=True,
+                    hide_index=True
+                )
             else:
                 st.caption("No HRR bats surfaced.")
 
@@ -4907,20 +4618,28 @@ for idx, game in enumerate(schedule, start=8):
                 st.markdown("**Best HR hitters**")
                 render_card_grid(team_hr, max_cards=4, columns=1)
                 with st.expander("Raw team HR table"):
-                    display_existing_columns(team_hr, [
+                    st.dataframe(
+                        team_hr[[
                             "Rank", "Player", "Lineup Spot", "Lineup Source", "Statcast Pass",
                             "Strict Statcast", "Recent Form Pass", "Pitcher Attackable", "Actual HR Today", "HR Probability %",
-                            "HR Tier", "GroundBall%", "GB Rule", "GB Note", "WeatherNote", "BullpenFatigueNote", "L10 BBE Quality", "L10 BBE Trend", "HardHit%", "FlyBall%",
+                            "HR Tier", "GroundBall%", "GB Rule", "GB Note", "WeatherNote", "BullpenFatigueNote", "HardHit%", "FlyBall%",
                             "AIR%", "xSLG", "xwOBA", "Barrel%", "Ranking Reasons", "Why"
-                        ])
+                        ]],
+                        use_container_width=True,
+                        hide_index=True
+                    )
             else:
                 st.caption("No HR-qualified bats surfaced.")
 
             st.markdown("**Best Hits + Runs + RBIs**")
             if not team_hrr.empty:
-                display_existing_columns(team_hrr.head(5), [
+                st.dataframe(
+                    team_hrr[[
                         "Player", "Lineup Spot", "Lineup Source", "HRR Score",
                         "GroundBall%", "LineDrive%", "Why"
-                    ])
+                    ]].head(5),
+                    use_container_width=True,
+                    hide_index=True
+                )
             else:
                 st.caption("No HRR bats surfaced.")
