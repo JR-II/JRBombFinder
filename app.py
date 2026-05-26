@@ -2583,8 +2583,9 @@ def build_hitter_metrics(
     bullpen_fatigue_note: str = "Neutral bullpen rest",
     bullpen_ip_prev: float = 0.0,
     bullpen_arms_prev: int = 0,
+    deep_bbe: bool = False,
 ):
-    live_hitter = compute_hitter_live_metrics_from_map(player_id, hitter_stats_map, use_true_bbe=True)
+    live_hitter = compute_hitter_live_metrics_from_map(player_id, hitter_stats_map, use_true_bbe=deep_bbe)
     live_pitcher = compute_pitcher_live_metrics_from_map(
         opp_pitcher_id,
         opp_pitcher,
