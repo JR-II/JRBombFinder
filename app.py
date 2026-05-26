@@ -2,7 +2,7 @@ import hashlib
 import os
 import re
 from html import escape
-from datetime import datetime, timedelta
+from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -1470,10 +1470,8 @@ def fetch_people_stats(person_ids_tuple: tuple, group: str):
                 elif stat_type == "gamelog":
                     game_rows = []
                     for split in splits:
-                        game_info = split.get("game", {}) or {}
                         game_rows.append({
                             "date": split.get("date"),
-                            "game_pk": game_info.get("gamePk") or game_info.get("gamePkId"),
                             "stat": split.get("stat", {}) or {}
                         })
                     game_rows = sorted(game_rows, key=lambda x: x.get("date") or "", reverse=True)
@@ -1482,6 +1480,52 @@ def fetch_people_stats(person_ids_tuple: tuple, group: str):
             results[pid] = stats
 
     return results
+
+
+@st.cache_data(ttl=900)
+def fetch_recent_hitter_game_pks(player_id: int, year: int) -> tuple:
+    """Reliable recent game-pk lookup for the L10 batted-ball-event engine."""
+    try:
+        url = (
+            f"https://statsapi.mlb.com/api/v1/people/{int(player_id)}/stats"
+            f"?stats=gameLog&group=hitting&season={int(year)}"
+        )
+        resp = requests.get(url, timeout=20)
+        resp.raise_for_status()
+        payload = resp.json()
+    except Exception:
+        return tuple()
+
+    games = []
+    for block in payload.get("stats", []) or []:
+        for split in block.get("splits", []) or []:
+            game_info = split.get("game", {}) or {}
+            game_pk = (
+                game_info.get("gamePk")
+                or game_info.get("pk")
+                or game_info.get("id")
+                or split.get("gamePk")
+                or split.get("gamePkId")
+            )
+            date_key = split.get("date") or ""
+            if game_pk:
+                games.append((str(date_key), game_pk))
+
+    games = sorted(games, key=lambda x: x[0], reverse=True)
+    out = []
+    seen = set()
+    for _, gp in games:
+        try:
+            gp_int = int(gp)
+        except Exception:
+            continue
+        if gp_int in seen:
+            continue
+        seen.add(gp_int)
+        out.append(gp_int)
+        if len(out) >= 18:
+            break
+    return tuple(out)
 
 
 @st.cache_data(ttl=21600)
@@ -1575,147 +1619,13 @@ def fetch_savant_batter_map(year: int):
     return result
 
 
-
-@st.cache_data(ttl=900)
-def fetch_l10_bbe_profile_from_playbyplay(player_id: int, game_pks_tuple: tuple) -> dict:
-    """Build a true last-10 batted-ball-event profile from MLB play data when available.
-
-    This does not display any data-source wording in the UI. It only feeds the
-    model with recent contact shape: EV, barrel-like contact, hard-hit, FB, LD,
-    GB, popup, and air-ball rate.
-    """
-    empty = {
-        "found": False,
-        "events": 0,
-        "EV": None,
-        "HardHit%": None,
-        "Barrel%": None,
-        "FlyBall%": None,
-        "LineDrive%": None,
-        "GroundBall%": None,
-        "Popup%": None,
-        "AIR%": None,
-        "AvgLA": None,
-    }
-    try:
-        pid = int(player_id)
-    except Exception:
-        return empty
-
-    bbes = []
-    # Game logs are already newest first in the caller. Looking back through 15 games
-    # is enough to collect 10 actual batted balls without hammering requests.
-    for game_pk in list(game_pks_tuple or [])[:15]:
-        if len(bbes) >= 10:
-            break
-        if not game_pk:
-            continue
-        try:
-            url = f"https://statsapi.mlb.com/api/v1.1/game/{int(game_pk)}/feed/live"
-            resp = requests.get(url, timeout=18)
-            resp.raise_for_status()
-            data = resp.json()
-        except Exception:
-            continue
-
-        plays = ((data.get("liveData") or {}).get("plays") or {}).get("allPlays", []) or []
-        # Walk plays backwards so the newest BBE in that game is collected first.
-        for play in reversed(plays):
-            if len(bbes) >= 10:
-                break
-            matchup = play.get("matchup", {}) or {}
-            batter = matchup.get("batter", {}) or {}
-            if batter.get("id") != pid:
-                continue
-
-            hit_data = play.get("hitData", {}) or {}
-            launch_speed = hit_data.get("launchSpeed")
-            launch_angle = hit_data.get("launchAngle")
-            trajectory = str(hit_data.get("trajectory") or "").lower().strip()
-
-            # A batted ball event needs hitData shape or a known batted-ball trajectory.
-            if launch_speed is None and launch_angle is None and not trajectory:
-                continue
-
-            try:
-                ev = float(launch_speed) if launch_speed is not None else None
-            except Exception:
-                ev = None
-            try:
-                la = float(launch_angle) if launch_angle is not None else None
-            except Exception:
-                la = None
-
-            if trajectory in {"ground_ball", "groundball", "grounder"}:
-                btype = "GB"
-            elif trajectory in {"line_drive", "linedrive", "liner"}:
-                btype = "LD"
-            elif trajectory in {"fly_ball", "flyball"}:
-                btype = "FB"
-            elif trajectory in {"popup", "pop_up", "pop fly", "popfly"}:
-                btype = "PU"
-            else:
-                # Fallback from launch angle when MLB does not provide trajectory text.
-                if la is None:
-                    continue
-                if la < 10:
-                    btype = "GB"
-                elif la < 25:
-                    btype = "LD"
-                elif la < 50:
-                    btype = "FB"
-                else:
-                    btype = "PU"
-
-            # Barrel-like approximation using public EV/LA shape. Conservative enough
-            # to avoid inflating every hard contact event.
-            barrel_like = False
-            if ev is not None and la is not None:
-                barrel_like = ev >= 98 and 24 <= la <= 34
-
-            bbes.append({"ev": ev, "la": la, "type": btype, "barrel_like": barrel_like})
-
-    if not bbes:
-        return empty
-
-    n = len(bbes)
-    evs = [x["ev"] for x in bbes if x.get("ev") is not None]
-    las = [x["la"] for x in bbes if x.get("la") is not None]
-    count = lambda t: sum(1 for x in bbes if x.get("type") == t)
-    hard = sum(1 for x in bbes if x.get("ev") is not None and x["ev"] >= 95.0)
-    barrels = sum(1 for x in bbes if x.get("barrel_like"))
-    gb = count("GB") / n * 100
-    fb = count("FB") / n * 100
-    ld = count("LD") / n * 100
-    pu = count("PU") / n * 100
-    return {
-        "found": True,
-        "events": n,
-        "EV": round(sum(evs) / len(evs), 1) if evs else None,
-        "HardHit%": round(hard / n * 100, 1),
-        "Barrel%": round(barrels / n * 100, 1),
-        "FlyBall%": round(fb, 1),
-        "LineDrive%": round(ld, 1),
-        "GroundBall%": round(gb, 1),
-        "Popup%": round(pu, 1),
-        "AIR%": round(fb + ld, 1),
-        "AvgLA": round(sum(las) / len(las), 1) if las else None,
-    }
-
 def compute_hitter_live_metrics_from_map(player_id: int, stats_map: dict):
     data = stats_map.get(player_id, {"season": {}, "gamelog": []})
     season_stat = data.get("season", {}) or {}
-    gamelog_all = (data.get("gamelog", []) or [])
-    gamelog = gamelog_all[:10]
+    gamelog = (data.get("gamelog", []) or [])[:10]
 
     if not gamelog:
         return None
-
-    recent_game_pks = tuple(
-        g.get("game_pk") for g in gamelog_all[:15]
-        if g.get("game_pk") is not None
-    )
-    true_bbe = fetch_l10_bbe_profile_from_playbyplay(player_id, recent_game_pks) if recent_game_pks else {"found": False}
 
     ab = sum(safe_int(g["stat"].get("atBats", 0)) for g in gamelog)
     hits = sum(safe_int(g["stat"].get("hits", 0)) for g in gamelog)
@@ -1774,56 +1684,22 @@ def compute_hitter_live_metrics_from_map(player_id: int, stats_map: dict):
         fb = clip(fb * scale, 0, 80)
         ld = clip(ld * scale, 0, 80)
 
-    # Prefer actual last-10 batted-ball events from play data when available.
-    # Keep this internal only; the card does not reveal collection/source wording.
-    if true_bbe.get("found") and safe_int(true_bbe.get("events"), 0) >= 4:
-        if true_bbe.get("EV") is not None:
-            ev = clip(safe_float(true_bbe.get("EV"), ev), 84, 105)
-        hard_hit = clip(safe_float(true_bbe.get("HardHit%"), hard_hit), 0, 100)
-        # Blend true event barrel-like rate with recent production proxy so small samples
-        # do not erase real power, but still make the BBE shape drive GB/FB/LD.
-        true_barrel = safe_float(true_bbe.get("Barrel%"), barrel)
-        barrel = clip((true_barrel * 0.65) + (barrel * 0.35), 0, 30)
-        fb = clip(safe_float(true_bbe.get("FlyBall%"), fb), 0, 100)
-        ld = clip(safe_float(true_bbe.get("LineDrive%"), ld), 0, 100)
-        gb = clip(safe_float(true_bbe.get("GroundBall%"), gb), 0, 100)
-        total_shape = fb + ld + gb
-        if total_shape > 0:
-            scale = 100.0 / total_shape
-            fb = round(fb * scale, 1)
-            ld = round(ld * scale, 1)
-            gb = round(gb * scale, 1)
-        air_total = clip(fb + ld, 0, 100)
-
     # L10 BBE-style profile. MLB StatsAPI does not expose true EV-by-BBE in this app,
     # so this builds a stable last-10 batted-ball-events proxy from recent contact,
     # extra-base damage, HR rate, ISO, and strikeout drag. This is intentionally
     # weighted toward the exact recent batted-ball quality the user researches.
-    l10_bbe_events = safe_int(true_bbe.get("events"), 0) if true_bbe.get("found") else max(1, min(10, ab - strikeouts + doubles + triples + hrs))
+    l10_bbe_events = max(1, min(10, ab - strikeouts + doubles + triples + hrs))
     l10_damage_per_bbe = (hrs * 4.0 + xbh * 1.6 + total_bases * 0.18) / max(l10_bbe_events, 1)
     l10_contact_rate = max(0.0, (ab - strikeouts) / max(ab, 1))
-    if true_bbe.get("found"):
-        l10_bbe_quality = clip(
-            max(0.0, ev - 86.0) * 4.0 +
-            hard_hit * 0.55 +
-            barrel * 1.15 +
-            max(0.0, air_total - 40.0) * 0.28 +
-            max(0.0, 45.0 - gb) * 0.22 +
-            (hrs * 3.0) +
-            (xbh * 0.9),
-            0.0,
-            100.0,
-        )
-    else:
-        l10_bbe_quality = clip(
-            (l10_damage_per_bbe * 22.0) +
-            (iso * 70.0) +
-            (l10_contact_rate * 18.0) +
-            (hrs * 4.0) +
-            (xbh * 1.1),
-            0.0,
-            100.0,
-        )
+    l10_bbe_quality = clip(
+        (l10_damage_per_bbe * 22.0) +
+        (iso * 70.0) +
+        (l10_contact_rate * 18.0) +
+        (hrs * 4.0) +
+        (xbh * 1.1),
+        0.0,
+        100.0,
+    )
     if l10_bbe_quality >= 72:
         l10_bbe_trend = "ELITE"
     elif l10_bbe_quality >= 55:
@@ -1855,6 +1731,7 @@ def compute_hitter_live_metrics_from_map(player_id: int, stats_map: dict):
         "L10_BBE_Quality": round(l10_bbe_quality, 1),
         "L10_BBE_Trend": l10_bbe_trend,
         "L10_BBE_Damage": round(l10_damage_per_bbe, 2),
+        "L10_BBE_AvgLA": round(safe_float(true_bbe.get("AvgLA"), 14.0), 1) if true_bbe.get("found") else 14.0,
         "season_games": season_games,
         "season_ab": season_ab,
     }
@@ -2655,18 +2532,18 @@ def build_hitter_metrics(
 
     sav = savant_batter_map.get(normalize_name(player_name), {})
 
-    ev = safe_float(sav.get("Savant_EV"), live_hitter["EV"])
-    hard_hit = safe_float(sav.get("Savant_HardHit%"), live_hitter["HardHit%"])
+    # L10 batted-ball/contact profile must be the hitter engine's first read.
+    # Season/leaderboard numbers are only fallbacks for missing fields, not overrides.
+    ev = safe_float(live_hitter.get("EV"), safe_float(sav.get("Savant_EV"), 0.0))
+    hard_hit = safe_float(live_hitter.get("HardHit%"), safe_float(sav.get("Savant_HardHit%"), 0.0))
 
-    # Shape must be L10-first. Do NOT let season/Savant GB% mark a hitter as
-    # GB-heavy when the recent batted-ball profile is showing air/line-drive damage.
     fly_ball = safe_float(live_hitter.get("FlyBall%"), safe_float(sav.get("Savant_FB%"), 0.0))
     line_drive = safe_float(live_hitter.get("LineDrive%"), safe_float(sav.get("Savant_LD%"), 0.0))
     ground_ball = safe_float(live_hitter.get("GroundBall%"), safe_float(sav.get("Savant_GB%"), 0.0))
 
-    barrel = safe_float(sav.get("Savant_Barrel%"), live_hitter["Barrel%"])
+    barrel = safe_float(live_hitter.get("Barrel%"), safe_float(sav.get("Savant_Barrel%"), 0.0))
     air_pct = round(max(0.0, fly_ball + line_drive), 1)
-    launch_angle = safe_float(sav.get("Savant_LA"), 14.0)
+    launch_angle = safe_float(live_hitter.get("L10_BBE_AvgLA"), safe_float(sav.get("Savant_LA"), 14.0))
     xslg = safe_float(sav.get("Savant_xSLG"), 0.0)
     xwoba = safe_float(sav.get("Savant_xwOBA"), 0.0)
     xiso = safe_float(sav.get("Savant_xISO"), live_hitter["recent_iso"])
@@ -4393,11 +4270,12 @@ def render_player_card(row: pd.Series, rank_override=None):
             st.caption(f"Attackability detail: {pitcher_label}")
         st.markdown(_signal_bar_html("Statcast Authority", authority_score, 55, good_at=30, warn_at=17), unsafe_allow_html=True)
         st.markdown(_signal_bar_html("L10 BBE Quality", l10_bbe_quality, 100, "%", good_at=70, warn_at=45), unsafe_allow_html=True)
-        st.caption(f"L10 BBE: {l10_bbe_trend} over {l10_bbe_events} recent batted-ball events")
+        st.caption(f"L10 BBE proxy: {l10_bbe_trend} over ~{l10_bbe_events} recent batted-ball events/contact chances")
         st.markdown(_signal_bar_html("Barrel", barrel, 20, "%", good_at=11, warn_at=8), unsafe_allow_html=True)
         st.markdown(_signal_bar_html("Hard Hit", hard_hit, 60, "%", good_at=42, warn_at=35), unsafe_allow_html=True)
         st.markdown(_signal_bar_html("Air Ball", air_pct, 75, "%", good_at=55, warn_at=48), unsafe_allow_html=True)
         st.markdown(_signal_bar_html("Ground Ball Risk", ground_ball, 60, "%", good_at=44, warn_at=50, lower_is_better=True), unsafe_allow_html=True)
+        st.caption(f"Recent shape: FB {safe_float(row.get('L10 Shape FB%', row.get('FlyBall%', 0.0)), 0.0):.1f}% | LD {safe_float(row.get('L10 Shape LD%', row.get('LineDrive%', 0.0)), 0.0):.1f}% | GB {safe_float(row.get('L10 Shape GB%', row.get('GroundBall%', 0.0)), 0.0):.1f}%")
 
         st.caption(f"Pitch Mix: {pitch_mode} • {pitch_mix} | xSLG: {xslg:.3f} | Trend: {recent}")
         st.caption(f"Weather: {weather}")
@@ -4595,8 +4473,8 @@ with tabs[6]:
             "HR Attackability Score", "HR Attackability %", "HR Attackability Status", "Pitcher HR Profile", "HR Attackability Label", "Matchup Advantage Score", "Matchup Advantage", "Ranking Reasons",
             "Statcast Pass", "Strict Statcast", "Recent Form Pass", "Pitcher Attackable",
             "Pitch_Isolation_Valid", "GB Rule", "GB Note", "WeatherNote", "BullpenFatigueNote", "BullpenFatigueScore", "TempF", "WindMPH", "HR Eligible",
-            "HR Probability %", "HRR Score", "Why",
-            "L10 BBE Quality", "L10 BBE Trend", "L10 BBE Events", "L10 BBE Damage",
+            "HR Probability %", "HRR Score", "Why"
+        "L10 BBE Quality", "L10 BBE Trend", "L10 BBE Events", "L10 BBE Damage",
     ]
     display_existing_columns(breakdown, breakdown_cols)
 
