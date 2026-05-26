@@ -188,21 +188,49 @@ def load_supabase_table(table_name: str, columns: list[str]) -> pd.DataFrame:
 
 
 def upsert_supabase_records(table_name: str, records: list[dict], conflict_col: str, fallback_columns: list[str] | None = None) -> bool:
+    """Best-effort Supabase write that never breaks BF Data.
+
+    It first tries the full production upsert. If the user's manually-created table
+    is missing optional columns, it retries with the smaller fallback column set.
+    If there is no matching primary/unique key yet, it finally performs a safe
+    date-replace insert for the minimal tracker table.
+    """
     client = get_supabase_client()
     if client is None or not records:
         return False
+
     try:
         client.table(table_name).upsert(records, on_conflict=conflict_col).execute()
         return True
     except Exception:
-        if fallback_columns:
-            try:
-                trimmed = [{k: rec.get(k) for k in fallback_columns if k in rec} for rec in records]
-                client.table(table_name).upsert(trimmed, on_conflict=conflict_col).execute()
+        pass
+
+    if fallback_columns:
+        trimmed = [{k: rec.get(k) for k in fallback_columns if k in rec} for rec in records]
+        try:
+            client.table(table_name).upsert(trimmed, on_conflict=conflict_col).execute()
+            return True
+        except Exception:
+            pass
+
+        # Manual first-table fallback: replace rows for the affected date(s), then insert.
+        # This works even before the full Supabase schema is finished.
+        minimal_cols = [c for c in ["date", "player", "team", "game", "hr_probability", "result"] if c in fallback_columns]
+        minimal = [{k: rec.get(k) for k in minimal_cols if k in rec} for rec in records]
+        try:
+            affected_dates = sorted({str(rec.get("date")) for rec in minimal if rec.get("date") not in [None, ""]})
+            for date_key in affected_dates:
+                try:
+                    client.table(table_name).delete().eq("date", date_key).execute()
+                except Exception:
+                    pass
+            if minimal:
+                client.table(table_name).insert(minimal).execute()
                 return True
-            except Exception:
-                return False
-        return False
+        except Exception:
+            return False
+
+    return False
 
 
 def save_tracker_to_supabase(df: pd.DataFrame) -> bool:
@@ -220,13 +248,36 @@ def save_tracker_to_supabase(df: pd.DataFrame) -> bool:
         axis=1,
     )
     records = df_records_for_supabase(work, TRACKER_COLUMNS)
-    # Fallback matches the manual table you created first. Full table support starts once
-    # game_pk and hr_eligible are added, but this still preserves history if they are absent.
+
+    # First retry set is the full expected tracker table minus only optional internals.
+    # Final retry is the exact simple table the user manually built in Supabase.
     fallback_cols = [
         "row_id", "date", "player", "team", "game", "hr_probability", "hr_tier",
         "result", "hr_count", "result_state", "game_state", "tracker_source", "updated_at"
     ]
-    return upsert_supabase_records("hr_tracker", records, "row_id", fallback_columns=fallback_cols)
+    wrote = upsert_supabase_records("hr_tracker", records, "row_id", fallback_columns=fallback_cols)
+    if wrote:
+        return True
+
+    # Last-chance manual-table write with no row_id conflict requirement.
+    client = get_supabase_client()
+    if client is None:
+        return False
+    try:
+        minimal_cols = ["date", "player", "team", "game", "hr_probability", "result"]
+        minimal = df_records_for_supabase(work, minimal_cols)
+        affected_dates = sorted({str(rec.get("date")) for rec in minimal if rec.get("date") not in [None, ""]})
+        for date_key in affected_dates:
+            try:
+                client.table("hr_tracker").delete().eq("date", date_key).execute()
+            except Exception:
+                pass
+        if minimal:
+            client.table("hr_tracker").insert(minimal).execute()
+            return True
+    except Exception:
+        return False
+    return False
 
 
 def load_tracker_from_supabase() -> pd.DataFrame:
@@ -2657,16 +2708,23 @@ def dedupe_columns(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def display_existing_columns(df: pd.DataFrame, columns: list[str], **kwargs):
-    """Safely display only columns that exist, with duplicate column protection."""
+    """Safely display only columns that exist, with duplicate column protection.
+
+    Mixed values like lineup spot 3 and lineup spot — can trigger Arrow warnings.
+    Coerce object columns to strings for display only so the live app stays clean.
+    """
     if df is None or df.empty:
         st.caption("No rows to display.")
         return
-    safe_df = dedupe_columns(df)
+    safe_df = dedupe_columns(df).copy()
+    for col in safe_df.columns:
+        if safe_df[col].dtype == "object":
+            safe_df[col] = safe_df[col].astype(str)
     cols = [c for c in columns if c in safe_df.columns]
     if not cols:
-        st.dataframe(safe_df, use_container_width=True, hide_index=True)
+        st.dataframe(safe_df, width="stretch", hide_index=True)
     else:
-        st.dataframe(safe_df[cols], use_container_width=True, hide_index=True)
+        st.dataframe(safe_df[cols], width="stretch", hide_index=True)
 
 
 def compute_pitcher_target_score(
@@ -4822,7 +4880,7 @@ def render_card_grid(df: pd.DataFrame, max_cards: int = 24, columns: int = 3, ti
 
 c1, c2, c3, c4 = st.columns([1, 1, 1, 2])
 with c1:
-    if st.button("Update Board", use_container_width=True):
+    if st.button("Update Board", width="stretch"):
         st.session_state.manual_refresh_trigger = True
         st.cache_data.clear()
         st.rerun()
@@ -4955,7 +5013,7 @@ with tabs[4]:
         st.caption("Tracked combo history")
         st.dataframe(
             dedupe_columns(combo_tracker.sort_values(by=["date", "combo_size", "combined_score"], ascending=[False, True, False])),
-            use_container_width=True,
+            width="stretch",
             hide_index=True
         )
 
@@ -5047,7 +5105,7 @@ with tabs[7]:
                         "tracker_source", "hr_eligible", "result", "hr_count",
                         "result_state", "game_state", "updated_at"
                     ]]),
-                    use_container_width=True,
+                    width="stretch",
                     hide_index=True
                 )
     else:
@@ -5083,14 +5141,14 @@ with tabs[7]:
                     "combined_score", "legs_hit", "total_legs",
                     "result_state", "updated_at"
                 ]]),
-                use_container_width=True,
+                width="stretch",
                 hide_index=True
             )
 
     if not daily_summary.empty:
         st.divider()
         st.markdown("### Daily HR Prediction Accuracy History")
-        st.dataframe(dedupe_columns(daily_summary), use_container_width=True, hide_index=True)
+        st.dataframe(dedupe_columns(daily_summary), width="stretch", hide_index=True)
 
 for idx, game in enumerate(schedule, start=8):
     with tabs[idx]:
