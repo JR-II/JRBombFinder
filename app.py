@@ -120,12 +120,10 @@ hr { margin-top: .38rem !important; margin-bottom: .38rem !important; }
   min-width: 0 !important;
 }
 .bf-lab-grid {
-  grid-template-columns: 160px minmax(0, 1fr) !important;
-  gap: 9px !important;
+  grid-template-columns: 1fr !important;
 }
 .bf-pitch-grid {
-  grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
-  gap: 6px !important;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
 }
 .bf-pitch-card {
   min-width: 0 !important;
@@ -146,25 +144,6 @@ hr { margin-top: .38rem !important; margin-bottom: .38rem !important; }
   text-overflow: ellipsis !important;
   vertical-align: bottom !important;
 }
-.bf-compact-detail-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 6px;
-  margin-top: 8px;
-}
-.bf-compact-detail {
-  border: 1px solid rgba(255,255,255,.10);
-  border-radius: 9px;
-  background: rgba(255,255,255,.035);
-  padding: 6px 7px;
-  font-size: .68rem;
-  color: #c9d0da;
-}
-.bf-compact-detail strong { color:#f5f5f5; }
-@media (max-width: 900px) {
-  .bf-lab-grid { grid-template-columns: 1fr !important; }
-  .bf-pitch-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
-}
 @media (max-width: 520px) {
   .bf-title { font-size: 1.65rem !important; }
   .bf-chip, .bf-key-chip { font-size: .66rem !important; padding: 3px 7px !important; }
@@ -172,7 +151,7 @@ hr { margin-top: .38rem !important; margin-bottom: .38rem !important; }
   .bf-lab-shell { padding: 8px !important; }
   .bf-lab-top { grid-template-columns: repeat(3, minmax(0, 1fr)) !important; }
   .bf-lab-name { font-size: .86rem !important; }
-  .bf-pitch-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+  .bf-pitch-grid { grid-template-columns: 1fr !important; }
   .bf-shape-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
 }
 
@@ -368,6 +347,51 @@ PARK_COORDS = {
     "TOR": (43.6414, -79.3894),
     "WSH": (38.8730, -77.0074),
 }
+
+# High-confidence handedness corrections used when old locked rows or API fallbacks carry only R/L/S.
+# MLB StatsAPI batSide / pitchHand is still the primary source; this only prevents bad fallback displays.
+KNOWN_BAT_HAND_OVERRIDES = {
+    "jesus sanchez": "L",
+    "jesús sánchez": "L",
+    "yordan alvarez": "L",
+    "yordan álvarez": "L",
+}
+
+KNOWN_PITCH_HAND_OVERRIDES = {}
+
+def corrected_batter_hand_code(player_name: str, raw_value=None, default="R") -> str:
+    key = normalize_name(player_name)
+    if key in KNOWN_BAT_HAND_OVERRIDES:
+        return KNOWN_BAT_HAND_OVERRIDES[key]
+    return normalize_hand_code(raw_value, default)
+
+def corrected_pitcher_hand_code(pitcher_name: str, raw_value=None, default="R") -> str:
+    key = normalize_name(pitcher_name)
+    if key in KNOWN_PITCH_HAND_OVERRIDES:
+        return KNOWN_PITCH_HAND_OVERRIDES[key]
+    return normalize_hand_code(raw_value, default)
+
+def enforce_display_hand_labels(df: pd.DataFrame) -> pd.DataFrame:
+    """Make every displayed/locked row show LHB/RHB/SHB and RHP/LHP, never bare R/L/S."""
+    if df is None or df.empty:
+        return df
+    out = df.copy()
+    if "Player" in out.columns:
+        raw_bats = out["Bats"] if "Bats" in out.columns else pd.Series([pd.NA] * len(out), index=out.index)
+        out["Bats Code"] = [
+            corrected_batter_hand_code(p, b, "R")
+            for p, b in zip(out["Player"], raw_bats)
+        ]
+        out["Bats"] = out["Bats Code"].apply(hitter_hand_label)
+    if "Pitcher" in out.columns:
+        raw_throws = out["Pitcher Throws"] if "Pitcher Throws" in out.columns else pd.Series([pd.NA] * len(out), index=out.index)
+        out["Pitcher Throws Code"] = [
+            corrected_pitcher_hand_code(p, t, "R")
+            for p, t in zip(out["Pitcher"], raw_throws)
+        ]
+        out["Pitcher Throws"] = out["Pitcher Throws Code"].apply(pitcher_hand_label)
+    return out
+
 
 
 
@@ -714,38 +738,6 @@ def estimate_handedness_from_name(name: str, role: str = "batter") -> str:
     if role == "pitcher":
         return "L" if seed < 32 else "R"
     return "L" if seed < 45 else "R"
-
-
-def normalize_hand_code(value, default="R") -> str:
-    txt = str(value or "").upper().strip()
-    if txt in {"L", "LEFT", "LHB", "LHP"}:
-        return "L"
-    if txt in {"R", "RIGHT", "RHB", "RHP"}:
-        return "R"
-    if txt in {"S", "B", "SWITCH", "SWITCH HITTER", "SH", "SHB"}:
-        return "S"
-    return default
-
-
-def hitter_hand_label(value, default="R") -> str:
-    code = normalize_hand_code(value, default)
-    if code == "L":
-        return "LHB"
-    if code == "S":
-        return "SHB"
-    return "RHB"
-
-
-def pitcher_hand_label(value, default="R") -> str:
-    code = normalize_hand_code(value, default)
-    return "LHP" if code == "L" else "RHP"
-
-
-def matchup_hand_code(value, default="R") -> str:
-    # Switch hitters should not be treated as same-handed by accident.
-    # For matchup math, mark switch hitters as opposite-hand neutral/edge.
-    code = normalize_hand_code(value, default)
-    return "L" if code == "S" else code
 
 
 def build_pitch_mix_profile(
@@ -1187,7 +1179,7 @@ def passes_air_authority_profile(
         or (hard_hit >= 45 and air_total >= 45)
     )
 
-    hard_reject = ground_ball >= 55 and not authority_override
+    hard_reject = ground_ball >= 58 and not authority_override
     survives = (air_authority_core or authority_override) and not hard_reject
 
     return {
@@ -1254,15 +1246,28 @@ def compute_multi_pitch_authority_score(
 
     return round(score, 2)
 
-def get_gb_explanation(ground_ball: float, barrel: float, air_pct: float, xslg: float) -> str:
+def get_gb_explanation(ground_ball: float, barrel: float, air_pct: float, xslg: float, l10_bbe_quality: float = 0.0, l10_bbe_events: int = 0) -> str:
+    """GB label guardrail.
+
+    Do not hand out scary GB grades to hitters with real damage/lift indicators.
+    A hitter showing strong recent BBE quality or high authority should stay as plain GB PASS/CAUTION,
+    not a false "heavy downgrade" tag.
+    """
+    strong_recent_bbe = safe_float(l10_bbe_quality, 0.0) >= 65 and safe_int(l10_bbe_events, 0) >= 6
+    authority_override = barrel >= 12 or xslg >= 0.500 or air_pct >= 58 or strong_recent_bbe
+
+    if ground_ball >= 58 and not authority_override:
+        return "Stay away: 58%+ GB"
     if ground_ball >= 55:
-        return "Stay away: 55%+ GB"
-    if ground_ball >= 50:
-        if barrel >= 12 or xslg >= 0.500 or air_pct >= 60:
-            return "Heavy GB, but real damage traits keep it in play"
+        if authority_override:
+            return "GB elevated, but damage traits keep it alive"
         return "Heavy GB downgrade"
+    if ground_ball >= 50:
+        if authority_override:
+            return "GB caution cleared by damage/lift traits"
+        return "GB caution"
     if ground_ball >= 45:
-        if barrel >= 11 or xslg >= 0.470 or air_pct >= 58:
+        if authority_override:
             return "Borderline GB, but damage traits keep it alive"
         return "Borderline GB caution"
     return "Clean enough launch shape"
@@ -1607,9 +1612,7 @@ def fetch_people_stats(person_ids_tuple: tuple, group: str):
 
         for person in data.get("people", []):
             pid = person.get("id")
-            bat_side = ((person.get("batSide") or {}).get("code") or (person.get("batSide") or {}).get("description") or "")
-            pitch_hand = ((person.get("pitchHand") or {}).get("code") or (person.get("pitchHand") or {}).get("description") or "")
-            stats = {"season": {}, "gamelog": [], "bat_side": bat_side, "pitch_hand": pitch_hand}
+            stats = {"season": {}, "gamelog": []}
 
             for stat_block in person.get("stats", []):
                 stat_type = ((stat_block.get("type") or {}).get("displayName") or "").lower()
@@ -2200,7 +2203,7 @@ def qualifies_hr_profile(
         hr_eligible = False
     elif awful_hr_shape and not elite_override:
         hr_eligible = False
-    elif ground_ball >= 55 and not elite_override and not profile_gate["survives"]:
+    elif ground_ball >= 58 and not elite_override and not profile_gate["survives"]:
         hr_eligible = False
     elif not borderline_gb_survival:
         hr_eligible = False
@@ -2659,12 +2662,8 @@ def build_hitter_metrics(
         recent_trend = "NEUTRAL"
 
     display_spot = display_lineup_spot(lineup_spot)
-    hitter_bio = hitter_stats_map.get(player_id, {}) if isinstance(hitter_stats_map, dict) else {}
-    pitcher_bio = pitcher_stats_map.get(opp_pitcher_id, {}) if isinstance(pitcher_stats_map, dict) and opp_pitcher_id is not None and not pd.isna(opp_pitcher_id) else {}
-    bats_code = normalize_hand_code(hitter_bio.get("bat_side"), estimate_handedness_from_name(player_name, "batter"))
-    pitcher_throws_code = normalize_hand_code(pitcher_bio.get("pitch_hand"), estimate_handedness_from_name(opp_pitcher, "pitcher"))
-    bats = hitter_hand_label(bats_code)
-    pitcher_throws = pitcher_hand_label(pitcher_throws_code)
+    bats = estimate_handedness_from_name(player_name, "batter")
+    pitcher_throws = estimate_handedness_from_name(opp_pitcher, "pitcher")
 
     if live_pitcher is None:
         pitch_hr9 = stable_float(f"{opp_pitcher}-hr9", 0.7, 1.9)
@@ -2686,12 +2685,12 @@ def build_hitter_metrics(
         pitch_hr9,
         pitch_barrel_allowed,
         pitch_hard_hit_allowed,
-        pitcher_throws_code,
+        pitcher_throws,
     )
     pitch_context = compute_relevant_pitch_matchup(
         pitch_mix_example,
-        matchup_hand_code(bats_code),
-        pitcher_throws_code,
+        bats,
+        pitcher_throws,
         barrel,
         hard_hit,
         air_pct,
@@ -2824,13 +2823,26 @@ def build_hitter_metrics(
     elif statcast_authority_tier == "WEAK" and pitch_mix_mode == "BALANCED" and not elite_statcast_profile:
         pitch_isolation_bonus = min(pitch_isolation_bonus, -2.0)
 
+    strong_recent_bbe_gb_guard = l10_bbe_quality >= 65 and l10_bbe_events >= 6
+    gb_damage_override = (
+        strong_recent_bbe_gb_guard
+        or barrel >= 12
+        or xslg >= 0.500
+        or air_pct >= 58
+        or (hard_hit >= 45 and air_pct >= 50)
+    )
+
     gb_status = "PASS"
-    if ground_ball >= 55:
+    if ground_ball >= 58 and not gb_damage_override:
         gb_status = "AUTO NO"
-    elif ground_ball >= 50:
+    elif ground_ball >= 55 and not gb_damage_override:
         gb_status = "HEAVY DOWNGRADE"
-    elif ground_ball >= 45:
+    elif ground_ball >= 50 and not gb_damage_override:
         gb_status = "CAUTION"
+    elif ground_ball >= 45 and not gb_damage_override:
+        gb_status = "CAUTION"
+    else:
+        gb_status = "PASS"
 
     qual = qualifies_hr_profile(
         barrel=barrel,
@@ -2937,12 +2949,14 @@ def build_hitter_metrics(
 
     if ground_ball < 40:
         base_score += 4.0
+    elif gb_damage_override and ground_ball >= 45:
+        base_score += 1.0
     elif 45 <= ground_ball < 50:
-        base_score -= 7.0
+        base_score -= 4.0
     elif 50 <= ground_ball < 55:
-        base_score -= 14.0
+        base_score -= 8.0
     elif ground_ball >= 55:
-        base_score -= 25.0
+        base_score -= 16.0
 
     if air_pct >= 65:
         base_score += 5.0
@@ -3028,7 +3042,7 @@ def build_hitter_metrics(
     if lineup_spot is not None:
         hrr_score += max(0, 10 - lineup_spot) * 1.5
 
-    gb_note = get_gb_explanation(ground_ball, barrel, air_pct, xslg)
+    gb_note = get_gb_explanation(ground_ball, barrel, air_pct, xslg, l10_bbe_quality, l10_bbe_events)
 
     reasons = []
     reasons.append(f"{lineup_source} lineup pool")
@@ -3084,7 +3098,9 @@ def build_hitter_metrics(
     else:
         reasons.append("Bullpen rested")
 
-    if ground_ball >= 50:
+    if gb_damage_override and ground_ball >= 45:
+        reasons.append("GB cleared by damage traits")
+    elif ground_ball >= 55:
         reasons.append("Heavy GB downgrade")
     elif ground_ball >= 45:
         reasons.append("Borderline GB caution")
@@ -3144,12 +3160,14 @@ def build_hitter_metrics(
     elif recent_trend == "COLD":
         model_rank_score -= 5.0
 
-    if ground_ball >= 55:
-        model_rank_score -= 18.0
+    if gb_damage_override and ground_ball >= 45:
+        model_rank_score += 1.0
+    elif ground_ball >= 55:
+        model_rank_score -= 14.0
     elif ground_ball >= 50:
-        model_rank_score -= 10.0
+        model_rank_score -= 7.0
     elif ground_ball >= 45:
-        model_rank_score -= 4.0
+        model_rank_score -= 3.0
 
     if lineup_spot is not None:
         if lineup_spot <= 4:
@@ -3169,9 +3187,7 @@ def build_hitter_metrics(
         "Player": player_name,
         "Team": team,
         "Bats": bats,
-        "Bats Code": matchup_hand_code(bats_code),
         "Pitcher Throws": pitcher_throws,
-        "Pitcher Throws Code": pitcher_throws_code,
         "Pitch Mix Mode": pitch_mix_mode,
         "Relevant Pitch Mix": relevant_pitch_mix,
         "Primary Pitch": primary_pitch if primary_pitch is not None else "Mix",
@@ -3507,11 +3523,16 @@ def get_research_shortlist_pool(df: pd.DataFrame) -> pd.DataFrame:
         | authority_keep
     )
 
+    l10_bbe_quality = safe_numeric_series(pool, "L10 BBE Quality", 0.0)
+    l10_bbe_events = safe_numeric_series(pool, "L10 BBE Events", 0.0)
+    recent_bbe_keep = (l10_bbe_quality >= 65.0) & (l10_bbe_events >= 6.0)
+
     gb_keep = (
-        (gb <= 47.5)
+        (gb <= 50.0)
         | elite_shape
         | authority_keep
-        | ((gb <= 50.0) & (barrel >= 11.0) & (xslg >= 0.485))
+        | recent_bbe_keep
+        | ((gb <= 55.0) & ((barrel >= 11.0) | (xslg >= 0.485) | (air_pct >= 58.0)))
     )
 
     projected_keep = (
@@ -4305,10 +4326,11 @@ def _pitch_display_name(code: str) -> str:
 
 
 def _pitch_grade_from_context(row: pd.Series, pitch: str, usage: float) -> tuple[int, str]:
-    pitcher_throws = normalize_hand_code(row.get("Pitcher Throws Code", row.get("Pitcher Throws", "R")), "R")
-    batter_bats = matchup_hand_code(row.get("Bats Code", row.get("Bats", "R")), "R")
+    pitcher_throws = _display_value(row.get("Pitcher Throws", "R"))
+    if pitcher_throws not in {"L", "R"}:
+        pitcher_throws = "R"
     score, reason, _ = compute_pitch_matchup_score(
-        pitch, usage, batter_bats, pitcher_throws,
+        pitch, usage, _display_value(row.get("Bats", "R")), pitcher_throws,
         safe_float(row.get("Barrel%"), 0.0), safe_float(row.get("HardHit%"), 0.0),
         safe_float(row.get("AIR%"), 0.0), safe_float(row.get("LaunchAngle"), 14.0),
         safe_float(row.get("xSLG"), 0.0), safe_float(row.get("xwOBA"), 0.0),
@@ -4319,7 +4341,9 @@ def _pitch_grade_from_context(row: pd.Series, pitch: str, usage: float) -> tuple
 
 def _build_lab_pitch_rows(row: pd.Series) -> list[dict]:
     pitcher = _display_value(row.get("Pitcher"))
-    pitcher_throws = normalize_hand_code(row.get("Pitcher Throws Code", row.get("Pitcher Throws", "R")), "R")
+    pitcher_throws = _display_value(row.get("Pitcher Throws", "R"))
+    if pitcher_throws not in {"L", "R"}:
+        pitcher_throws = "R"
     pitch_mix = build_pitch_mix_profile(
         pitcher, row.get("Pitcher ID", row.get("Pitcher_ID", "")),
         safe_float(row.get("Pitcher_HR9_Last7"), 1.0),
@@ -4337,8 +4361,8 @@ def _build_lab_pitch_rows(row: pd.Series) -> list[dict]:
 def render_matchup_lab(row: pd.Series):
     player = _display_value(row.get("Player"))
     pitcher = _display_value(row.get("Pitcher"))
-    bats = _display_value(row.get("Bats", "?"))
-    throws = _display_value(row.get("Pitcher Throws", "?"))
+    bats = hitter_hand_label(corrected_batter_hand_code(player, row.get("Bats", row.get("Bats Code", "R")), "R"))
+    throws = pitcher_hand_label(corrected_pitcher_hand_code(pitcher, row.get("Pitcher Throws", row.get("Pitcher Throws Code", "R")), "R"))
     overall = safe_float(row.get("Matchup Advantage Score"), 0.0)
     hr_power = safe_float(row.get("Statcast Authority Score"), 0.0)
     hr_attack = safe_float(row.get("HR Attackability %", _attackability_pct(safe_float(row.get("HR Attackability Score"), 0.0))), 0.0)
@@ -4472,17 +4496,24 @@ def render_player_card(row: pd.Series, rank_override=None):
 
     with st.expander("🧪 Matchup Lab", expanded=False):
         render_matchup_lab(row)
-        compact_bits = [
-            f"<div class='bf-compact-detail'><strong>Pitcher HR</strong><br>L7 {pitch_hr9_l7:.2f} · Season {pitch_hr9_season:.2f} · Recent {pitch_hr9_recent:.2f}</div>",
-            f"<div class='bf-compact-detail'><strong>Contact Allowed</strong><br>Barrel {pitch_barrel_allowed:.1f}% · HH {pitch_hh_allowed:.1f}%</div>",
-            f"<div class='bf-compact-detail'><strong>L10 BBE</strong><br>{escape(l10_bbe_trend)} · {l10_bbe_quality:.1f} · ~{l10_bbe_events} events</div>",
-            f"<div class='bf-compact-detail'><strong>Context</strong><br>{escape(pitch_mode)} {escape(pitch_mix)} · xSLG {xslg:.3f} · {escape(recent)}</div>",
-        ]
-        st.markdown("<div class='bf-compact-detail-grid'>" + "".join(compact_bits) + "</div>", unsafe_allow_html=True)
-        st.caption(f"Weather: {weather}")
-        st.caption(f"Why: {why}")
+        st.markdown("**Signal Bars**")
+        st.markdown(_signal_bar_html("HR Probability", hr_prob, 28, "%", good_at=14, warn_at=9), unsafe_allow_html=True)
+        st.markdown(_signal_bar_html("Matchup Score", matchup_score, 75, good_at=55, warn_at=38), unsafe_allow_html=True)
+        st.markdown(_signal_bar_html("Pitcher HR Attackability", hr_attack_pct, 100, "%", good_at=70, warn_at=50), unsafe_allow_html=True)
+        st.caption(f"Pitcher profile: {pitcher_profile} | L7 HR/9: {pitch_hr9_l7:.2f} | Season HR/9: {pitch_hr9_season:.2f} | Recent HR/9: {pitch_hr9_recent:.2f} | Barrels allowed: {pitch_barrel_allowed:.1f} | Hard-hit allowed: {pitch_hh_allowed:.1f}")
         if pitcher_label:
-            st.caption(f"Attackability: {pitcher_label}")
+            st.caption(f"Attackability detail: {pitcher_label}")
+        st.markdown(_signal_bar_html("Statcast Authority", authority_score, 55, good_at=30, warn_at=17), unsafe_allow_html=True)
+        st.markdown(_signal_bar_html("L10 BBE Quality", l10_bbe_quality, 100, "%", good_at=70, warn_at=45), unsafe_allow_html=True)
+        st.caption(f"L10 BBE proxy: {l10_bbe_trend} over ~{l10_bbe_events} recent batted-ball events/contact chances")
+        st.markdown(_signal_bar_html("Barrel", barrel, 20, "%", good_at=11, warn_at=8), unsafe_allow_html=True)
+        st.markdown(_signal_bar_html("Hard Hit", hard_hit, 60, "%", good_at=42, warn_at=35), unsafe_allow_html=True)
+        st.markdown(_signal_bar_html("Air Ball", air_pct, 75, "%", good_at=55, warn_at=48), unsafe_allow_html=True)
+        st.markdown(_signal_bar_html("Ground Ball Risk", ground_ball, 60, "%", good_at=44, warn_at=50, lower_is_better=True), unsafe_allow_html=True)
+
+        st.caption(f"Pitch Mix: {pitch_mode} • {pitch_mix} | xSLG: {xslg:.3f} | Trend: {recent}")
+        st.caption(f"Weather: {weather}")
+        st.write(f"Why: {why}")
         if why2 and why2 != why:
             st.caption(why2)
 
@@ -4528,6 +4559,7 @@ with c1:
 
 live_df, schedule = build_daily_dataset()
 locked_df_raw = ensure_daily_board_lock(live_df, schedule)
+locked_df_raw = enforce_display_hand_labels(locked_df_raw)
 
 lineup_mode = get_lineup_mode(schedule) if schedule else "PROJECTED"
 
