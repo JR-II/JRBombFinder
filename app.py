@@ -740,6 +740,36 @@ def estimate_handedness_from_name(name: str, role: str = "batter") -> str:
     return "L" if seed < 45 else "R"
 
 
+def normalize_hand_code(value, default="R") -> str:
+    txt = str(value or "").upper().strip()
+    if txt in {"L", "LEFT", "LHB", "LHP"}:
+        return "L"
+    if txt in {"R", "RIGHT", "RHB", "RHP"}:
+        return "R"
+    if txt in {"S", "B", "SWITCH", "SWITCH HITTER", "SH", "SHB"}:
+        return "S"
+    return default
+
+
+def hitter_hand_label(value, default="R") -> str:
+    code = normalize_hand_code(value, default)
+    if code == "L":
+        return "LHB"
+    if code == "S":
+        return "SHB"
+    return "RHB"
+
+
+def pitcher_hand_label(value, default="R") -> str:
+    code = normalize_hand_code(value, default)
+    return "LHP" if code == "L" else "RHP"
+
+
+def matchup_hand_code(value, default="R") -> str:
+    code = normalize_hand_code(value, default)
+    return "L" if code == "S" else code
+
+
 def build_pitch_mix_profile(
     pitcher_name: str,
     pitcher_id,
