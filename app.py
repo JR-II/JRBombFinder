@@ -2,7 +2,7 @@ import hashlib
 import os
 import re
 from html import escape
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -59,11 +59,24 @@ st.markdown("""
 div[data-testid="stDataFrame"] { border: 1px solid rgba(255,255,255,.12); border-radius: 14px; overflow:hidden; }
 div[data-testid="stExpander"] { background: rgba(255,255,255,.018); border-radius: 12px; }
 hr { margin-top: .38rem !important; margin-bottom: .38rem !important; }
+@media (max-width: 760px) {
+    .block-container { padding-left: .65rem; padding-right: .65rem; padding-top: .35rem; }
+    .bf-hero { padding: 10px 11px; border-radius: 14px; margin-bottom: 6px; }
+    .bf-title { font-size: 1.45rem !important; letter-spacing: -0.02em; }
+    .bf-subtitle { font-size: .76rem; line-height: 1.25; }
+    .bf-kicker { font-size: .62rem; }
+    .bf-chip, .bf-key-chip { font-size: .62rem; padding: 2px 6px; }
+    .bf-mini-row { gap: 4px; margin: 2px 0 3px 0; }
+    .bf-signal-line { font-size: .74rem; line-height: 1.22; margin: 1px 0 3px 0; }
+    div[data-testid="stExpander"] summary { font-size: .82rem !important; }
+    hr { margin-top: .25rem !important; margin-bottom: .25rem !important; }
+}
+
 </style>
 <div class="bf-hero">
     <div class="bf-kicker">BF DATA PRO LAB</div>
-    <div class="bf-title">Daily Home Run Probability Engine</div>
-    <div class="bf-subtitle">Matte dark board, compact player cards, green/yellow/red HR attackability signals, and transparent tracking built around the actual surfaced picks.</div>
+    <div class="bf-title">JR Daily HR Predictions</div>
+    <div class="bf-subtitle">Powered by BF Data — compact MLB home run research board with green/yellow/red matchup signals and locked accuracy tracking.</div>
 </div>
 """, unsafe_allow_html=True)
 
@@ -1142,7 +1155,6 @@ def get_previous_team_game_pk(team_id: int):
     try:
         start_dt = datetime.now(ZoneInfo("America/New_York"))
         past_dt = start_dt.replace(hour=0, minute=0, second=0, microsecond=0)
-        from datetime import timedelta
         start_range = (past_dt - timedelta(days=7)).strftime("%Y-%m-%d")
         end_range = (past_dt - timedelta(days=1)).strftime("%Y-%m-%d")
         url = (
@@ -1931,7 +1943,7 @@ def get_team_candidate_hitters(game_pk: int, team_id: int, side: str, savant_bat
 
     scored = []
     for h in candidate_pool:
-        metrics = compute_hitter_live_metrics_from_map(h["player_id"], stats_map, deep_bbe=deep_bbe)
+        metrics = compute_hitter_live_metrics_from_map(h["player_id"], stats_map, use_true_bbe=False)
         if metrics is None:
             continue
 
@@ -3619,7 +3631,7 @@ def build_visible_tracker_pool(df: pd.DataFrame, schedule: list[dict]) -> pd.Dat
         return pd.DataFrame(columns=df.columns.tolist() + ["Tracker Source"])
 
     visible_df = pd.concat(visible_frames, ignore_index=True)
-    visible_df = visible_df.drop_duplicates(subset=["Player", "Team", "Game"]).reset_index(drop=True)
+    visible_df = visible_df.drop_duplicates(subset=["Player", "Team", "Game", "Tracker Source"]).reset_index(drop=True)
     visible_df = sort_for_hr(visible_df)
     return visible_df
 
@@ -3993,7 +4005,7 @@ def summarize_tracker_sources(df: pd.DataFrame) -> dict:
 
     for source in buckets.keys():
         all_df = work[work["tracker_source"] == source].copy()
-        today_df = all_df[today_mask].copy()
+        today_df = all_df[all_df["date"].astype(str) == today_str()].copy()
         all_total = len(all_df)
         all_hits = int(all_df["result_num"].sum()) if all_total else 0
         today_total = len(today_df)
@@ -4273,11 +4285,11 @@ def render_card_grid(df: pd.DataFrame, max_cards: int = 24, columns: int = 3, ti
         columns = 4
     columns = max(1, min(columns, 4))
 
-    col_objs = st.columns(columns)
+    # Render sequentially instead of using st.columns. Streamlit columns stack by column on iPhone,
+    # which makes the board look like #1, #5, #9 instead of true rank order.
     for i, (_, row) in enumerate(view.iterrows()):
         rank = row.get("Rank", i + 1)
-        with col_objs[i % columns]:
-            render_player_card(row, rank_override=rank)
+        render_player_card(row, rank_override=rank)
 
 
 c1, c2, c3, c4 = st.columns([1, 1, 1, 2])
@@ -4341,17 +4353,17 @@ if locked_df.empty:
     st.warning("No games or hitter data loaded.")
     st.stop()
 
-base_tabs = ["HR Probability", "Top 12", "Top HR Targets", "Pitchers to Attack", "HR Combos", "Hits + Runs + RBIs", "Batter Breakdown", "Accuracy Tracker"]
+base_tabs = ["JR HR Board", "Top 12", "Top HR Targets", "Pitchers to Attack", "HR Combos", "Hits + Runs + RBIs", "Batter Breakdown", "Accuracy Tracker"]
 schedule = sort_schedule_rows(schedule)
 game_tabs = [f"{format_game_time_et(g.get('game_time', ''))} | {g['game_key']}" for g in schedule]
 tabs = st.tabs(base_tabs + game_tabs)
 
 with tabs[0]:
-    st.subheader("HR Probability Board")
+    st.subheader("JR HR Board")
     st.caption("Projected teams stay live. Confirmed teams freeze once lineups lock. Actual HR Today is display-only and does not change rankings.")
     hr_df = get_strict_hr_pool(locked_df)
     render_card_grid(hr_df, max_cards=30, columns=3)
-    with st.expander("Raw HR Probability Table"):
+    with st.expander("Raw JR HR Board Table"):
         st.dataframe(
             hr_df[[
                 "Rank", "Player", "Team", "Game", "Pitcher", "Lineup Spot",
