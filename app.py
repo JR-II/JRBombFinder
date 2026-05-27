@@ -120,10 +120,12 @@ hr { margin-top: .38rem !important; margin-bottom: .38rem !important; }
   min-width: 0 !important;
 }
 .bf-lab-grid {
-  grid-template-columns: 1fr !important;
+  grid-template-columns: 160px minmax(0, 1fr) !important;
+  gap: 9px !important;
 }
 .bf-pitch-grid {
-  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  gap: 6px !important;
 }
 .bf-pitch-card {
   min-width: 0 !important;
@@ -144,6 +146,25 @@ hr { margin-top: .38rem !important; margin-bottom: .38rem !important; }
   text-overflow: ellipsis !important;
   vertical-align: bottom !important;
 }
+.bf-compact-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  margin-top: 8px;
+}
+.bf-compact-detail {
+  border: 1px solid rgba(255,255,255,.10);
+  border-radius: 9px;
+  background: rgba(255,255,255,.035);
+  padding: 6px 7px;
+  font-size: .68rem;
+  color: #c9d0da;
+}
+.bf-compact-detail strong { color:#f5f5f5; }
+@media (max-width: 900px) {
+  .bf-lab-grid { grid-template-columns: 1fr !important; }
+  .bf-pitch-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+}
 @media (max-width: 520px) {
   .bf-title { font-size: 1.65rem !important; }
   .bf-chip, .bf-key-chip { font-size: .66rem !important; padding: 3px 7px !important; }
@@ -151,7 +172,7 @@ hr { margin-top: .38rem !important; margin-bottom: .38rem !important; }
   .bf-lab-shell { padding: 8px !important; }
   .bf-lab-top { grid-template-columns: repeat(3, minmax(0, 1fr)) !important; }
   .bf-lab-name { font-size: .86rem !important; }
-  .bf-pitch-grid { grid-template-columns: 1fr !important; }
+  .bf-pitch-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
   .bf-shape-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
 }
 
@@ -372,25 +393,6 @@ def safe_float(value, default=0.0):
         return float(value)
     except Exception:
         return default
-
-
-def has_real_number(value) -> bool:
-    """True only when a source actually provided a usable numeric value.
-
-    This prevents BF Data from treating blanks, pandas NA, or fallback/proxy
-    numbers as if they were true Statcast/Savant batted-ball shape.
-    """
-    try:
-        if value is None or pd.isna(value):
-            return False
-    except Exception:
-        if value is None:
-            return False
-    try:
-        float(value)
-        return True
-    except Exception:
-        return False
 
 
 def ip_to_float(ip_value) -> float:
@@ -712,6 +714,38 @@ def estimate_handedness_from_name(name: str, role: str = "batter") -> str:
     if role == "pitcher":
         return "L" if seed < 32 else "R"
     return "L" if seed < 45 else "R"
+
+
+def normalize_hand_code(value, default="R") -> str:
+    txt = str(value or "").upper().strip()
+    if txt in {"L", "LEFT", "LHB", "LHP"}:
+        return "L"
+    if txt in {"R", "RIGHT", "RHB", "RHP"}:
+        return "R"
+    if txt in {"S", "B", "SWITCH", "SWITCH HITTER", "SH", "SHB"}:
+        return "S"
+    return default
+
+
+def hitter_hand_label(value, default="R") -> str:
+    code = normalize_hand_code(value, default)
+    if code == "L":
+        return "LHB"
+    if code == "S":
+        return "SHB"
+    return "RHB"
+
+
+def pitcher_hand_label(value, default="R") -> str:
+    code = normalize_hand_code(value, default)
+    return "LHP" if code == "L" else "RHP"
+
+
+def matchup_hand_code(value, default="R") -> str:
+    # Switch hitters should not be treated as same-handed by accident.
+    # For matchup math, mark switch hitters as opposite-hand neutral/edge.
+    code = normalize_hand_code(value, default)
+    return "L" if code == "S" else code
 
 
 def build_pitch_mix_profile(
@@ -1573,7 +1607,9 @@ def fetch_people_stats(person_ids_tuple: tuple, group: str):
 
         for person in data.get("people", []):
             pid = person.get("id")
-            stats = {"season": {}, "gamelog": []}
+            bat_side = ((person.get("batSide") or {}).get("code") or (person.get("batSide") or {}).get("description") or "")
+            pitch_hand = ((person.get("pitchHand") or {}).get("code") or (person.get("pitchHand") or {}).get("description") or "")
+            stats = {"season": {}, "gamelog": [], "bat_side": bat_side, "pitch_hand": pitch_hand}
 
             for stat_block in person.get("stats", []):
                 stat_type = ((stat_block.get("type") or {}).get("displayName") or "").lower()
@@ -2577,46 +2613,17 @@ def build_hitter_metrics(
 
     sav = savant_batter_map.get(normalize_name(player_name), {})
 
-    # Data reliability priority:
-    # 1) True Savant/Statcast batted-ball shape when the leaderboard provides it.
-    # 2) StatsAPI season/live proxy only as a soft fallback.
-    #
-    # The previous version could treat proxy ground-ball estimates like true
-    # Statcast GB%, which created false labels such as "GB HEAVY DOWNGRADE"
-    # for players whose current batted-ball data did not support that tag.
-    has_savant_gb = has_real_number(sav.get("Savant_GB%"))
-    has_savant_fb = has_real_number(sav.get("Savant_FB%"))
-    has_savant_ld = has_real_number(sav.get("Savant_LD%"))
-    has_savant_air = has_real_number(sav.get("Savant_AIR%"))
-    has_savant_shape = has_savant_gb or ((has_savant_fb or has_savant_ld) and has_savant_air)
-
     ev = safe_float(sav.get("Savant_EV"), live_hitter["EV"])
     hard_hit = safe_float(sav.get("Savant_HardHit%"), live_hitter["HardHit%"])
+    fly_ball = safe_float(sav.get("Savant_FB%"), live_hitter["FlyBall%"])
+    line_drive = safe_float(sav.get("Savant_LD%"), live_hitter["LineDrive%"])
+    ground_ball = safe_float(sav.get("Savant_GB%"), live_hitter["GroundBall%"])
     barrel = safe_float(sav.get("Savant_Barrel%"), live_hitter["Barrel%"])
+    air_pct = safe_float(sav.get("Savant_AIR%"), max(0.0, 100 - ground_ball))
     launch_angle = safe_float(sav.get("Savant_LA"), 14.0)
     xslg = safe_float(sav.get("Savant_xSLG"), 0.0)
     xwoba = safe_float(sav.get("Savant_xwOBA"), 0.0)
     xiso = safe_float(sav.get("Savant_xISO"), live_hitter["recent_iso"])
-
-    if has_savant_shape:
-        ground_ball = safe_float(sav.get("Savant_GB%"), live_hitter["GroundBall%"])
-        fly_ball = safe_float(sav.get("Savant_FB%"), live_hitter["FlyBall%"])
-        line_drive = safe_float(sav.get("Savant_LD%"), live_hitter["LineDrive%"])
-        air_pct = safe_float(sav.get("Savant_AIR%"), max(0.0, fly_ball + line_drive))
-        bbe_data_source = "SAVANT"
-        gb_reliability = "REAL"
-    else:
-        ground_ball = safe_float(live_hitter.get("GroundBall%"), 0.0)
-        fly_ball = safe_float(live_hitter.get("FlyBall%"), 0.0)
-        line_drive = safe_float(live_hitter.get("LineDrive%"), 0.0)
-        air_pct = max(0.0, fly_ball + line_drive)
-        bbe_data_source = "STATSAPI_PROXY"
-        gb_reliability = "PROXY"
-
-    # For ranking/math, do not punish a hitter with an AUTO-NO/HEAVY GB profile
-    # unless the app has a real batted-ball source. Proxy GB can still display,
-    # but it is capped in the scoring path so it cannot create false downgrades.
-    scoring_ground_ball = ground_ball if gb_reliability == "REAL" else min(ground_ball, 44.0)
 
     recent_hr = live_hitter["recent_hr"]
     recent_xbh = live_hitter["recent_xbh"]
@@ -2652,8 +2659,12 @@ def build_hitter_metrics(
         recent_trend = "NEUTRAL"
 
     display_spot = display_lineup_spot(lineup_spot)
-    bats = estimate_handedness_from_name(player_name, "batter")
-    pitcher_throws = estimate_handedness_from_name(opp_pitcher, "pitcher")
+    hitter_bio = hitter_stats_map.get(player_id, {}) if isinstance(hitter_stats_map, dict) else {}
+    pitcher_bio = pitcher_stats_map.get(opp_pitcher_id, {}) if isinstance(pitcher_stats_map, dict) and opp_pitcher_id is not None and not pd.isna(opp_pitcher_id) else {}
+    bats_code = normalize_hand_code(hitter_bio.get("bat_side"), estimate_handedness_from_name(player_name, "batter"))
+    pitcher_throws_code = normalize_hand_code(pitcher_bio.get("pitch_hand"), estimate_handedness_from_name(opp_pitcher, "pitcher"))
+    bats = hitter_hand_label(bats_code)
+    pitcher_throws = pitcher_hand_label(pitcher_throws_code)
 
     if live_pitcher is None:
         pitch_hr9 = stable_float(f"{opp_pitcher}-hr9", 0.7, 1.9)
@@ -2675,19 +2686,19 @@ def build_hitter_metrics(
         pitch_hr9,
         pitch_barrel_allowed,
         pitch_hard_hit_allowed,
-        pitcher_throws,
+        pitcher_throws_code,
     )
     pitch_context = compute_relevant_pitch_matchup(
         pitch_mix_example,
-        bats,
-        pitcher_throws,
+        matchup_hand_code(bats_code),
+        pitcher_throws_code,
         barrel,
         hard_hit,
         air_pct,
         launch_angle,
         xslg,
         xwoba,
-        scoring_ground_ball,
+        ground_ball,
     )
     pitch_mix_mode = pitch_context["mode"]
     relevant_pitch_mix = pitch_context["label"]
@@ -2727,7 +2738,7 @@ def build_hitter_metrics(
         air_pct,
         launch_angle,
         xslg,
-        scoring_ground_ball,
+        ground_ball,
     )
 
     multi_pitch_authority_score = compute_multi_pitch_authority_score(
@@ -2757,7 +2768,7 @@ def build_hitter_metrics(
         air_pct=air_pct,
         xslg=xslg,
         xwoba=xwoba,
-        ground_ball=scoring_ground_ball,
+        ground_ball=ground_ball,
         pitch_matchup_score=pitch_matchup_score,
         pitch_hr9=pitch_hr9,
         pitch_barrel_allowed=pitch_barrel_allowed,
@@ -2778,7 +2789,7 @@ def build_hitter_metrics(
         "AIR%": air_pct,
         "xSLG": xslg,
         "EV": ev,
-        "GroundBall%": scoring_ground_ball,
+        "GroundBall%": ground_ball,
     }))
 
     if pitch_mix_mode == "HARD" and primary_pitch is not None:
@@ -2814,9 +2825,7 @@ def build_hitter_metrics(
         pitch_isolation_bonus = min(pitch_isolation_bonus, -2.0)
 
     gb_status = "PASS"
-    if gb_reliability != "REAL":
-        gb_status = "PROXY DATA"
-    elif ground_ball >= 55:
+    if ground_ball >= 55:
         gb_status = "AUTO NO"
     elif ground_ball >= 50:
         gb_status = "HEAVY DOWNGRADE"
@@ -2829,7 +2838,7 @@ def build_hitter_metrics(
         air_pct=air_pct,
         xslg=xslg,
         xwoba=xwoba,
-        ground_ball=scoring_ground_ball,
+        ground_ball=ground_ball,
         recent_hr=recent_hr,
         recent_xbh=recent_xbh,
         recent_iso=recent_iso,
@@ -2838,9 +2847,6 @@ def build_hitter_metrics(
         pitch_barrel_allowed=pitch_barrel_allowed,
         pitch_hard_hit_allowed=pitch_hard_hit_allowed,
         lineup_source=lineup_source,
-        fly_ball=fly_ball,
-        line_drive=line_drive,
-        ev=ev,
     )
 
     hr_eligible = qual["hr_eligible"]
@@ -2929,19 +2935,14 @@ def build_hitter_metrics(
         else:
             base_score -= 1.0
 
-    if gb_reliability == "REAL":
-        if ground_ball < 40:
-            base_score += 4.0
-        elif 45 <= ground_ball < 50:
-            base_score -= 7.0
-        elif 50 <= ground_ball < 55:
-            base_score -= 14.0
-        elif ground_ball >= 55:
-            base_score -= 25.0
-    else:
-        # Limited/proxy GB should never create a strong downgrade.
-        if scoring_ground_ball < 40:
-            base_score += 1.5
+    if ground_ball < 40:
+        base_score += 4.0
+    elif 45 <= ground_ball < 50:
+        base_score -= 7.0
+    elif 50 <= ground_ball < 55:
+        base_score -= 14.0
+    elif ground_ball >= 55:
+        base_score -= 25.0
 
     if air_pct >= 65:
         base_score += 5.0
@@ -3027,10 +3028,7 @@ def build_hitter_metrics(
     if lineup_spot is not None:
         hrr_score += max(0, 10 - lineup_spot) * 1.5
 
-    if gb_reliability != "REAL":
-        gb_note = "GB shape uses limited StatsAPI proxy — no heavy GB downgrade applied"
-    else:
-        gb_note = get_gb_explanation(ground_ball, barrel, air_pct, xslg)
+    gb_note = get_gb_explanation(ground_ball, barrel, air_pct, xslg)
 
     reasons = []
     reasons.append(f"{lineup_source} lineup pool")
@@ -3086,9 +3084,7 @@ def build_hitter_metrics(
     else:
         reasons.append("Bullpen rested")
 
-    if gb_reliability != "REAL":
-        reasons.append("GB proxy only")
-    elif ground_ball >= 50:
+    if ground_ball >= 50:
         reasons.append("Heavy GB downgrade")
     elif ground_ball >= 45:
         reasons.append("Borderline GB caution")
@@ -3148,13 +3144,12 @@ def build_hitter_metrics(
     elif recent_trend == "COLD":
         model_rank_score -= 5.0
 
-    if gb_reliability == "REAL":
-        if ground_ball >= 55:
-            model_rank_score -= 18.0
-        elif ground_ball >= 50:
-            model_rank_score -= 10.0
-        elif ground_ball >= 45:
-            model_rank_score -= 4.0
+    if ground_ball >= 55:
+        model_rank_score -= 18.0
+    elif ground_ball >= 50:
+        model_rank_score -= 10.0
+    elif ground_ball >= 45:
+        model_rank_score -= 4.0
 
     if lineup_spot is not None:
         if lineup_spot <= 4:
@@ -3174,7 +3169,9 @@ def build_hitter_metrics(
         "Player": player_name,
         "Team": team,
         "Bats": bats,
+        "Bats Code": matchup_hand_code(bats_code),
         "Pitcher Throws": pitcher_throws,
+        "Pitcher Throws Code": pitcher_throws_code,
         "Pitch Mix Mode": pitch_mix_mode,
         "Relevant Pitch Mix": relevant_pitch_mix,
         "Primary Pitch": primary_pitch if primary_pitch is not None else "Mix",
@@ -3209,8 +3206,6 @@ def build_hitter_metrics(
         "Pitch_Isolation_Valid": pitch_isolation_valid,
         "GB Rule": gb_status,
         "GB Note": gb_note,
-        "GB Data Source": bbe_data_source,
-        "GB Reliability": gb_reliability,
         "HR Eligible": hr_eligible,
         "Strict Statcast": "Yes" if strict_flag else "No",
         "Elite HR Look": "Yes" if elite_hr_flag else "No",
@@ -4237,10 +4232,7 @@ def _matchup_color(matchup: str):
     return "red"
 
 
-def _gb_color(ground_ball: float, gb_rule: str = ""):
-    rule = str(gb_rule or "").upper()
-    if "PROXY" in rule or "LIMITED" in rule:
-        return "gray"
+def _gb_color(ground_ball: float):
     if ground_ball >= 50:
         return "red"
     if ground_ball >= 45:
@@ -4313,11 +4305,10 @@ def _pitch_display_name(code: str) -> str:
 
 
 def _pitch_grade_from_context(row: pd.Series, pitch: str, usage: float) -> tuple[int, str]:
-    pitcher_throws = _display_value(row.get("Pitcher Throws", "R"))
-    if pitcher_throws not in {"L", "R"}:
-        pitcher_throws = "R"
+    pitcher_throws = normalize_hand_code(row.get("Pitcher Throws Code", row.get("Pitcher Throws", "R")), "R")
+    batter_bats = matchup_hand_code(row.get("Bats Code", row.get("Bats", "R")), "R")
     score, reason, _ = compute_pitch_matchup_score(
-        pitch, usage, _display_value(row.get("Bats", "R")), pitcher_throws,
+        pitch, usage, batter_bats, pitcher_throws,
         safe_float(row.get("Barrel%"), 0.0), safe_float(row.get("HardHit%"), 0.0),
         safe_float(row.get("AIR%"), 0.0), safe_float(row.get("LaunchAngle"), 14.0),
         safe_float(row.get("xSLG"), 0.0), safe_float(row.get("xwOBA"), 0.0),
@@ -4328,9 +4319,7 @@ def _pitch_grade_from_context(row: pd.Series, pitch: str, usage: float) -> tuple
 
 def _build_lab_pitch_rows(row: pd.Series) -> list[dict]:
     pitcher = _display_value(row.get("Pitcher"))
-    pitcher_throws = _display_value(row.get("Pitcher Throws", "R"))
-    if pitcher_throws not in {"L", "R"}:
-        pitcher_throws = "R"
+    pitcher_throws = normalize_hand_code(row.get("Pitcher Throws Code", row.get("Pitcher Throws", "R")), "R")
     pitch_mix = build_pitch_mix_profile(
         pitcher, row.get("Pitcher ID", row.get("Pitcher_ID", "")),
         safe_float(row.get("Pitcher_HR9_Last7"), 1.0),
@@ -4459,7 +4448,7 @@ def render_player_card(row: pd.Series, rank_override=None):
         _chip_html(f"LU {lineup}", "gray"),
         _chip_html(lineup_source, "gray"),
         _chip_html(f"Matchup {matchup}", _matchup_color(matchup)),
-        _chip_html(f"GB {gb_rule}", _gb_color(ground_ball, gb_rule)),
+        _chip_html(f"GB {gb_rule}", _gb_color(ground_ball)),
     ])
     st.markdown(f'<div class="bf-mini-row">{chip_row}</div>', unsafe_allow_html=True)
 
@@ -4483,24 +4472,17 @@ def render_player_card(row: pd.Series, rank_override=None):
 
     with st.expander("🧪 Matchup Lab", expanded=False):
         render_matchup_lab(row)
-        st.markdown("**Signal Bars**")
-        st.markdown(_signal_bar_html("HR Probability", hr_prob, 28, "%", good_at=14, warn_at=9), unsafe_allow_html=True)
-        st.markdown(_signal_bar_html("Matchup Score", matchup_score, 75, good_at=55, warn_at=38), unsafe_allow_html=True)
-        st.markdown(_signal_bar_html("Pitcher HR Attackability", hr_attack_pct, 100, "%", good_at=70, warn_at=50), unsafe_allow_html=True)
-        st.caption(f"Pitcher profile: {pitcher_profile} | L7 HR/9: {pitch_hr9_l7:.2f} | Season HR/9: {pitch_hr9_season:.2f} | Recent HR/9: {pitch_hr9_recent:.2f} | Barrels allowed: {pitch_barrel_allowed:.1f} | Hard-hit allowed: {pitch_hh_allowed:.1f}")
-        if pitcher_label:
-            st.caption(f"Attackability detail: {pitcher_label}")
-        st.markdown(_signal_bar_html("Statcast Authority", authority_score, 55, good_at=30, warn_at=17), unsafe_allow_html=True)
-        st.markdown(_signal_bar_html("L10 BBE Quality", l10_bbe_quality, 100, "%", good_at=70, warn_at=45), unsafe_allow_html=True)
-        st.caption(f"L10 BBE proxy: {l10_bbe_trend} over ~{l10_bbe_events} recent batted-ball events/contact chances")
-        st.markdown(_signal_bar_html("Barrel", barrel, 20, "%", good_at=11, warn_at=8), unsafe_allow_html=True)
-        st.markdown(_signal_bar_html("Hard Hit", hard_hit, 60, "%", good_at=42, warn_at=35), unsafe_allow_html=True)
-        st.markdown(_signal_bar_html("Air Ball", air_pct, 75, "%", good_at=55, warn_at=48), unsafe_allow_html=True)
-        st.markdown(_signal_bar_html("Ground Ball Risk", ground_ball, 60, "%", good_at=44, warn_at=50, lower_is_better=True), unsafe_allow_html=True)
-
-        st.caption(f"Pitch Mix: {pitch_mode} • {pitch_mix} | xSLG: {xslg:.3f} | Trend: {recent}")
+        compact_bits = [
+            f"<div class='bf-compact-detail'><strong>Pitcher HR</strong><br>L7 {pitch_hr9_l7:.2f} · Season {pitch_hr9_season:.2f} · Recent {pitch_hr9_recent:.2f}</div>",
+            f"<div class='bf-compact-detail'><strong>Contact Allowed</strong><br>Barrel {pitch_barrel_allowed:.1f}% · HH {pitch_hh_allowed:.1f}%</div>",
+            f"<div class='bf-compact-detail'><strong>L10 BBE</strong><br>{escape(l10_bbe_trend)} · {l10_bbe_quality:.1f} · ~{l10_bbe_events} events</div>",
+            f"<div class='bf-compact-detail'><strong>Context</strong><br>{escape(pitch_mode)} {escape(pitch_mix)} · xSLG {xslg:.3f} · {escape(recent)}</div>",
+        ]
+        st.markdown("<div class='bf-compact-detail-grid'>" + "".join(compact_bits) + "</div>", unsafe_allow_html=True)
         st.caption(f"Weather: {weather}")
-        st.write(f"Why: {why}")
+        st.caption(f"Why: {why}")
+        if pitcher_label:
+            st.caption(f"Attackability: {pitcher_label}")
         if why2 and why2 != why:
             st.caption(why2)
 
@@ -4606,7 +4588,7 @@ with tabs[0]:
         display_existing_columns(hr_df, [
                 "Rank", "Player", "Team", "Game", "Pitcher", "Lineup Spot",
                 "Lineup Source", "Actual HR Today", "HR Probability %", "HR Tier", "GroundBall%",
-                "GB Rule", "GB Note", "GB Data Source", "Matchup Advantage", "HR Attackability Score", "HR Attackability %", "HR Attackability Status", "WeatherNote", "BullpenFatigueNote", "L10 BBE Quality", "L10 BBE Trend", "HardHit%", "FlyBall%", "AIR%", "xSLG", "xwOBA", "Barrel%", "Ranking Reasons", "Why"
+                "GB Rule", "GB Note", "Matchup Advantage", "HR Attackability Score", "HR Attackability %", "HR Attackability Status", "WeatherNote", "BullpenFatigueNote", "L10 BBE Quality", "L10 BBE Trend", "HardHit%", "FlyBall%", "AIR%", "xSLG", "xwOBA", "Barrel%", "Ranking Reasons", "Why"
             ])
 
 with tabs[1]:
@@ -4618,7 +4600,7 @@ with tabs[1]:
         display_existing_columns(top12, [
                 "Rank", "Player", "Team", "Game", "Pitcher", "Lineup Spot",
                 "Lineup Source", "Actual HR Today", "HR Probability %", "HR Tier", "GroundBall%",
-                "GB Rule", "GB Note", "GB Data Source", "Matchup Advantage", "HR Attackability Score", "HR Attackability %", "HR Attackability Status", "WeatherNote", "BullpenFatigueNote", "L10 BBE Quality", "L10 BBE Trend", "HardHit%", "FlyBall%", "AIR%", "xSLG", "xwOBA", "Barrel%", "Ranking Reasons", "Why"
+                "GB Rule", "GB Note", "Matchup Advantage", "HR Attackability Score", "HR Attackability %", "HR Attackability Status", "WeatherNote", "BullpenFatigueNote", "L10 BBE Quality", "L10 BBE Trend", "HardHit%", "FlyBall%", "AIR%", "xSLG", "xwOBA", "Barrel%", "Ranking Reasons", "Why"
             ])
 
 with tabs[2]:
@@ -4697,7 +4679,7 @@ with tabs[6]:
             "Pitcher_HR9_Last7", "Pitcher_Barrel_Allowed", "Pitcher_HardHit_Allowed",
             "HR Attackability Score", "HR Attackability %", "HR Attackability Status", "Pitcher HR Profile", "HR Attackability Label", "Matchup Advantage Score", "Matchup Advantage", "Ranking Reasons",
             "Statcast Pass", "Strict Statcast", "Recent Form Pass", "Pitcher Attackable",
-            "Pitch_Isolation_Valid", "GB Rule", "GB Note", "GB Data Source", "WeatherNote", "BullpenFatigueNote", "BullpenFatigueScore", "TempF", "WindMPH", "HR Eligible",
+            "Pitch_Isolation_Valid", "GB Rule", "GB Note", "WeatherNote", "BullpenFatigueNote", "BullpenFatigueScore", "TempF", "WindMPH", "HR Eligible",
             "HR Probability %", "HRR Score", "Why"
         "L10 BBE Quality", "L10 BBE Trend", "L10 BBE Events", "L10 BBE Damage",
     ]
@@ -4834,7 +4816,7 @@ for idx, game in enumerate(schedule, start=8):
                     display_existing_columns(team_hr, [
                             "Rank", "Player", "Lineup Spot", "Lineup Source", "Statcast Pass",
                             "Strict Statcast", "Recent Form Pass", "Pitcher Attackable", "Actual HR Today", "HR Probability %",
-                            "HR Tier", "GroundBall%", "GB Rule", "GB Note", "GB Data Source", "WeatherNote", "BullpenFatigueNote", "L10 BBE Quality", "L10 BBE Trend", "HardHit%", "FlyBall%",
+                            "HR Tier", "GroundBall%", "GB Rule", "GB Note", "WeatherNote", "BullpenFatigueNote", "L10 BBE Quality", "L10 BBE Trend", "HardHit%", "FlyBall%",
                             "AIR%", "xSLG", "xwOBA", "Barrel%", "Ranking Reasons", "Why"
                         ])
             else:
@@ -4861,7 +4843,7 @@ for idx, game in enumerate(schedule, start=8):
                     display_existing_columns(team_hr, [
                             "Rank", "Player", "Lineup Spot", "Lineup Source", "Statcast Pass",
                             "Strict Statcast", "Recent Form Pass", "Pitcher Attackable", "Actual HR Today", "HR Probability %",
-                            "HR Tier", "GroundBall%", "GB Rule", "GB Note", "GB Data Source", "WeatherNote", "BullpenFatigueNote", "L10 BBE Quality", "L10 BBE Trend", "HardHit%", "FlyBall%",
+                            "HR Tier", "GroundBall%", "GB Rule", "GB Note", "WeatherNote", "BullpenFatigueNote", "L10 BBE Quality", "L10 BBE Trend", "HardHit%", "FlyBall%",
                             "AIR%", "xSLG", "xwOBA", "Barrel%", "Ranking Reasons", "Why"
                         ])
             else:
