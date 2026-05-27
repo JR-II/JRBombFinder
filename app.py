@@ -2,7 +2,7 @@ import hashlib
 import os
 import re
 from html import escape
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -59,11 +59,24 @@ st.markdown("""
 div[data-testid="stDataFrame"] { border: 1px solid rgba(255,255,255,.12); border-radius: 14px; overflow:hidden; }
 div[data-testid="stExpander"] { background: rgba(255,255,255,.018); border-radius: 12px; }
 hr { margin-top: .38rem !important; margin-bottom: .38rem !important; }
+@media (max-width: 760px) {
+    .block-container { padding-left: .65rem; padding-right: .65rem; padding-top: .35rem; }
+    .bf-hero { padding: 10px 11px; border-radius: 14px; margin-bottom: 6px; }
+    .bf-title { font-size: 1.45rem !important; letter-spacing: -0.02em; }
+    .bf-subtitle { font-size: .76rem; line-height: 1.25; }
+    .bf-kicker { font-size: .62rem; }
+    .bf-chip, .bf-key-chip { font-size: .62rem; padding: 2px 6px; }
+    .bf-mini-row { gap: 4px; margin: 2px 0 3px 0; }
+    .bf-signal-line { font-size: .74rem; line-height: 1.22; margin: 1px 0 3px 0; }
+    div[data-testid="stExpander"] summary { font-size: .82rem !important; }
+    hr { margin-top: .25rem !important; margin-bottom: .25rem !important; }
+}
+
 </style>
 <div class="bf-hero">
     <div class="bf-kicker">BF DATA PRO LAB</div>
-    <div class="bf-title">Daily Home Run Probability Engine</div>
-    <div class="bf-subtitle">Matte dark board, compact player cards, green/yellow/red HR attackability signals, and transparent tracking built around the actual surfaced picks.</div>
+    <div class="bf-title">JR Daily HR Predictions</div>
+    <div class="bf-subtitle">Powered by BF Data — compact MLB home run research board with green/yellow/red matchup signals and locked accuracy tracking.</div>
 </div>
 """, unsafe_allow_html=True)
 
@@ -371,56 +384,7 @@ def load_tracker() -> pd.DataFrame:
     return pd.DataFrame(columns=columns)
 
 
-
-def dedupe_tracker_rows(df: pd.DataFrame) -> pd.DataFrame:
-    """Hard-clean tracker rows so refreshes cannot inflate section counts.
-
-    One prediction row is allowed per:
-    date + normalized player + team + game + tracker_source
-
-    If older app versions created duplicates, keep the row with the best/live
-    result information instead of counting the same prediction twice.
-    """
-    columns = [
-        "date", "player", "team", "game", "game_pk",
-        "hr_probability", "hr_tier", "hr_eligible", "tracker_source",
-        "result", "hr_count", "result_state", "game_state", "updated_at"
-    ]
-    if df is None or df.empty:
-        return pd.DataFrame(columns=columns)
-
-    work = df.copy()
-    for col in columns:
-        if col not in work.columns:
-            work[col] = pd.NA
-
-    work = work[columns].copy()
-    work["tracker_source"] = work["tracker_source"].fillna("CORE_BOARD").astype(str)
-    work["date"] = work["date"].astype("string").fillna("")
-    work["player"] = work["player"].astype("string").fillna("")
-    work["team"] = work["team"].astype("string").fillna("")
-    work["game"] = work["game"].astype("string").fillna("")
-    work["hr_count_num"] = pd.to_numeric(work["hr_count"], errors="coerce").fillna(0).astype(int)
-    work["result_num"] = pd.to_numeric(work["result"], errors="coerce").fillna(0).astype(int)
-
-    # Higher rows win inside duplicate groups: HR count/result first, then newest update.
-    work["_norm_player"] = work["player"].map(normalize_name)
-    work["_source_order"] = work["tracker_source"].map({"CORE_BOARD": 0, "TOP12": 1, "GAME_HR": 2}).fillna(9)
-    work["_updated_sort"] = work["updated_at"].astype("string").fillna("")
-    work = work.sort_values(
-        by=["date", "_norm_player", "team", "game", "tracker_source", "hr_count_num", "result_num", "_updated_sort"],
-        ascending=[True, True, True, True, True, False, False, False],
-    )
-    work = work.drop_duplicates(
-        subset=["date", "_norm_player", "team", "game", "tracker_source"],
-        keep="first",
-    )
-
-    return work.drop(columns=["_norm_player", "_source_order", "_updated_sort", "hr_count_num", "result_num"], errors="ignore").reset_index(drop=True)
-
-
 def save_tracker(df: pd.DataFrame):
-    df = dedupe_tracker_rows(df)
     df.to_csv(TRACKER_FILE, index=False)
 
 
@@ -1191,7 +1155,6 @@ def get_previous_team_game_pk(team_id: int):
     try:
         start_dt = datetime.now(ZoneInfo("America/New_York"))
         past_dt = start_dt.replace(hour=0, minute=0, second=0, microsecond=0)
-        from datetime import timedelta
         start_range = (past_dt - timedelta(days=7)).strftime("%Y-%m-%d")
         end_range = (past_dt - timedelta(days=1)).strftime("%Y-%m-%d")
         url = (
@@ -1980,7 +1943,7 @@ def get_team_candidate_hitters(game_pk: int, team_id: int, side: str, savant_bat
 
     scored = []
     for h in candidate_pool:
-        metrics = compute_hitter_live_metrics_from_map(h["player_id"], stats_map, deep_bbe=deep_bbe)
+        metrics = compute_hitter_live_metrics_from_map(h["player_id"], stats_map, use_true_bbe=False)
         if metrics is None:
             continue
 
@@ -3668,22 +3631,57 @@ def build_visible_tracker_pool(df: pd.DataFrame, schedule: list[dict]) -> pd.Dat
         return pd.DataFrame(columns=df.columns.tolist() + ["Tracker Source"])
 
     visible_df = pd.concat(visible_frames, ignore_index=True)
-    visible_df = visible_df.drop_duplicates(subset=["Player", "Team", "Game"]).reset_index(drop=True)
+    visible_df = visible_df.drop_duplicates(subset=["Player", "Team", "Game", "Tracker Source"]).reset_index(drop=True)
     visible_df = sort_for_hr(visible_df)
     return visible_df
 
 
-@st.cache_data(ttl=120)
+@st.cache_data(ttl=45)
+def get_live_feed_homers(game_pk: int):
+    """Count HRs from MLB live feed play-by-play.
+
+    Boxscore batting totals can lag or briefly show only one homer.  The live
+    play feed is better for detecting multi-HR days like Ernie Clement 2 HR.
+    """
+    url = f"https://statsapi.mlb.com/api/v1.1/game/{game_pk}/feed/live"
+    homer_map = {}
+    try:
+        resp = requests.get(url, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception:
+        return homer_map
+
+    plays = (((data.get("liveData") or {}).get("plays") or {}).get("allPlays") or [])
+    for play in plays:
+        result = play.get("result", {}) or {}
+        event_type = str(result.get("eventType", "") or "").lower()
+        event = str(result.get("event", "") or "").lower()
+        if event_type != "home_run" and "home run" not in event and "homers" not in event:
+            continue
+        batter = (play.get("matchup", {}) or {}).get("batter", {}) or {}
+        name = batter.get("fullName")
+        if not name:
+            continue
+        raw = str(name)
+        norm = normalize_name(raw)
+        homer_map[raw] = safe_int(homer_map.get(raw), 0) + 1
+        homer_map[norm] = safe_int(homer_map.get(norm), 0) + 1
+    return homer_map
+
+
+@st.cache_data(ttl=45)
 def get_boxscore_homers(game_pk: int):
     url = f"https://statsapi.mlb.com/api/v1/game/{game_pk}/boxscore"
+    homer_map = {}
+
     try:
         resp = requests.get(url, timeout=20)
         resp.raise_for_status()
         data = resp.json()
     except Exception:
-        return {}
+        data = {}
 
-    homer_map = {}
     for side in ["away", "home"]:
         team_data = data.get("teams", {}).get(side, {})
         players = team_data.get("players", {})
@@ -3693,8 +3691,16 @@ def get_boxscore_homers(game_pk: int):
             batting = player_data.get("stats", {}).get("batting", {})
             hr_count = safe_int(batting.get("homeRuns", 0), 0)
             if full_name:
-                homer_map[str(full_name)] = int(hr_count)
-                homer_map[normalize_name(full_name)] = int(hr_count)
+                raw = str(full_name)
+                norm = normalize_name(raw)
+                homer_map[raw] = max(safe_int(homer_map.get(raw), 0), int(hr_count))
+                homer_map[norm] = max(safe_int(homer_map.get(norm), 0), int(hr_count))
+
+    # Merge play-by-play counts and keep the highest value per player.
+    feed_map = get_live_feed_homers(game_pk)
+    for key, val in feed_map.items():
+        homer_map[key] = max(safe_int(homer_map.get(key), 0), safe_int(val, 0))
+
     return homer_map
 
 
@@ -3735,7 +3741,7 @@ def add_live_homer_counts_to_board(df: pd.DataFrame, schedule: list[dict]) -> pd
 
 
 def sync_tracker_with_board(tracked_df: pd.DataFrame):
-    tracker = dedupe_tracker_rows(load_tracker())
+    tracker = load_tracker()
     date_key = today_str()
 
     if tracked_df.empty:
@@ -3783,9 +3789,8 @@ def sync_tracker_with_board(tracked_df: pd.DataFrame):
 
     if new_rows:
         tracker = pd.concat([tracker, pd.DataFrame(new_rows)], ignore_index=True)
+        save_tracker(tracker)
 
-    tracker = dedupe_tracker_rows(tracker)
-    save_tracker(tracker)
     return tracker
 
 
@@ -3793,7 +3798,6 @@ def auto_update_tracker_results(tracker: pd.DataFrame, schedule: list[dict]):
     if tracker.empty:
         return tracker
 
-    tracker = dedupe_tracker_rows(tracker)
     tracker = tracker.copy()
     if "hr_count" not in tracker.columns:
         tracker["hr_count"] = 0
@@ -3834,7 +3838,6 @@ def auto_update_tracker_results(tracker: pd.DataFrame, schedule: list[dict]):
             tracker.at[idx, "game_state"] = detailed_state
             tracker.at[idx, "updated_at"] = now_et_string()
 
-    tracker = dedupe_tracker_rows(tracker)
     save_tracker(tracker)
     return tracker
 
@@ -4045,7 +4048,7 @@ def summarize_tracker_sources(df: pd.DataFrame) -> dict:
 
     for source in buckets.keys():
         all_df = work[work["tracker_source"] == source].copy()
-        today_df = all_df[today_mask].copy()
+        today_df = all_df[all_df["date"].astype(str) == today_str()].copy()
         all_total = len(all_df)
         all_hits = int(all_df["result_num"].sum()) if all_total else 0
         today_total = len(today_df)
@@ -4325,11 +4328,11 @@ def render_card_grid(df: pd.DataFrame, max_cards: int = 24, columns: int = 3, ti
         columns = 4
     columns = max(1, min(columns, 4))
 
-    col_objs = st.columns(columns)
+    # Render sequentially instead of using st.columns. Streamlit columns stack by column on iPhone,
+    # which makes the board look like #1, #5, #9 instead of true rank order.
     for i, (_, row) in enumerate(view.iterrows()):
         rank = row.get("Rank", i + 1)
-        with col_objs[i % columns]:
-            render_player_card(row, rank_override=rank)
+        render_player_card(row, rank_override=rank)
 
 
 c1, c2, c3, c4 = st.columns([1, 1, 1, 2])
@@ -4393,17 +4396,17 @@ if locked_df.empty:
     st.warning("No games or hitter data loaded.")
     st.stop()
 
-base_tabs = ["HR Probability", "Top 12", "Top HR Targets", "Pitchers to Attack", "HR Combos", "Hits + Runs + RBIs", "Batter Breakdown", "Accuracy Tracker"]
+base_tabs = ["JR HR Board", "Top 12", "Top HR Targets", "Pitchers to Attack", "HR Combos", "Hits + Runs + RBIs", "Batter Breakdown", "Accuracy Tracker"]
 schedule = sort_schedule_rows(schedule)
 game_tabs = [f"{format_game_time_et(g.get('game_time', ''))} | {g['game_key']}" for g in schedule]
 tabs = st.tabs(base_tabs + game_tabs)
 
 with tabs[0]:
-    st.subheader("HR Probability Board")
+    st.subheader("JR HR Board")
     st.caption("Projected teams stay live. Confirmed teams freeze once lineups lock. Actual HR Today is display-only and does not change rankings.")
     hr_df = get_strict_hr_pool(locked_df)
     render_card_grid(hr_df, max_cards=30, columns=3)
-    with st.expander("Raw HR Probability Table"):
+    with st.expander("Raw JR HR Board Table"):
         st.dataframe(
             hr_df[[
                 "Rank", "Player", "Team", "Game", "Pitcher", "Lineup Spot",
@@ -4524,12 +4527,11 @@ with tabs[6]:
 
 with tabs[7]:
     st.subheader("Accuracy Tracker")
-    st.caption("Tracker is broken into separate sections. Duplicate refresh rows are cleaned by date + player + team + game + section. Per-game HR count equals the visible game-tab HR cards being tracked.")
+    st.caption("Tracker is broken into separate sections. Newly surfaced per-game picks are now added instead of being blocked after the first tracker write.")
 
     date_options = available_tracker_dates(tracker)
     selected_tracker_date = st.selectbox("Review slate date", options=date_options, index=0)
 
-    tracker = dedupe_tracker_rows(tracker)
     selected_source_summary = summarize_tracker_sources_for_date(tracker, selected_tracker_date)
     selected_tracker = tracker[
         tracker["date"].astype("string").fillna("") == str(selected_tracker_date)
