@@ -120,10 +120,12 @@ hr { margin-top: .38rem !important; margin-bottom: .38rem !important; }
   min-width: 0 !important;
 }
 .bf-lab-grid {
-  grid-template-columns: 1fr !important;
+  grid-template-columns: 160px minmax(0, 1fr) !important;
+  gap: 9px !important;
 }
 .bf-pitch-grid {
-  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  gap: 6px !important;
 }
 .bf-pitch-card {
   min-width: 0 !important;
@@ -144,6 +146,25 @@ hr { margin-top: .38rem !important; margin-bottom: .38rem !important; }
   text-overflow: ellipsis !important;
   vertical-align: bottom !important;
 }
+.bf-compact-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  margin-top: 8px;
+}
+.bf-compact-detail {
+  border: 1px solid rgba(255,255,255,.10);
+  border-radius: 9px;
+  background: rgba(255,255,255,.035);
+  padding: 6px 7px;
+  font-size: .68rem;
+  color: #c9d0da;
+}
+.bf-compact-detail strong { color:#f5f5f5; }
+@media (max-width: 900px) {
+  .bf-lab-grid { grid-template-columns: 1fr !important; }
+  .bf-pitch-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+}
 @media (max-width: 520px) {
   .bf-title { font-size: 1.65rem !important; }
   .bf-chip, .bf-key-chip { font-size: .66rem !important; padding: 3px 7px !important; }
@@ -151,7 +172,7 @@ hr { margin-top: .38rem !important; margin-bottom: .38rem !important; }
   .bf-lab-shell { padding: 8px !important; }
   .bf-lab-top { grid-template-columns: repeat(3, minmax(0, 1fr)) !important; }
   .bf-lab-name { font-size: .86rem !important; }
-  .bf-pitch-grid { grid-template-columns: 1fr !important; }
+  .bf-pitch-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
   .bf-shape-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
 }
 
@@ -693,6 +714,38 @@ def estimate_handedness_from_name(name: str, role: str = "batter") -> str:
     if role == "pitcher":
         return "L" if seed < 32 else "R"
     return "L" if seed < 45 else "R"
+
+
+def normalize_hand_code(value, default="R") -> str:
+    txt = str(value or "").upper().strip()
+    if txt in {"L", "LEFT", "LHB", "LHP"}:
+        return "L"
+    if txt in {"R", "RIGHT", "RHB", "RHP"}:
+        return "R"
+    if txt in {"S", "B", "SWITCH", "SWITCH HITTER", "SH", "SHB"}:
+        return "S"
+    return default
+
+
+def hitter_hand_label(value, default="R") -> str:
+    code = normalize_hand_code(value, default)
+    if code == "L":
+        return "LHB"
+    if code == "S":
+        return "SHB"
+    return "RHB"
+
+
+def pitcher_hand_label(value, default="R") -> str:
+    code = normalize_hand_code(value, default)
+    return "LHP" if code == "L" else "RHP"
+
+
+def matchup_hand_code(value, default="R") -> str:
+    # Switch hitters should not be treated as same-handed by accident.
+    # For matchup math, mark switch hitters as opposite-hand neutral/edge.
+    code = normalize_hand_code(value, default)
+    return "L" if code == "S" else code
 
 
 def build_pitch_mix_profile(
@@ -1554,7 +1607,9 @@ def fetch_people_stats(person_ids_tuple: tuple, group: str):
 
         for person in data.get("people", []):
             pid = person.get("id")
-            stats = {"season": {}, "gamelog": []}
+            bat_side = ((person.get("batSide") or {}).get("code") or (person.get("batSide") or {}).get("description") or "")
+            pitch_hand = ((person.get("pitchHand") or {}).get("code") or (person.get("pitchHand") or {}).get("description") or "")
+            stats = {"season": {}, "gamelog": [], "bat_side": bat_side, "pitch_hand": pitch_hand}
 
             for stat_block in person.get("stats", []):
                 stat_type = ((stat_block.get("type") or {}).get("displayName") or "").lower()
@@ -2604,8 +2659,12 @@ def build_hitter_metrics(
         recent_trend = "NEUTRAL"
 
     display_spot = display_lineup_spot(lineup_spot)
-    bats = estimate_handedness_from_name(player_name, "batter")
-    pitcher_throws = estimate_handedness_from_name(opp_pitcher, "pitcher")
+    hitter_bio = hitter_stats_map.get(player_id, {}) if isinstance(hitter_stats_map, dict) else {}
+    pitcher_bio = pitcher_stats_map.get(opp_pitcher_id, {}) if isinstance(pitcher_stats_map, dict) and opp_pitcher_id is not None and not pd.isna(opp_pitcher_id) else {}
+    bats_code = normalize_hand_code(hitter_bio.get("bat_side"), estimate_handedness_from_name(player_name, "batter"))
+    pitcher_throws_code = normalize_hand_code(pitcher_bio.get("pitch_hand"), estimate_handedness_from_name(opp_pitcher, "pitcher"))
+    bats = hitter_hand_label(bats_code)
+    pitcher_throws = pitcher_hand_label(pitcher_throws_code)
 
     if live_pitcher is None:
         pitch_hr9 = stable_float(f"{opp_pitcher}-hr9", 0.7, 1.9)
@@ -2627,12 +2686,12 @@ def build_hitter_metrics(
         pitch_hr9,
         pitch_barrel_allowed,
         pitch_hard_hit_allowed,
-        pitcher_throws,
+        pitcher_throws_code,
     )
     pitch_context = compute_relevant_pitch_matchup(
         pitch_mix_example,
-        bats,
-        pitcher_throws,
+        matchup_hand_code(bats_code),
+        pitcher_throws_code,
         barrel,
         hard_hit,
         air_pct,
@@ -3110,7 +3169,9 @@ def build_hitter_metrics(
         "Player": player_name,
         "Team": team,
         "Bats": bats,
+        "Bats Code": matchup_hand_code(bats_code),
         "Pitcher Throws": pitcher_throws,
+        "Pitcher Throws Code": pitcher_throws_code,
         "Pitch Mix Mode": pitch_mix_mode,
         "Relevant Pitch Mix": relevant_pitch_mix,
         "Primary Pitch": primary_pitch if primary_pitch is not None else "Mix",
@@ -4244,11 +4305,10 @@ def _pitch_display_name(code: str) -> str:
 
 
 def _pitch_grade_from_context(row: pd.Series, pitch: str, usage: float) -> tuple[int, str]:
-    pitcher_throws = _display_value(row.get("Pitcher Throws", "R"))
-    if pitcher_throws not in {"L", "R"}:
-        pitcher_throws = "R"
+    pitcher_throws = normalize_hand_code(row.get("Pitcher Throws Code", row.get("Pitcher Throws", "R")), "R")
+    batter_bats = matchup_hand_code(row.get("Bats Code", row.get("Bats", "R")), "R")
     score, reason, _ = compute_pitch_matchup_score(
-        pitch, usage, _display_value(row.get("Bats", "R")), pitcher_throws,
+        pitch, usage, batter_bats, pitcher_throws,
         safe_float(row.get("Barrel%"), 0.0), safe_float(row.get("HardHit%"), 0.0),
         safe_float(row.get("AIR%"), 0.0), safe_float(row.get("LaunchAngle"), 14.0),
         safe_float(row.get("xSLG"), 0.0), safe_float(row.get("xwOBA"), 0.0),
@@ -4259,9 +4319,7 @@ def _pitch_grade_from_context(row: pd.Series, pitch: str, usage: float) -> tuple
 
 def _build_lab_pitch_rows(row: pd.Series) -> list[dict]:
     pitcher = _display_value(row.get("Pitcher"))
-    pitcher_throws = _display_value(row.get("Pitcher Throws", "R"))
-    if pitcher_throws not in {"L", "R"}:
-        pitcher_throws = "R"
+    pitcher_throws = normalize_hand_code(row.get("Pitcher Throws Code", row.get("Pitcher Throws", "R")), "R")
     pitch_mix = build_pitch_mix_profile(
         pitcher, row.get("Pitcher ID", row.get("Pitcher_ID", "")),
         safe_float(row.get("Pitcher_HR9_Last7"), 1.0),
@@ -4414,24 +4472,17 @@ def render_player_card(row: pd.Series, rank_override=None):
 
     with st.expander("🧪 Matchup Lab", expanded=False):
         render_matchup_lab(row)
-        st.markdown("**Signal Bars**")
-        st.markdown(_signal_bar_html("HR Probability", hr_prob, 28, "%", good_at=14, warn_at=9), unsafe_allow_html=True)
-        st.markdown(_signal_bar_html("Matchup Score", matchup_score, 75, good_at=55, warn_at=38), unsafe_allow_html=True)
-        st.markdown(_signal_bar_html("Pitcher HR Attackability", hr_attack_pct, 100, "%", good_at=70, warn_at=50), unsafe_allow_html=True)
-        st.caption(f"Pitcher profile: {pitcher_profile} | L7 HR/9: {pitch_hr9_l7:.2f} | Season HR/9: {pitch_hr9_season:.2f} | Recent HR/9: {pitch_hr9_recent:.2f} | Barrels allowed: {pitch_barrel_allowed:.1f} | Hard-hit allowed: {pitch_hh_allowed:.1f}")
-        if pitcher_label:
-            st.caption(f"Attackability detail: {pitcher_label}")
-        st.markdown(_signal_bar_html("Statcast Authority", authority_score, 55, good_at=30, warn_at=17), unsafe_allow_html=True)
-        st.markdown(_signal_bar_html("L10 BBE Quality", l10_bbe_quality, 100, "%", good_at=70, warn_at=45), unsafe_allow_html=True)
-        st.caption(f"L10 BBE proxy: {l10_bbe_trend} over ~{l10_bbe_events} recent batted-ball events/contact chances")
-        st.markdown(_signal_bar_html("Barrel", barrel, 20, "%", good_at=11, warn_at=8), unsafe_allow_html=True)
-        st.markdown(_signal_bar_html("Hard Hit", hard_hit, 60, "%", good_at=42, warn_at=35), unsafe_allow_html=True)
-        st.markdown(_signal_bar_html("Air Ball", air_pct, 75, "%", good_at=55, warn_at=48), unsafe_allow_html=True)
-        st.markdown(_signal_bar_html("Ground Ball Risk", ground_ball, 60, "%", good_at=44, warn_at=50, lower_is_better=True), unsafe_allow_html=True)
-
-        st.caption(f"Pitch Mix: {pitch_mode} • {pitch_mix} | xSLG: {xslg:.3f} | Trend: {recent}")
+        compact_bits = [
+            f"<div class='bf-compact-detail'><strong>Pitcher HR</strong><br>L7 {pitch_hr9_l7:.2f} · Season {pitch_hr9_season:.2f} · Recent {pitch_hr9_recent:.2f}</div>",
+            f"<div class='bf-compact-detail'><strong>Contact Allowed</strong><br>Barrel {pitch_barrel_allowed:.1f}% · HH {pitch_hh_allowed:.1f}%</div>",
+            f"<div class='bf-compact-detail'><strong>L10 BBE</strong><br>{escape(l10_bbe_trend)} · {l10_bbe_quality:.1f} · ~{l10_bbe_events} events</div>",
+            f"<div class='bf-compact-detail'><strong>Context</strong><br>{escape(pitch_mode)} {escape(pitch_mix)} · xSLG {xslg:.3f} · {escape(recent)}</div>",
+        ]
+        st.markdown("<div class='bf-compact-detail-grid'>" + "".join(compact_bits) + "</div>", unsafe_allow_html=True)
         st.caption(f"Weather: {weather}")
-        st.write(f"Why: {why}")
+        st.caption(f"Why: {why}")
+        if pitcher_label:
+            st.caption(f"Attackability: {pitcher_label}")
         if why2 and why2 != why:
             st.caption(why2)
 
