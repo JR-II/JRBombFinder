@@ -61,104 +61,19 @@ div[data-testid="stDataFrame"] { border: 1px solid rgba(255,255,255,.12); border
 div[data-testid="stExpander"] { background: rgba(255,255,255,.018); border-radius: 12px; }
 hr { margin-top: .38rem !important; margin-bottom: .38rem !important; }
 
-.bf-lab-shell { border:1px solid rgba(255,255,255,.12); border-radius:14px; background:#0d1118; padding:10px; margin-bottom:10px; }
-.bf-lab-top { display:grid; grid-template-columns: 1.2fr 1fr .45fr .45fr .45fr; gap:8px; align-items:center; padding:8px 9px; border-radius:12px; background:#151b26; border:1px solid rgba(255,255,255,.10); margin-bottom:10px; }
-.bf-lab-label { font-size:.64rem; color:#7ea5ff; font-weight:950; letter-spacing:.12em; text-transform:uppercase; }
-.bf-lab-name { font-size:1rem; font-weight:950; color:#f5f5f5; }
-.bf-hand { display:inline-flex; font-size:.58rem; font-weight:950; color:#ffb8b8; background:rgba(255,85,85,.16); border:1px solid rgba(255,85,85,.35); border-radius:4px; padding:1px 4px; margin-left:4px; vertical-align:middle; }
-.bf-score-pill { text-align:center; border-radius:8px; padding:5px 6px; font-weight:950; background:rgba(255,255,255,.045); border:1px solid rgba(255,255,255,.08); }
-.bf-score-pill .num { font-size:.95rem; }
-.bf-score-green { color:#35d07f; background:rgba(53,208,127,.12); }
-.bf-score-yellow { color:#ffd166; background:rgba(255,209,102,.12); }
-.bf-score-red { color:#ff6666; background:rgba(255,85,85,.12); }
-.bf-lab-grid { display:grid; grid-template-columns: 175px 1fr; gap:12px; }
-.bf-match-scores { display:grid; gap:7px; align-content:start; }
-.bf-side-title { font-size:.64rem; color:#8792a2; font-weight:950; letter-spacing:.12em; text-transform:uppercase; margin:2px 0 4px; }
-.bf-score-row { display:flex; justify-content:space-between; gap:8px; align-items:center; color:#aeb5c0; font-size:.72rem; }
-.bf-score-box { min-width:42px; text-align:center; border-radius:7px; padding:4px 5px; font-weight:950; background:rgba(255,255,255,.06); }
-.bf-pitch-grid { display:grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap:8px; }
-.bf-pitch-card { border:1px solid rgba(255,255,255,.10); background:#10151d; border-radius:10px; padding:8px; min-height:74px; }
-.bf-pitch-title { color:#d9e2ef; font-size:.67rem; font-weight:950; text-transform:uppercase; }
-.bf-pitch-score { font-size:1.25rem; font-weight:950; line-height:1.05; margin-top:3px; }
-.bf-mini-track { height:5px; border-radius:99px; background:#252b35; overflow:hidden; margin:5px 0 3px; }
-.bf-mini-fill { height:100%; border-radius:99px; background:#35d07f; }
-.bf-mini-fill-yellow { background:#ffd166; }
-.bf-mini-fill-red { background:#ff5555; }
-.bf-usage-row { display:flex; justify-content:space-between; font-size:.58rem; color:#d5dbe4; font-weight:850; }
-.bf-shape-grid { display:grid; grid-template-columns: repeat(6, minmax(0,1fr)); gap:6px; border-top:1px solid rgba(255,255,255,.08); padding-top:9px; margin-top:10px; }
-.bf-stat-tile { background:#10141b; border:1px solid rgba(255,255,255,.10); border-radius:9px; padding:7px; min-height:48px; }
-.bf-stat-label { font-size:.58rem; color:#9aa3af; font-weight:950; letter-spacing:.05em; text-transform:uppercase; }
-.bf-stat-value { font-size:.84rem; font-weight:950; margin-top:3px; }
-.bf-stat-vs { font-size:.68rem; color:#ff6666; font-weight:900; margin-left:4px; }
-@media (max-width: 760px) { .bf-lab-top { grid-template-columns: 1fr 1fr 1fr; } .bf-lab-top .identity { grid-column: 1 / -1; } .bf-lab-grid { grid-template-columns: 1fr; } .bf-pitch-grid { grid-template-columns: 1fr 1fr; } .bf-shape-grid { grid-template-columns: repeat(3, minmax(0,1fr)); } }
-
-
-/* BF DATA READABILITY PATCH — keeps JR HR Board readable in every section/card width */
-.bf-lab-shell,
-.bf-lab-shell * {
-  box-sizing: border-box !important;
-}
-.bf-lab-shell {
-  max-width: 100% !important;
-}
-.bf-lab-top {
-  display: grid !important;
-  grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
-  gap: 7px !important;
-}
-.bf-lab-top .identity {
-  grid-column: 1 / -1 !important;
-  min-width: 0 !important;
-}
-.bf-lab-name {
-  white-space: normal !important;
-  word-break: normal !important;
-  overflow-wrap: break-word !important;
-  hyphens: none !important;
-}
-.bf-score-pill {
-  min-width: 0 !important;
-}
-.bf-lab-grid {
-  grid-template-columns: 1fr !important;
-}
-.bf-pitch-grid {
-  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
-}
-.bf-pitch-card {
-  min-width: 0 !important;
-}
-.bf-shape-grid {
-  grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
-}
-.bf-stat-value,
-.bf-stat-label {
-  white-space: nowrap !important;
-  overflow: hidden !important;
-  text-overflow: ellipsis !important;
-}
-.bf-stat-vs {
-  display: inline-block !important;
-  max-width: 45% !important;
-  overflow: hidden !important;
-  text-overflow: ellipsis !important;
-  vertical-align: bottom !important;
-}
-@media (max-width: 520px) {
-  .bf-title { font-size: 1.65rem !important; }
-  .bf-chip, .bf-key-chip { font-size: .66rem !important; padding: 3px 7px !important; }
-  .bf-signal-line { font-size: .76rem !important; }
-  .bf-lab-shell { padding: 8px !important; }
-  .bf-lab-top { grid-template-columns: repeat(3, minmax(0, 1fr)) !important; }
-  .bf-lab-name { font-size: .86rem !important; }
-  .bf-pitch-grid { grid-template-columns: 1fr !important; }
-  .bf-shape-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
-}
+/* BF DATA QUICK MATCHUP LAB PATCH — compact details, less scrolling, mobile readable */
+.bf-quick-tile-row { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:6px; margin:6px 0; }
+.bf-quick-tile { background:#10141b; border:1px solid rgba(255,255,255,.10); border-radius:9px; padding:6px 7px; min-width:0; }
+.bf-quick-tile .lbl { color:#8fa2bf; font-size:.56rem; font-weight:950; letter-spacing:.06em; text-transform:uppercase; }
+.bf-quick-tile .val { color:#f5f5f5; font-size:.76rem; font-weight:900; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.bf-quick-note { font-size:.72rem; color:#a8adb5; line-height:1.25; margin-top:5px; }
+.bf-hand-tag { display:inline-flex; font-size:.62rem; font-weight:950; color:#ffb8b8; background:rgba(255,85,85,.16); border:1px solid rgba(255,85,85,.35); border-radius:5px; padding:1px 5px; margin-left:3px; vertical-align:middle; }
+@media (max-width: 760px) { .bf-quick-tile-row { grid-template-columns:repeat(2,minmax(0,1fr)); } }
 
 </style>
 <div class="bf-hero">
     <div class="bf-kicker">BF DATA PRO LAB</div>
-    <div class="bf-title">JR Daily HR Predictions</div>
+    <div class="bf-title">Daily Home Run Probability Engine</div>
     <div class="bf-subtitle">Matte dark board, compact player cards, green/yellow/red HR attackability signals, and transparent tracking built around the actual surfaced picks.</div>
 </div>
 """, unsafe_allow_html=True)
@@ -693,6 +608,39 @@ def estimate_handedness_from_name(name: str, role: str = "batter") -> str:
     if role == "pitcher":
         return "L" if seed < 32 else "R"
     return "L" if seed < 45 else "R"
+
+
+def normalize_hand_code(value, role: str = "batter") -> str:
+    txt = str(value or "").upper().strip()
+    if "LEFT" in txt or txt == "L":
+        return "L"
+    if "RIGHT" in txt or txt == "R":
+        return "R"
+    if ("SWITCH" in txt or txt == "S") and role == "batter":
+        return "S"
+    return ""
+
+
+def hand_display(value, role: str = "batter") -> str:
+    code = normalize_hand_code(value, role)
+    if role == "pitcher":
+        return "LHP" if code == "L" else "RHP" if code == "R" else "P?"
+    if code == "L":
+        return "LHB"
+    if code == "R":
+        return "RHB"
+    if code == "S":
+        return "SHB"
+    return "B?"
+
+
+def matchup_hand_code(value, role: str = "batter") -> str:
+    code = normalize_hand_code(value, role)
+    if code == "S":
+        return "L"
+    if code in {"L", "R"}:
+        return code
+    return "R"
 
 
 def build_pitch_mix_profile(
@@ -1554,7 +1502,9 @@ def fetch_people_stats(person_ids_tuple: tuple, group: str):
 
         for person in data.get("people", []):
             pid = person.get("id")
-            stats = {"season": {}, "gamelog": []}
+            bat_side = ((person.get("batSide") or {}).get("code") or (person.get("batSide") or {}).get("description") or "")
+            pitch_hand = ((person.get("pitchHand") or {}).get("code") or (person.get("pitchHand") or {}).get("description") or "")
+            stats = {"season": {}, "gamelog": [], "bat_side": normalize_hand_code(bat_side, "batter"), "pitch_hand": normalize_hand_code(pitch_hand, "pitcher")}
 
             for stat_block in person.get("stats", []):
                 stat_type = ((stat_block.get("type") or {}).get("displayName") or "").lower()
@@ -2604,8 +2554,10 @@ def build_hitter_metrics(
         recent_trend = "NEUTRAL"
 
     display_spot = display_lineup_spot(lineup_spot)
-    bats = estimate_handedness_from_name(player_name, "batter")
-    pitcher_throws = estimate_handedness_from_name(opp_pitcher, "pitcher")
+    hitter_info = hitter_stats_map.get(player_id, {}) if isinstance(hitter_stats_map, dict) else {}
+    pitcher_info = pitcher_stats_map.get(opp_pitcher_id, {}) if isinstance(pitcher_stats_map, dict) else {}
+    bats = normalize_hand_code(hitter_info.get("bat_side"), "batter") or estimate_handedness_from_name(player_name, "batter")
+    pitcher_throws = normalize_hand_code(pitcher_info.get("pitch_hand"), "pitcher") or estimate_handedness_from_name(opp_pitcher, "pitcher")
 
     if live_pitcher is None:
         pitch_hr9 = stable_float(f"{opp_pitcher}-hr9", 0.7, 1.9)
@@ -2631,8 +2583,8 @@ def build_hitter_metrics(
     )
     pitch_context = compute_relevant_pitch_matchup(
         pitch_mix_example,
-        bats,
-        pitcher_throws,
+        matchup_hand_code(bats, "batter"),
+        matchup_hand_code(pitcher_throws, "pitcher"),
         barrel,
         hard_hit,
         air_pct,
@@ -3604,18 +3556,7 @@ def build_visible_tracker_pool(df: pd.DataFrame, schedule: list[dict]) -> pd.Dat
         return pd.DataFrame(columns=df.columns.tolist() + ["Tracker Source"])
 
     visible_df = pd.concat(visible_frames, ignore_index=True)
-
-    # CRITICAL: do NOT dedupe across tracker sections.
-    # The same player can legitimately be surfaced in CORE_BOARD, TOP12, and GAME_HR.
-    # If Tracker Source is not part of the dedupe key, TOP12 rows get erased by CORE_BOARD rows,
-    # which is why the Accuracy Tracker keeps showing Top 12 = 0 after upgrades.
-    if "Tracker Source" not in visible_df.columns:
-        visible_df["Tracker Source"] = "CORE_BOARD"
-
-    visible_df = visible_df.drop_duplicates(
-        subset=["Player", "Team", "Game", "Tracker Source"],
-        keep="first"
-    ).reset_index(drop=True)
+    visible_df = visible_df.drop_duplicates(subset=["Player", "Team", "Game"]).reset_index(drop=True)
     visible_df = sort_for_hr(visible_df)
     return visible_df
 
@@ -4217,129 +4158,23 @@ def render_bar(label: str, value, max_value: float = 100.0, suffix: str = "", fi
     return f"{label}: {val:.1f}{suffix}"
 
 
-
-def _lab_color(score: float, good: float = 75.0, warn: float = 55.0) -> str:
-    val = safe_float(score, 0.0)
-    if val >= good:
-        return "green"
-    if val >= warn:
-        return "yellow"
-    return "red"
-
-
-def _lab_score_box(label: str, score, good: float = 75.0, warn: float = 55.0) -> str:
-    val = safe_float(score, 0.0)
-    color = _lab_color(val, good, warn)
-    return f'<div class="bf-score-pill bf-score-{color}"><div class="bf-lab-label">{escape(label)}</div><div class="num">{val:.0f}</div></div>'
-
-
-def _lab_score_row(label: str, score, good: float = 75.0, warn: float = 55.0) -> str:
-    val = safe_float(score, 0.0)
-    color = _lab_color(val, good, warn)
-    return f'<div class="bf-score-row"><span>{escape(label)}</span><span class="bf-score-box bf-score-{color}">{val:.0f}</span></div>'
-
-
-def _pitch_display_name(code: str) -> str:
-    return {"FF": "Four-Seam", "SL": "Slider", "CH": "Changeup", "CU": "Curveball", "SI": "Sinker", "FC": "Cutter", "FS": "Splitter"}.get(str(code).upper(), str(code).upper())
-
-
-def _pitch_grade_from_context(row: pd.Series, pitch: str, usage: float) -> tuple[int, str]:
-    pitcher_throws = _display_value(row.get("Pitcher Throws", "R"))
-    if pitcher_throws not in {"L", "R"}:
-        pitcher_throws = "R"
-    score, reason, _ = compute_pitch_matchup_score(
-        pitch, usage, _display_value(row.get("Bats", "R")), pitcher_throws,
-        safe_float(row.get("Barrel%"), 0.0), safe_float(row.get("HardHit%"), 0.0),
-        safe_float(row.get("AIR%"), 0.0), safe_float(row.get("LaunchAngle"), 14.0),
-        safe_float(row.get("xSLG"), 0.0), safe_float(row.get("xwOBA"), 0.0),
-        safe_float(row.get("GroundBall%"), 0.0),
-    )
-    return int(round(clip(50 + score * 6.2, 0, 99))), reason
-
-
-def _build_lab_pitch_rows(row: pd.Series) -> list[dict]:
-    pitcher = _display_value(row.get("Pitcher"))
-    pitcher_throws = _display_value(row.get("Pitcher Throws", "R"))
-    if pitcher_throws not in {"L", "R"}:
-        pitcher_throws = "R"
-    pitch_mix = build_pitch_mix_profile(
-        pitcher, row.get("Pitcher ID", row.get("Pitcher_ID", "")),
-        safe_float(row.get("Pitcher_HR9_Last7"), 1.0),
-        safe_float(row.get("Pitcher_Barrel_Allowed"), 7.0),
-        safe_float(row.get("Pitcher_HardHit_Allowed"), 38.0),
-        pitcher_throws,
-    )
-    out = []
-    for pitch, usage in sorted(pitch_mix.items(), key=lambda x: x[1], reverse=True)[:5]:
-        grade, reason = _pitch_grade_from_context(row, pitch, usage)
-        out.append({"pitch": _pitch_display_name(pitch), "grade": grade, "usage": safe_float(usage, 0.0), "reason": reason})
-    return out
-
-
-def render_matchup_lab(row: pd.Series):
-    player = _display_value(row.get("Player"))
-    pitcher = _display_value(row.get("Pitcher"))
-    bats = _display_value(row.get("Bats", "?"))
-    throws = _display_value(row.get("Pitcher Throws", "?"))
-    overall = safe_float(row.get("Matchup Advantage Score"), 0.0)
-    hr_power = safe_float(row.get("Statcast Authority Score"), 0.0)
-    hr_attack = safe_float(row.get("HR Attackability %", _attackability_pct(safe_float(row.get("HR Attackability Score"), 0.0))), 0.0)
-    k_risk = clip(100 - max(0.0, safe_float(row.get("GroundBall%"), 0.0) - 35.0) * 1.2, 20, 90)
-    pitcher_era = safe_float(row.get("Pitcher ERA", row.get("ERA", 0.0)), 0.0)
-    pitcher_opp = safe_float(row.get("Pitcher Opp AVG", row.get("Opp AVG", 0.0)), 0.0)
-    if pitcher_era <= 0:
-        pitcher_era = safe_float(row.get("Pitcher_HR9_Last7"), 0.0) * 2.4
-    if pitcher_opp <= 0:
-        pitcher_opp = clip(.180 + safe_float(row.get("Pitcher_HardHit_Allowed"), 38.0) / 500, .180, .320)
-    top_html = (
-        '<div class="bf-lab-shell"><div class="bf-lab-top">'
-        f'<div class="identity"><div class="bf-lab-label">Player</div><div class="bf-lab-name">{escape(player)} <span class="bf-hand">{escape(bats)}</span></div></div>'
-        f'<div class="identity"><div class="bf-lab-label">vs Pitcher</div><div class="bf-lab-name">{escape(pitcher)} <span class="bf-hand">{escape(throws)}</span></div></div>'
-        + _lab_score_box("OVR", overall, 70, 52) + _lab_score_box("HR", hr_power, 30, 17) + _lab_score_box("K", k_risk, 70, 50)
-        + '</div><div class="bf-lab-grid"><div class="bf-match-scores"><div class="bf-side-title">Matchup Scores</div>'
-        + _lab_score_row("Overall", overall, 70, 52) + _lab_score_row("HR Power", hr_power, 30, 17) + _lab_score_row("K Risk", k_risk, 70, 50) + _lab_score_row("HR Attack", hr_attack, 70, 50)
-        + '<div class="bf-side-title" style="margin-top:10px;">Opposing Pitcher</div>'
-        + f'<div class="bf-score-row"><span>{escape(pitcher)}</span><span class="bf-hand">{escape(throws)}</span></div>'
-        + f'<div class="bf-score-row"><span>ERA</span><span class="bf-score-box bf-score-{_lab_color(100-pitcher_era*13,70,50)}">{pitcher_era:.2f}</span></div>'
-        + f'<div class="bf-score-row"><span>Opp AVG</span><span class="bf-score-box bf-score-{_lab_color((.300-pitcher_opp)*400,55,25)}">{pitcher_opp:.3f}</span></div>'
-        + '</div><div><div class="bf-side-title">X-Arsenal · Pitch Type Matchup</div><div class="bf-pitch-grid">'
-    )
-    pitch_cards = []
-    for p in _build_lab_pitch_rows(row):
-        color = _lab_color(p["grade"], 75, 55)
-        fill_class = "bf-mini-fill" if color == "green" else ("bf-mini-fill-yellow" if color == "yellow" else "bf-mini-fill-red")
-        pitch_cards.append('<div class="bf-pitch-card">'
-            f'<div class="bf-pitch-title">{escape(p["pitch"])}</div>'
-            f'<div class="bf-pitch-score bf-score-{color}">{p["grade"]}</div>'
-            f'<div class="bf-mini-track"><div class="{fill_class}" style="width:{clip(p["grade"],0,99):.0f}%"></div></div>'
-            f'<div class="bf-usage-row"><span>USAGE</span><span>{p["usage"]:.0f}%</span></div>'
-            f'<div style="font-size:.62rem;color:#9aa3af;margin-top:4px;">{escape(_display_value(p["reason"]))}</div></div>')
-    while len(pitch_cards) < 6:
-        pitch_cards.append('<div class="bf-pitch-card"><div class="bf-pitch-title">—</div></div>')
-    shape_stats = [
-        ("Barrel%", safe_float(row.get("Barrel%"), 0.0), safe_float(row.get("Pitcher_Barrel_Allowed"), 0.0), 11, 8),
-        ("Exit Velo", safe_float(row.get("EV"), 0.0), safe_float(row.get("Pitcher EV Allowed", 0.0), 0.0), 91, 88),
-        ("Hard Hit%", safe_float(row.get("HardHit%"), 0.0), safe_float(row.get("Pitcher_HardHit_Allowed"), 0.0), 42, 35),
-        ("Launch", safe_float(row.get("LaunchAngle"), 0.0), safe_float(row.get("Pitcher Launch Allowed", 0.0), 0.0), 14, 10),
-        ("FB%", safe_float(row.get("FlyBall%"), 0.0), 45.0, 42, 34),
-        ("GB%", safe_float(row.get("GroundBall%"), 0.0), 38.0, 44, 50),
-        ("LD%", safe_float(row.get("LineDrive%"), 0.0), 17.0, 22, 17),
-        ("Pull%", safe_float(row.get("Pull%", 0.0), 0.0), 43.0, 42, 34),
-        ("Oppo%", safe_float(row.get("Oppo%", 0.0), 0.0), 22.0, 24, 18),
-        ("AVG", safe_float(row.get("recent_avg", row.get("Recent AVG", 0.0)), 0.0), pitcher_opp, .260, .220),
-        ("xSLG", safe_float(row.get("xSLG"), 0.0), 0.0, .470, .420),
-        ("xwOBA", safe_float(row.get("xwOBA"), 0.0), 0.0, .340, .310),
+def render_quick_matchup_tiles(row: pd.Series) -> str:
+    items = [
+        ("HR Prob", f"{safe_float(row.get('HR Probability %'), 0.0):.1f}%"),
+        ("Matchup", f"{safe_float(row.get('Matchup Advantage Score'), 0.0):.1f} · {_display_value(row.get('Matchup Advantage', '—'))}"),
+        ("Pitcher Attack", f"{safe_float(row.get('HR Attackability %', _attackability_pct(safe_float(row.get('HR Attackability Score'), 0.0))), 0.0):.0f}%"),
+        ("Authority", f"{safe_float(row.get('Statcast Authority Score'), 0.0):.1f}"),
+        ("L10 BBE", f"{safe_float(row.get('L10 BBE Quality'), 0.0):.0f} · {_display_value(row.get('L10 BBE Trend', '—'))}"),
+        ("Pitch Mix", f"{_display_value(row.get('Pitch Mix Mode', '—'))} · {_display_value(row.get('Relevant Pitch Mix', '—'))}"),
+        ("HR/9 L7", f"{safe_float(row.get('Pitcher_HR9_Last7'), 0.0):.2f}"),
+        ("Weather", _display_value(row.get("WeatherNote", "neutral"))),
     ]
-    shape_html = ''.join(pitch_cards) + '</div></div></div><div class="bf-side-title" style="margin-top:10px;">Batter vs Pitcher · Batter / Pitcher</div><div class="bf-shape-grid">'
-    for label, batter_val, pitcher_val, good, warn in shape_stats:
-        lower_better = label == "GB%"
-        color = "green" if (lower_better and batter_val <= good) else ("yellow" if (lower_better and batter_val <= warn) else (_lab_color(batter_val, good, warn) if not lower_better else "red"))
-        if abs(batter_val) < 1 and label in {"AVG", "xSLG", "xwOBA"}:
-            btxt = f"{batter_val:.3f}"; ptxt = f"{pitcher_val:.3f}" if pitcher_val else "—"
-        else:
-            btxt = f"{batter_val:.1f}"; ptxt = f"{pitcher_val:.1f}" if pitcher_val else "—"
-        shape_html += f'<div class="bf-stat-tile"><div class="bf-stat-label">{escape(label)}</div><div class="bf-stat-value bf-score-{color}">{escape(btxt)} <span class="bf-stat-vs">{escape(ptxt)}</span></div></div>'
-    st.markdown(top_html + shape_html + '</div></div>', unsafe_allow_html=True)
+    html = '<div class="bf-quick-tile-row">'
+    for label, value in items:
+        html += f'<div class="bf-quick-tile"><div class="lbl">{escape(str(label))}</div><div class="val">{escape(str(value))}</div></div>'
+    html += '</div>'
+    return html
+
 
 def render_player_card(row: pd.Series, rank_override=None):
     rank = rank_override if rank_override is not None else row.get("Rank", "—")
@@ -4347,6 +4182,8 @@ def render_player_card(row: pd.Series, rank_override=None):
     team = _display_value(row.get("Team"))
     game = _display_value(row.get("Game"))
     pitcher = _display_value(row.get("Pitcher"))
+    batter_hand_label = hand_display(row.get("Bats", "?"), "batter")
+    pitcher_hand_label = hand_display(row.get("Pitcher Throws", "?"), "pitcher")
     tier = _display_value(row.get("HR Tier"))
     lineup = _display_value(row.get("Lineup Spot"))
     lineup_source = _display_value(row.get("Lineup Source"))
@@ -4383,7 +4220,7 @@ def render_player_card(row: pd.Series, rank_override=None):
     actual_hr = safe_int(row.get("Actual HR Today"), 0)
 
     st.markdown(f"**#{rank} {player}**  \n`{team}` • {game}")
-    st.caption(f"vs {pitcher}")
+    st.caption(f"{batter_hand_label} vs {pitcher} ({pitcher_hand_label})")
 
     chip_row = "".join([
         _chip_html(tier, _tier_color(tier)),
@@ -4413,25 +4250,21 @@ def render_player_card(row: pd.Series, rank_override=None):
         st.success(f"HR HIT TODAY: {actual_hr}")
 
     with st.expander("🧪 Matchup Lab", expanded=False):
-        render_matchup_lab(row)
-        st.markdown("**Signal Bars**")
-        st.markdown(_signal_bar_html("HR Probability", hr_prob, 28, "%", good_at=14, warn_at=9), unsafe_allow_html=True)
-        st.markdown(_signal_bar_html("Matchup Score", matchup_score, 75, good_at=55, warn_at=38), unsafe_allow_html=True)
-        st.markdown(_signal_bar_html("Pitcher HR Attackability", hr_attack_pct, 100, "%", good_at=70, warn_at=50), unsafe_allow_html=True)
-        st.caption(f"Pitcher profile: {pitcher_profile} | L7 HR/9: {pitch_hr9_l7:.2f} | Season HR/9: {pitch_hr9_season:.2f} | Recent HR/9: {pitch_hr9_recent:.2f} | Barrels allowed: {pitch_barrel_allowed:.1f} | Hard-hit allowed: {pitch_hh_allowed:.1f}")
+        st.markdown(render_quick_matchup_tiles(row), unsafe_allow_html=True)
+        st.markdown(
+            f'<div class="bf-quick-note"><strong>Pitcher profile:</strong> {escape(pitcher_profile)} · '
+            f'L7 HR/9 {pitch_hr9_l7:.2f} · Season {pitch_hr9_season:.2f} · Recent {pitch_hr9_recent:.2f} · '
+            f'Barrels allowed {pitch_barrel_allowed:.1f} · Hard-hit allowed {pitch_hh_allowed:.1f}</div>',
+            unsafe_allow_html=True,
+        )
         if pitcher_label:
-            st.caption(f"Attackability detail: {pitcher_label}")
-        st.markdown(_signal_bar_html("Statcast Authority", authority_score, 55, good_at=30, warn_at=17), unsafe_allow_html=True)
-        st.markdown(_signal_bar_html("L10 BBE Quality", l10_bbe_quality, 100, "%", good_at=70, warn_at=45), unsafe_allow_html=True)
-        st.caption(f"L10 BBE proxy: {l10_bbe_trend} over ~{l10_bbe_events} recent batted-ball events/contact chances")
-        st.markdown(_signal_bar_html("Barrel", barrel, 20, "%", good_at=11, warn_at=8), unsafe_allow_html=True)
-        st.markdown(_signal_bar_html("Hard Hit", hard_hit, 60, "%", good_at=42, warn_at=35), unsafe_allow_html=True)
-        st.markdown(_signal_bar_html("Air Ball", air_pct, 75, "%", good_at=55, warn_at=48), unsafe_allow_html=True)
-        st.markdown(_signal_bar_html("Ground Ball Risk", ground_ball, 60, "%", good_at=44, warn_at=50, lower_is_better=True), unsafe_allow_html=True)
-
-        st.caption(f"Pitch Mix: {pitch_mode} • {pitch_mix} | xSLG: {xslg:.3f} | Trend: {recent}")
-        st.caption(f"Weather: {weather}")
-        st.write(f"Why: {why}")
+            st.markdown(f'<div class="bf-quick-note"><strong>Attackability:</strong> {escape(pitcher_label)}</div>', unsafe_allow_html=True)
+        st.markdown(
+            f'<div class="bf-quick-note"><strong>Shape:</strong> Barrel {barrel:.1f}% · HardHit {hard_hit:.1f}% · '
+            f'Air {air_pct:.1f}% · GB {ground_ball:.1f}% · xSLG {xslg:.3f}</div>',
+            unsafe_allow_html=True,
+        )
+        st.markdown(f'<div class="bf-quick-note"><strong>Why:</strong> {escape(why)}</div>', unsafe_allow_html=True)
         if why2 and why2 != why:
             st.caption(why2)
 
@@ -4452,19 +4285,15 @@ def render_card_grid(df: pd.DataFrame, max_cards: int = 24, columns: int = 3, ti
     except Exception:
         columns = 3
 
-    # Keep cards side-by-side, but do not force 4 columns.
-    # Four columns made JR Matchup Lab too narrow and caused player/pitcher names
-    # to render as unreadable vertical text. Three is the max for readability.
-    columns = max(1, min(columns, 3))
+    if columns >= 3:
+        columns = 4
+    columns = max(1, min(columns, 4))
 
-    # Keep fast desktop side-by-side cards, but render by rows so mobile keeps rank order.
-    for start_idx in range(0, len(view), columns):
-        row_slice = view.iloc[start_idx:start_idx + columns]
-        col_objs = st.columns(columns)
-        for offset, (_, row) in enumerate(row_slice.iterrows()):
-            rank = row.get("Rank", start_idx + offset + 1)
-            with col_objs[offset]:
-                render_player_card(row, rank_override=rank)
+    col_objs = st.columns(columns)
+    for i, (_, row) in enumerate(view.iterrows()):
+        rank = row.get("Rank", i + 1)
+        with col_objs[i % columns]:
+            render_player_card(row, rank_override=rank)
 
 
 c1, c2, c3, c4 = st.columns([1, 1, 1, 2])
@@ -4523,19 +4352,19 @@ if locked_df.empty:
 
 render_board_key()
 
-base_tabs = ["JR HR Board", "Top 12", "Top HR Targets", "Pitchers to Attack", "HR Combos", "Hits + Runs + RBIs", "Batter Breakdown", "Accuracy Tracker"]
+base_tabs = ["HR Probability", "Top 12", "Top HR Targets", "Pitchers to Attack", "HR Combos", "Hits + Runs + RBIs", "Batter Breakdown", "Accuracy Tracker"]
 schedule = sort_schedule_rows(schedule)
 game_tabs = [f"{format_game_time_et(g.get('game_time', ''))} | {g['game_key']}" for g in schedule]
 tabs = st.tabs(base_tabs + game_tabs)
 
 with tabs[0]:
-    st.subheader("JR HR Board")
+    st.subheader("HR Probability Board")
     st.caption("Projected teams stay live. Confirmed teams freeze once lineups lock. Actual HR Today is display-only and does not change rankings.")
     hr_df = get_strict_hr_pool(locked_df)
-    render_card_grid(hr_df, max_cards=30, columns=2)
+    render_card_grid(hr_df, max_cards=30, columns=3)
     with st.expander("Raw HR Probability Table"):
         display_existing_columns(hr_df, [
-                "Rank", "Player", "Team", "Game", "Pitcher", "Lineup Spot",
+                "Rank", "Player", "Team", "Game", "Bats", "Pitcher", "Pitcher Throws", "Lineup Spot",
                 "Lineup Source", "Actual HR Today", "HR Probability %", "HR Tier", "GroundBall%",
                 "GB Rule", "GB Note", "Matchup Advantage", "HR Attackability Score", "HR Attackability %", "HR Attackability Status", "WeatherNote", "BullpenFatigueNote", "L10 BBE Quality", "L10 BBE Trend", "HardHit%", "FlyBall%", "AIR%", "xSLG", "xwOBA", "Barrel%", "Ranking Reasons", "Why"
             ])
@@ -4544,10 +4373,10 @@ with tabs[1]:
     st.subheader("Top 12 HR Candidates")
     st.caption("Confirmed teams freeze once lineups lock. Projected teams can still update. Actual HR Today is display-only and does not change rankings.")
     top12 = get_top12_hybrid(locked_df)
-    render_card_grid(top12, max_cards=12, columns=2)
+    render_card_grid(top12, max_cards=12, columns=3)
     with st.expander("Raw Top 12 Table"):
         display_existing_columns(top12, [
-                "Rank", "Player", "Team", "Game", "Pitcher", "Lineup Spot",
+                "Rank", "Player", "Team", "Game", "Bats", "Pitcher", "Pitcher Throws", "Lineup Spot",
                 "Lineup Source", "Actual HR Today", "HR Probability %", "HR Tier", "GroundBall%",
                 "GB Rule", "GB Note", "Matchup Advantage", "HR Attackability Score", "HR Attackability %", "HR Attackability Status", "WeatherNote", "BullpenFatigueNote", "L10 BBE Quality", "L10 BBE Trend", "HardHit%", "FlyBall%", "AIR%", "xSLG", "xwOBA", "Barrel%", "Ranking Reasons", "Why"
             ])
@@ -4557,13 +4386,13 @@ with tabs[2]:
     st.caption("Global slate ranking based on hitter authority, EV/ISO-style power, pitch exposure, pitcher HR/9 vulnerability, weather, park, and matchup advantage.")
     top_targets = get_best_hr_matchups(locked_df, 25)
     target_cols = [
-        "Rank", "Player", "Team", "Game", "Pitcher", "Lineup Spot", "Lineup Source",
+        "Rank", "Player", "Team", "Game", "Bats", "Pitcher", "Pitcher Throws", "Lineup Spot", "Lineup Source",
         "Matchup Advantage", "Matchup Advantage Score", "HR Attackability %", "HR Attackability Status", "HR Attackability Score", "Pitcher_HR9_Last7",
         "EV", "L10 BBE Quality", "L10 BBE Trend", "Barrel%", "HardHit%", "AIR%", "xSLG", "xwOBA",
         "Pitch Mix Mode", "Relevant Pitch Mix", "Primary Pitch Usage",
         "Actual HR Today", "HR Probability %", "HR Tier", "Ranking Reasons"
     ]
-    render_card_grid(top_targets, max_cards=25, columns=2)
+    render_card_grid(top_targets, max_cards=25, columns=3)
     with st.expander("Raw Top HR Targets Table"):
         display_existing_columns(top_targets, target_cols)
 
@@ -4622,7 +4451,7 @@ with tabs[6]:
     st.caption("Projected teams stay live until confirmed. Heavy GB bats are downgraded, not blindly erased unless the profile is truly bad.")
     breakdown = sort_for_hr(locked_df.copy())
     breakdown_cols = [
-            "Player", "Team", "Game", "Pitcher", "Lineup Spot", "Lineup Source", "Pitch Mix Mode", "Relevant Pitch Mix",
+            "Player", "Team", "Game", "Bats", "Pitcher", "Pitcher Throws", "Lineup Spot", "Lineup Source", "Pitch Mix Mode", "Relevant Pitch Mix",
             "EV", "HardHit%", "FlyBall%", "AIR%", "LaunchAngle", "Recent Trend", "LineDrive%", "GroundBall%", "Barrel%",
             "xSLG", "xwOBA",
             "Pitcher_HR9_Last7", "Pitcher_Barrel_Allowed", "Pitcher_HardHit_Allowed",
@@ -4763,7 +4592,7 @@ for idx, game in enumerate(schedule, start=8):
                 render_card_grid(team_hr, max_cards=4, columns=1)
                 with st.expander("Raw team HR table"):
                     display_existing_columns(team_hr, [
-                            "Rank", "Player", "Lineup Spot", "Lineup Source", "Statcast Pass",
+                            "Rank", "Player", "Bats", "Pitcher Throws", "Lineup Spot", "Lineup Source", "Statcast Pass",
                             "Strict Statcast", "Recent Form Pass", "Pitcher Attackable", "Actual HR Today", "HR Probability %",
                             "HR Tier", "GroundBall%", "GB Rule", "GB Note", "WeatherNote", "BullpenFatigueNote", "L10 BBE Quality", "L10 BBE Trend", "HardHit%", "FlyBall%",
                             "AIR%", "xSLG", "xwOBA", "Barrel%", "Ranking Reasons", "Why"
@@ -4790,7 +4619,7 @@ for idx, game in enumerate(schedule, start=8):
                 render_card_grid(team_hr, max_cards=4, columns=1)
                 with st.expander("Raw team HR table"):
                     display_existing_columns(team_hr, [
-                            "Rank", "Player", "Lineup Spot", "Lineup Source", "Statcast Pass",
+                            "Rank", "Player", "Bats", "Pitcher Throws", "Lineup Spot", "Lineup Source", "Statcast Pass",
                             "Strict Statcast", "Recent Form Pass", "Pitcher Attackable", "Actual HR Today", "HR Probability %",
                             "HR Tier", "GroundBall%", "GB Rule", "GB Note", "WeatherNote", "BullpenFatigueNote", "L10 BBE Quality", "L10 BBE Trend", "HardHit%", "FlyBall%",
                             "AIR%", "xSLG", "xwOBA", "Barrel%", "Ranking Reasons", "Why"
