@@ -2,7 +2,7 @@ import hashlib
 import os
 import re
 from html import escape
-from datetime import datetime, timedelta
+from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -10,13 +10,6 @@ import requests
 import streamlit as st
 import time
 import tempfile
-import json
-
-try:
-    from supabase import create_client
-except Exception:
-    create_client = None
-
 st.set_page_config(page_title="BF Data", layout="wide")
 
 st.markdown("""
@@ -68,52 +61,41 @@ div[data-testid="stDataFrame"] { border: 1px solid rgba(255,255,255,.12); border
 div[data-testid="stExpander"] { background: rgba(255,255,255,.018); border-radius: 12px; }
 hr { margin-top: .38rem !important; margin-bottom: .38rem !important; }
 
-/* BF Matchup Lab v2 - compact PropFinder-inspired, not copied */
-.bf-lab-shell { border:1px solid rgba(90,135,255,.22); border-radius:16px; background:linear-gradient(180deg, rgba(12,18,28,.96), rgba(7,10,15,.98)); overflow:hidden; margin-top:6px; }
-.bf-lab-top { display:grid; grid-template-columns: 1.2fr 1.2fr .9fr; gap:14px; padding:14px 16px; align-items:center; border-bottom:1px solid rgba(255,255,255,.10); background:linear-gradient(90deg, rgba(25,36,57,.75), rgba(10,14,22,.85)); }
-.bf-lab-label { color:#6fa6ff; font-size:.66rem; font-weight:950; letter-spacing:.14em; text-transform:uppercase; }
-.bf-lab-name { font-size:1.12rem; font-weight:950; color:#fff; margin-top:4px; line-height:1.15; }
-.bf-lab-sub { color:#aab3c2; font-size:.76rem; margin-top:3px; }
-.bf-hand-pill { display:inline-flex; margin-left:5px; padding:2px 7px; border-radius:6px; font-size:.64rem; font-weight:950; background:rgba(53,208,127,.13); color:#78ffae; border:1px solid rgba(53,208,127,.33); }
-.bf-hand-pill-red { background:rgba(255,85,85,.13); color:#ff8f8f; border-color:rgba(255,85,85,.36); }
-.bf-lab-score-row { display:grid; grid-template-columns: repeat(3, 1fr); gap:8px; }
-.bf-lab-score { border:1px solid rgba(255,255,255,.11); background:#111823; border-radius:10px; padding:8px; text-align:center; }
-.bf-lab-score .k { color:#aeb8c6; font-size:.62rem; font-weight:900; letter-spacing:.08em; text-transform:uppercase; }
-.bf-lab-score .v { font-size:1.2rem; font-weight:950; }
-.bf-lab-body { display:grid; grid-template-columns: .78fr 1.72fr; gap:18px; padding:14px 16px; }
-.bf-lab-section-title { color:#b9d4ff; font-size:.72rem; font-weight:950; letter-spacing:.12em; text-transform:uppercase; margin:0 0 9px 0; }
-.bf-lab-summary-row { display:flex; justify-content:space-between; gap:10px; padding:6px 0; color:#dfe6ef; font-size:.84rem; }
-.bf-lab-badge { min-width:46px; text-align:center; padding:4px 8px; border-radius:7px; font-weight:950; background:rgba(255,255,255,.06); }
-.bf-lab-pitch-grid { display:grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap:10px; }
-.bf-lab-pitch-card { border:1px solid rgba(255,255,255,.10); background:#101721; border-radius:12px; padding:10px 11px; min-height:106px; }
-.bf-lab-pitch-name { font-size:.77rem; font-weight:950; color:#fff; margin-bottom:3px; }
-.bf-lab-pitch-grade { font-size:1.45rem; font-weight:950; line-height:1.05; }
-.bf-lab-usage { display:flex; justify-content:space-between; margin-top:6px; color:#c7d1df; font-size:.67rem; font-weight:850; }
-.bf-lab-mini-track { height:5px; border-radius:99px; background:#202936; overflow:hidden; margin:4px 0 7px 0; }
-.bf-lab-mini-fill { height:100%; border-radius:99px; }
-.bf-lab-read { font-size:.70rem; color:#aab3c2; line-height:1.25; }
-.bf-lab-divider { border-top:1px solid rgba(255,255,255,.09); margin:0 16px; }
-.bf-lab-bottom { display:grid; grid-template-columns: 1.25fr .95fr; gap:18px; padding:14px 16px; }
-.bf-shape-grid { display:grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap:7px; }
-.bf-shape-card { border:1px solid rgba(255,255,255,.09); border-radius:9px; background:#101721; padding:8px; }
-.bf-shape-title { font-size:.62rem; color:#aeb8c6; font-weight:950; letter-spacing:.08em; text-transform:uppercase; }
-.bf-shape-values { display:flex; justify-content:space-between; gap:4px; margin-top:6px; font-weight:950; font-size:.84rem; }
-.bf-shape-sub { margin-top:3px; color:#7f8896; font-size:.61rem; }
-.bf-lab-signal-row { margin-bottom:9px; }
-.bf-lab-signal-head { display:flex; justify-content:space-between; gap:10px; font-size:.76rem; font-weight:950; color:#f4f6fa; }
-.bf-lab-foot { padding:12px 16px 14px 16px; display:grid; grid-template-columns: 1fr 1fr; gap:14px; border-top:1px solid rgba(255,255,255,.09); }
-.bf-lab-notes { color:#dce4ee; font-size:.78rem; line-height:1.38; }
-.bf-lab-note-line { margin:4px 0; }
-@media (max-width: 760px) {
-  .bf-lab-top, .bf-lab-body, .bf-lab-bottom, .bf-lab-foot { grid-template-columns:1fr; padding:12px; gap:12px; }
-  .bf-lab-pitch-grid { grid-template-columns:1fr; }
-  .bf-shape-grid { grid-template-columns: repeat(2, minmax(0,1fr)); }
-}
+.bf-lab-shell { border:1px solid rgba(255,255,255,.12); border-radius:14px; background:#0d1118; padding:10px; margin-bottom:10px; }
+.bf-lab-top { display:grid; grid-template-columns: 1.2fr 1fr .45fr .45fr .45fr; gap:8px; align-items:center; padding:8px 9px; border-radius:12px; background:#151b26; border:1px solid rgba(255,255,255,.10); margin-bottom:10px; }
+.bf-lab-label { font-size:.64rem; color:#7ea5ff; font-weight:950; letter-spacing:.12em; text-transform:uppercase; }
+.bf-lab-name { font-size:1rem; font-weight:950; color:#f5f5f5; }
+.bf-hand { display:inline-flex; font-size:.58rem; font-weight:950; color:#ffb8b8; background:rgba(255,85,85,.16); border:1px solid rgba(255,85,85,.35); border-radius:4px; padding:1px 4px; margin-left:4px; vertical-align:middle; }
+.bf-score-pill { text-align:center; border-radius:8px; padding:5px 6px; font-weight:950; background:rgba(255,255,255,.045); border:1px solid rgba(255,255,255,.08); }
+.bf-score-pill .num { font-size:.95rem; }
+.bf-score-green { color:#35d07f; background:rgba(53,208,127,.12); }
+.bf-score-yellow { color:#ffd166; background:rgba(255,209,102,.12); }
+.bf-score-red { color:#ff6666; background:rgba(255,85,85,.12); }
+.bf-lab-grid { display:grid; grid-template-columns: 175px 1fr; gap:12px; }
+.bf-match-scores { display:grid; gap:7px; align-content:start; }
+.bf-side-title { font-size:.64rem; color:#8792a2; font-weight:950; letter-spacing:.12em; text-transform:uppercase; margin:2px 0 4px; }
+.bf-score-row { display:flex; justify-content:space-between; gap:8px; align-items:center; color:#aeb5c0; font-size:.72rem; }
+.bf-score-box { min-width:42px; text-align:center; border-radius:7px; padding:4px 5px; font-weight:950; background:rgba(255,255,255,.06); }
+.bf-pitch-grid { display:grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap:8px; }
+.bf-pitch-card { border:1px solid rgba(255,255,255,.10); background:#10151d; border-radius:10px; padding:8px; min-height:74px; }
+.bf-pitch-title { color:#d9e2ef; font-size:.67rem; font-weight:950; text-transform:uppercase; }
+.bf-pitch-score { font-size:1.25rem; font-weight:950; line-height:1.05; margin-top:3px; }
+.bf-mini-track { height:5px; border-radius:99px; background:#252b35; overflow:hidden; margin:5px 0 3px; }
+.bf-mini-fill { height:100%; border-radius:99px; background:#35d07f; }
+.bf-mini-fill-yellow { background:#ffd166; }
+.bf-mini-fill-red { background:#ff5555; }
+.bf-usage-row { display:flex; justify-content:space-between; font-size:.58rem; color:#d5dbe4; font-weight:850; }
+.bf-shape-grid { display:grid; grid-template-columns: repeat(6, minmax(0,1fr)); gap:6px; border-top:1px solid rgba(255,255,255,.08); padding-top:9px; margin-top:10px; }
+.bf-stat-tile { background:#10141b; border:1px solid rgba(255,255,255,.10); border-radius:9px; padding:7px; min-height:48px; }
+.bf-stat-label { font-size:.58rem; color:#9aa3af; font-weight:950; letter-spacing:.05em; text-transform:uppercase; }
+.bf-stat-value { font-size:.84rem; font-weight:950; margin-top:3px; }
+.bf-stat-vs { font-size:.68rem; color:#ff6666; font-weight:900; margin-left:4px; }
+@media (max-width: 760px) { .bf-lab-top { grid-template-columns: 1fr 1fr 1fr; } .bf-lab-top .identity { grid-column: 1 / -1; } .bf-lab-grid { grid-template-columns: 1fr; } .bf-pitch-grid { grid-template-columns: 1fr 1fr; } .bf-shape-grid { grid-template-columns: repeat(3, minmax(0,1fr)); } }
 
 </style>
 <div class="bf-hero">
     <div class="bf-kicker">BF DATA PRO LAB</div>
-    <div class="bf-title">Daily Home Run Probability Engine</div>
+    <div class="bf-title">JR Daily HR Predictions</div>
     <div class="bf-subtitle">Matte dark board, compact player cards, green/yellow/red HR attackability signals, and transparent tracking built around the actual surfaced picks.</div>
 </div>
 """, unsafe_allow_html=True)
@@ -134,283 +116,6 @@ LOCK_FILE = "daily_hr_board_lock.csv"
 CURRENT_SEASON = datetime.now().year
 
 SNAPSHOT_DIR = "tracker_snapshots"
-
-
-TRACKER_COLUMNS = [
-    "row_id", "date", "player", "team", "game", "game_pk",
-    "hr_probability", "hr_tier", "hr_eligible", "tracker_source",
-    "result", "hr_count", "result_state", "game_state", "updated_at"
-]
-
-COMBO_TRACKER_COLUMNS = [
-    "date", "combo_id", "combo_label", "combo_size", "legs", "games",
-    "avg_leg_probability", "combined_score", "source_pool", "result",
-    "result_state", "legs_hit", "total_legs", "updated_at"
-]
-
-SUPABASE_ENABLED = True
-_SUPABASE_CLIENT = None
-_SUPABASE_ERROR_SHOWN = False
-
-
-def make_tracker_row_id(date_key, player, team, game, tracker_source="CORE_BOARD") -> str:
-    raw = f"{date_key}|{normalize_name(str(player))}|{team}|{game}|{tracker_source}"
-    return hashlib.md5(raw.encode("utf-8")).hexdigest()
-
-
-def make_board_snapshot_row_id(date_key, player, team, game, tracker_source="CORE_BOARD") -> str:
-    raw = f"board|{date_key}|{normalize_name(str(player))}|{team}|{game}|{tracker_source}"
-    return hashlib.md5(raw.encode("utf-8")).hexdigest()
-
-
-def get_supabase_client():
-    """Return Supabase client from Streamlit secrets, or None if not configured.
-
-    This is intentionally optional. BF Data must keep running from CSV backup if
-    Supabase secrets, tables, or columns are not ready yet.
-    """
-    global _SUPABASE_CLIENT, _SUPABASE_ERROR_SHOWN
-    if not SUPABASE_ENABLED or create_client is None:
-        return None
-    if _SUPABASE_CLIENT is not None:
-        return _SUPABASE_CLIENT
-    try:
-        url = st.secrets.get("SUPABASE_URL", "")
-        key = st.secrets.get("SUPABASE_KEY", "")
-        if not url or not key:
-            return None
-        _SUPABASE_CLIENT = create_client(str(url), str(key))
-        return _SUPABASE_CLIENT
-    except Exception as exc:
-        if not _SUPABASE_ERROR_SHOWN:
-            st.caption(f"Supabase tracker backup not connected yet; using local CSV backup. ({type(exc).__name__})")
-            _SUPABASE_ERROR_SHOWN = True
-        return None
-
-
-def clean_for_supabase(value):
-    if pd.isna(value):
-        return None
-    if isinstance(value, (pd.Timestamp, datetime)):
-        return value.isoformat()
-    if hasattr(value, "item"):
-        try:
-            return value.item()
-        except Exception:
-            pass
-    return value
-
-
-def df_records_for_supabase(df: pd.DataFrame, columns: list[str]) -> list[dict]:
-    if df is None or df.empty:
-        return []
-    work = df.copy()
-    for col in columns:
-        if col not in work.columns:
-            work[col] = None
-    records = []
-    for _, row in work[columns].iterrows():
-        records.append({col: clean_for_supabase(row.get(col)) for col in columns})
-    return records
-
-
-def load_supabase_table(table_name: str, columns: list[str]) -> pd.DataFrame:
-    client = get_supabase_client()
-    if client is None:
-        return pd.DataFrame(columns=columns)
-    try:
-        result = client.table(table_name).select("*").execute()
-        data = getattr(result, "data", None) or []
-        df = pd.DataFrame(data)
-        for col in columns:
-            if col not in df.columns:
-                df[col] = pd.NA
-        return df[columns]
-    except Exception:
-        return pd.DataFrame(columns=columns)
-
-
-def upsert_supabase_records(table_name: str, records: list[dict], conflict_col: str, fallback_columns: list[str] | None = None) -> bool:
-    """Best-effort Supabase write that never breaks BF Data.
-
-    It first tries the full production upsert. If the user's manually-created table
-    is missing optional columns, it retries with the smaller fallback column set.
-    If there is no matching primary/unique key yet, it finally performs a safe
-    date-replace insert for the minimal tracker table.
-    """
-    client = get_supabase_client()
-    if client is None or not records:
-        return False
-
-    try:
-        client.table(table_name).upsert(records, on_conflict=conflict_col).execute()
-        return True
-    except Exception:
-        pass
-
-    if fallback_columns:
-        trimmed = [{k: rec.get(k) for k in fallback_columns if k in rec} for rec in records]
-        try:
-            client.table(table_name).upsert(trimmed, on_conflict=conflict_col).execute()
-            return True
-        except Exception:
-            pass
-
-        # Manual first-table fallback: replace rows for the affected date(s), then insert.
-        # This works even before the full Supabase schema is finished.
-        minimal_cols = [c for c in ["date", "player", "team", "game", "hr_probability", "result"] if c in fallback_columns]
-        minimal = [{k: rec.get(k) for k in minimal_cols if k in rec} for rec in records]
-        try:
-            affected_dates = sorted({str(rec.get("date")) for rec in minimal if rec.get("date") not in [None, ""]})
-            for date_key in affected_dates:
-                try:
-                    client.table(table_name).delete().eq("date", date_key).execute()
-                except Exception:
-                    pass
-            if minimal:
-                client.table(table_name).insert(minimal).execute()
-                return True
-        except Exception:
-            return False
-
-    return False
-
-
-def save_tracker_to_supabase(df: pd.DataFrame) -> bool:
-    if df is None or df.empty:
-        return False
-    work = df.copy()
-    for col in TRACKER_COLUMNS:
-        if col not in work.columns:
-            work[col] = pd.NA
-    work["tracker_source"] = work["tracker_source"].fillna("CORE_BOARD").astype(str)
-    work["row_id"] = work.apply(
-        lambda r: r.get("row_id") if pd.notna(r.get("row_id")) and str(r.get("row_id")).strip() else make_tracker_row_id(
-            r.get("date"), r.get("player"), r.get("team"), r.get("game"), r.get("tracker_source")
-        ),
-        axis=1,
-    )
-    records = df_records_for_supabase(work, TRACKER_COLUMNS)
-
-    # First retry set is the full expected tracker table minus only optional internals.
-    # Final retry is the exact simple table the user manually built in Supabase.
-    fallback_cols = [
-        "row_id", "date", "player", "team", "game", "hr_probability", "hr_tier",
-        "result", "hr_count", "result_state", "game_state", "tracker_source", "updated_at"
-    ]
-    wrote = upsert_supabase_records("hr_tracker", records, "row_id", fallback_columns=fallback_cols)
-    if wrote:
-        return True
-
-    # Last-chance manual-table write with no row_id conflict requirement.
-    client = get_supabase_client()
-    if client is None:
-        return False
-    try:
-        minimal_cols = ["date", "player", "team", "game", "hr_probability", "result"]
-        minimal = df_records_for_supabase(work, minimal_cols)
-        affected_dates = sorted({str(rec.get("date")) for rec in minimal if rec.get("date") not in [None, ""]})
-        for date_key in affected_dates:
-            try:
-                client.table("hr_tracker").delete().eq("date", date_key).execute()
-            except Exception:
-                pass
-        if minimal:
-            client.table("hr_tracker").insert(minimal).execute()
-            return True
-    except Exception:
-        return False
-    return False
-
-
-def load_tracker_from_supabase() -> pd.DataFrame:
-    return load_supabase_table("hr_tracker", TRACKER_COLUMNS)
-
-
-def save_combo_tracker_to_supabase(df: pd.DataFrame) -> bool:
-    records = df_records_for_supabase(df, COMBO_TRACKER_COLUMNS)
-    return upsert_supabase_records("hr_combo_tracker", records, "combo_id")
-
-
-def load_combo_tracker_from_supabase() -> pd.DataFrame:
-    return load_supabase_table("hr_combo_tracker", COMBO_TRACKER_COLUMNS)
-
-
-def save_board_locks_to_supabase(df: pd.DataFrame) -> bool:
-    if df is None or df.empty:
-        return False
-    records = []
-    work = df.copy()
-    for _, row in work.iterrows():
-        date_key = str(row.get("date", today_str()))
-        player = str(row.get("Player", row.get("player", "")))
-        team = str(row.get("Team", row.get("team", "")))
-        game = str(row.get("Game", row.get("game", "")))
-        row_id = make_board_snapshot_row_id(date_key, player, team, game, str(row.get("lock_scope", "LOCK")))
-        payload = {str(k): clean_for_supabase(v) for k, v in row.to_dict().items()}
-        records.append({
-            "row_id": row_id,
-            "date": date_key,
-            "game": game,
-            "team": team,
-            "player": player,
-            "payload": payload,
-            "lock_created_at": str(row.get("lock_created_at", now_et_string())),
-            "lock_scope": str(row.get("lock_scope", "CONFIRMED_TEAM")),
-        })
-    return upsert_supabase_records("daily_hr_board_lock", records, "row_id")
-
-
-def load_board_locks_from_supabase() -> pd.DataFrame:
-    client = get_supabase_client()
-    if client is None:
-        return pd.DataFrame()
-    try:
-        result = client.table("daily_hr_board_lock").select("*").execute()
-        rows = getattr(result, "data", None) or []
-        payloads = [r.get("payload") for r in rows if isinstance(r.get("payload"), dict)]
-        return pd.DataFrame(payloads) if payloads else pd.DataFrame()
-    except Exception:
-        return pd.DataFrame()
-
-
-def save_board_snapshot_to_supabase(board_df: pd.DataFrame, snapshot_date: str) -> bool:
-    if board_df is None or board_df.empty:
-        return False
-    records = []
-    work = board_df.copy()
-    if "Actual HR Today" in work.columns:
-        work = work.drop(columns=["Actual HR Today"])
-    for _, row in work.iterrows():
-        source = str(row.get("Tracker Source", row.get("tracker_source", "CORE_BOARD")))
-        player = str(row.get("Player", row.get("player", "")))
-        team = str(row.get("Team", row.get("team", "")))
-        game = str(row.get("Game", row.get("game", "")))
-        row_id = make_board_snapshot_row_id(snapshot_date, player, team, game, source)
-        records.append({
-            "row_id": row_id,
-            "date": str(snapshot_date),
-            "player": player,
-            "team": team,
-            "game": game,
-            "tracker_source": source,
-            "payload": {str(k): clean_for_supabase(v) for k, v in row.to_dict().items()},
-        })
-    return upsert_supabase_records("hr_board_snapshots", records, "row_id")
-
-
-def load_board_snapshot_from_supabase(snapshot_date: str) -> pd.DataFrame:
-    client = get_supabase_client()
-    if client is None:
-        return pd.DataFrame()
-    try:
-        result = client.table("hr_board_snapshots").select("*").eq("date", str(snapshot_date)).execute()
-        rows = getattr(result, "data", None) or []
-        payloads = [r.get("payload") for r in rows if isinstance(r.get("payload"), dict)]
-        return pd.DataFrame(payloads) if payloads else pd.DataFrame()
-    except Exception:
-        return pd.DataFrame()
-
 
 
 def ensure_snapshot_folder():
@@ -467,26 +172,22 @@ def save_daily_tracker_snapshot(tracker_df: pd.DataFrame, snapshot_date: str):
     ensure_snapshot_folder()
     tracker_path = os.path.join(SNAPSHOT_DIR, f"hr_tracker_{snapshot_date}.csv")
     atomic_write_csv(tracker_df, tracker_path)
-    save_tracker_to_supabase(tracker_df)
 
 
 def save_daily_board_snapshot(board_df: pd.DataFrame, snapshot_date: str):
     """Persist the original surfaced HR board once per day so historical predictions cannot be rewritten."""
     ensure_snapshot_folder()
     board_path = os.path.join(SNAPSHOT_DIR, f"hr_board_{snapshot_date}.csv")
-    if not os.path.exists(board_path):
-        clean_board = board_df.copy()
-        if "Actual HR Today" in clean_board.columns:
-            clean_board = clean_board.drop(columns=["Actual HR Today"])
-        atomic_write_csv(clean_board, board_path)
-    save_board_snapshot_to_supabase(board_df, snapshot_date)
+    if os.path.exists(board_path):
+        return
+    clean_board = board_df.copy()
+    if "Actual HR Today" in clean_board.columns:
+        clean_board = clean_board.drop(columns=["Actual HR Today"])
+    atomic_write_csv(clean_board, board_path)
 
 
 def load_daily_board_snapshot(snapshot_date: str) -> pd.DataFrame:
     ensure_snapshot_folder()
-    supa = load_board_snapshot_from_supabase(snapshot_date)
-    if supa is not None and not supa.empty:
-        return supa
     board_path = os.path.join(SNAPSHOT_DIR, f"hr_board_{snapshot_date}.csv")
     if os.path.exists(board_path):
         try:
@@ -726,13 +427,12 @@ def read_html_best_table(urls: list[str], must_have_any: list[str]) -> pd.DataFr
 
 
 def load_tracker() -> pd.DataFrame:
-    columns = TRACKER_COLUMNS
+    columns = [
+        "date", "player", "team", "game", "game_pk",
+        "hr_probability", "hr_tier", "hr_eligible", "tracker_source",
+        "result", "hr_count", "result_state", "game_state", "updated_at"
+    ]
     frames = []
-
-    supa = load_tracker_from_supabase()
-    if supa is not None and not supa.empty:
-        frames.append(supa[columns])
-
     if os.path.exists(TRACKER_FILE):
         try:
             df = pd.read_csv(TRACKER_FILE)
@@ -749,97 +449,52 @@ def load_tracker() -> pd.DataFrame:
 
     if frames:
         merged = pd.concat(frames, ignore_index=True)
-        for col in columns:
-            if col not in merged.columns:
-                merged[col] = pd.NA
-        merged["tracker_source"] = merged["tracker_source"].fillna("CORE_BOARD").astype(str)
-        merged["row_id"] = merged.apply(
-            lambda r: r.get("row_id") if pd.notna(r.get("row_id")) and str(r.get("row_id")).strip() else make_tracker_row_id(
-                r.get("date"), r.get("player"), r.get("team"), r.get("game"), r.get("tracker_source")
-            ),
-            axis=1,
-        )
-        merged = merged.drop_duplicates(subset=["row_id"], keep="last").reset_index(drop=True)
+        merged = merged.drop_duplicates(
+            subset=["date", "player", "team", "game", "tracker_source"],
+            keep="last"
+        ).reset_index(drop=True)
         return merged[columns]
 
     return pd.DataFrame(columns=columns)
 
 
 def save_tracker(df: pd.DataFrame):
-    if df is None:
-        return
-    work = df.copy()
-    for col in TRACKER_COLUMNS:
-        if col not in work.columns:
-            work[col] = pd.NA
-    if not work.empty:
-        work["tracker_source"] = work["tracker_source"].fillna("CORE_BOARD").astype(str)
-        work["row_id"] = work.apply(
-            lambda r: r.get("row_id") if pd.notna(r.get("row_id")) and str(r.get("row_id")).strip() else make_tracker_row_id(
-                r.get("date"), r.get("player"), r.get("team"), r.get("game"), r.get("tracker_source")
-            ),
-            axis=1,
-        )
-    atomic_write_csv(work[TRACKER_COLUMNS], TRACKER_FILE)
-    save_tracker_to_supabase(work[TRACKER_COLUMNS])
+    atomic_write_csv(df, TRACKER_FILE)
 
 
 def load_combo_tracker() -> pd.DataFrame:
-    columns = COMBO_TRACKER_COLUMNS
-    frames = []
-
-    supa = load_combo_tracker_from_supabase()
-    if supa is not None and not supa.empty:
-        frames.append(supa[columns])
-
+    columns = [
+        "date", "combo_id", "combo_label", "combo_size", "legs", "games",
+        "avg_leg_probability", "combined_score", "source_pool", "result",
+        "result_state", "legs_hit", "total_legs", "updated_at"
+    ]
     if os.path.exists(COMBO_TRACKER_FILE):
         try:
             df = pd.read_csv(COMBO_TRACKER_FILE)
             for col in columns:
                 if col not in df.columns:
                     df[col] = pd.NA
-            frames.append(df[columns])
+            return df[columns]
         except Exception:
             pass
-
-    if frames:
-        merged = pd.concat(frames, ignore_index=True)
-        merged = merged.drop_duplicates(subset=["combo_id"], keep="last").reset_index(drop=True)
-        return merged[columns]
     return pd.DataFrame(columns=columns)
 
 
 def save_combo_tracker(df: pd.DataFrame):
-    if df is None:
-        return
-    work = df.copy()
-    for col in COMBO_TRACKER_COLUMNS:
-        if col not in work.columns:
-            work[col] = pd.NA
-    atomic_write_csv(work[COMBO_TRACKER_COLUMNS], COMBO_TRACKER_FILE)
-    save_combo_tracker_to_supabase(work[COMBO_TRACKER_COLUMNS])
+    atomic_write_csv(df, COMBO_TRACKER_FILE)
 
 
 def load_board_locks() -> pd.DataFrame:
-    frames = []
-    supa = load_board_locks_from_supabase()
-    if supa is not None and not supa.empty:
-        frames.append(supa)
     if os.path.exists(LOCK_FILE):
         try:
-            frames.append(pd.read_csv(LOCK_FILE))
+            return pd.read_csv(LOCK_FILE)
         except Exception:
             pass
-    if frames:
-        return pd.concat(frames, ignore_index=True).drop_duplicates(keep="last").reset_index(drop=True)
     return pd.DataFrame()
 
 
 def save_board_locks(df: pd.DataFrame):
-    if df is None:
-        return
     atomic_write_csv(df, LOCK_FILE)
-    save_board_locks_to_supabase(df)
 
 
 def get_locked_board_for_date(date_key: str) -> pd.DataFrame:
@@ -1791,7 +1446,7 @@ def fetch_boxscore(game_pk: int):
         return {}
 
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=1800)
 def get_team_hitters(team_id: int):
     url = f"https://statsapi.mlb.com/api/v1/teams/{team_id}/roster?rosterType=active"
     try:
@@ -1812,99 +1467,6 @@ def get_team_hitters(team_id: int):
         return hitters
     except Exception:
         return []
-
-
-@st.cache_data(ttl=300)
-def get_team_active_hitter_map(team_id: int) -> dict:
-    """Current active hitter roster keyed by MLB player id.
-
-    This is the behind-the-scenes roster validation layer. It keeps traded,
-    released, optioned, IL, or otherwise non-active players from reaching the
-    projection engine, combo builder, or tracker.
-    """
-    active = {}
-    for hitter in get_team_hitters(team_id):
-        pid = hitter.get("player_id")
-        if pid is None:
-            continue
-        try:
-            pid = int(pid)
-        except Exception:
-            continue
-        active[pid] = hitter
-    return active
-
-
-def _filter_hitters_to_active_roster(hitters: list[dict], active_hitter_map: dict) -> list[dict]:
-    if not hitters:
-        return []
-    if not active_hitter_map:
-        # If the live roster endpoint fails, do not wipe the slate.
-        return hitters
-
-    active_ids = set(active_hitter_map.keys())
-    filtered = []
-    seen = set()
-    for hitter in hitters:
-        pid = hitter.get("player_id")
-        try:
-            pid = int(pid)
-        except Exception:
-            pid = None
-        if pid not in active_ids:
-            continue
-        corrected = dict(hitter)
-        active_row = active_hitter_map.get(pid, {}) or {}
-        # Use current roster naming/position when available so stale merged names do not survive.
-        corrected["player_id"] = pid
-        corrected["player_name"] = active_row.get("player_name") or corrected.get("player_name")
-        corrected["position"] = active_row.get("position", corrected.get("position", ""))
-        if pid in seen:
-            continue
-        seen.add(pid)
-        filtered.append(corrected)
-    return filtered
-
-
-def filter_board_to_active_rosters(df: pd.DataFrame, schedule: list[dict]) -> pd.DataFrame:
-    """Final safety gate: no inactive/stale player can render, combo, or track.
-
-    Works even with older daily lock rows that may not contain Player ID by also
-    checking normalized player names against the active roster for each team.
-    """
-    if df is None or df.empty or not schedule:
-        return df.copy() if df is not None else pd.DataFrame()
-
-    active_lookup = {}
-    for game in schedule:
-        for team_id_key, team_name_key in [("away_team_id", "away_team"), ("home_team_id", "home_team")]:
-            team_id = game.get(team_id_key)
-            team = team_abbr(game.get(team_name_key, ""))
-            game_key = game.get("game_key")
-            active_map = get_team_active_hitter_map(team_id) if team_id is not None else {}
-            active_ids = set(active_map.keys())
-            active_names = {normalize_name(v.get("player_name")) for v in active_map.values() if v.get("player_name")}
-            active_lookup[(game_key, team)] = (active_ids, active_names)
-
-    keep = []
-    for _, row in df.iterrows():
-        key = (row.get("Game"), row.get("Team"))
-        active_ids, active_names = active_lookup.get(key, (set(), set()))
-        if not active_ids and not active_names:
-            keep.append(True)
-            continue
-
-        pid = row.get("Player ID", row.get("player_id", None))
-        pid_ok = False
-        try:
-            pid_ok = int(pid) in active_ids
-        except Exception:
-            pid_ok = False
-
-        name_ok = normalize_name(row.get("Player")) in active_names
-        keep.append(bool(pid_ok or name_ok))
-
-    return df.loc[keep].reset_index(drop=True)
 
 
 @st.cache_data(ttl=1800)
@@ -1940,10 +1502,8 @@ def fetch_people_stats(person_ids_tuple: tuple, group: str):
                 elif stat_type == "gamelog":
                     game_rows = []
                     for split in splits:
-                        game_info = split.get("game", {}) or {}
                         game_rows.append({
                             "date": split.get("date"),
-                            "game_pk": game_info.get("gamePk") or game_info.get("gamePkId"),
                             "stat": split.get("stat", {}) or {}
                         })
                     game_rows = sorted(game_rows, key=lambda x: x.get("date") or "", reverse=True)
@@ -2045,147 +1605,13 @@ def fetch_savant_batter_map(year: int):
     return result
 
 
-
-@st.cache_data(ttl=900)
-def fetch_l10_bbe_profile_from_playbyplay(player_id: int, game_pks_tuple: tuple) -> dict:
-    """Build a true last-10 batted-ball-event profile from MLB play data when available.
-
-    This does not display any data-source wording in the UI. It only feeds the
-    model with recent contact shape: EV, barrel-like contact, hard-hit, FB, LD,
-    GB, popup, and air-ball rate.
-    """
-    empty = {
-        "found": False,
-        "events": 0,
-        "EV": None,
-        "HardHit%": None,
-        "Barrel%": None,
-        "FlyBall%": None,
-        "LineDrive%": None,
-        "GroundBall%": None,
-        "Popup%": None,
-        "AIR%": None,
-        "AvgLA": None,
-    }
-    try:
-        pid = int(player_id)
-    except Exception:
-        return empty
-
-    bbes = []
-    # Game logs are already newest first in the caller. Looking back through 15 games
-    # is enough to collect 10 actual batted balls without hammering requests.
-    for game_pk in list(game_pks_tuple or [])[:15]:
-        if len(bbes) >= 10:
-            break
-        if not game_pk:
-            continue
-        try:
-            url = f"https://statsapi.mlb.com/api/v1.1/game/{int(game_pk)}/feed/live"
-            resp = requests.get(url, timeout=18)
-            resp.raise_for_status()
-            data = resp.json()
-        except Exception:
-            continue
-
-        plays = ((data.get("liveData") or {}).get("plays") or {}).get("allPlays", []) or []
-        # Walk plays backwards so the newest BBE in that game is collected first.
-        for play in reversed(plays):
-            if len(bbes) >= 10:
-                break
-            matchup = play.get("matchup", {}) or {}
-            batter = matchup.get("batter", {}) or {}
-            if batter.get("id") != pid:
-                continue
-
-            hit_data = play.get("hitData", {}) or {}
-            launch_speed = hit_data.get("launchSpeed")
-            launch_angle = hit_data.get("launchAngle")
-            trajectory = str(hit_data.get("trajectory") or "").lower().strip()
-
-            # A batted ball event needs hitData shape or a known batted-ball trajectory.
-            if launch_speed is None and launch_angle is None and not trajectory:
-                continue
-
-            try:
-                ev = float(launch_speed) if launch_speed is not None else None
-            except Exception:
-                ev = None
-            try:
-                la = float(launch_angle) if launch_angle is not None else None
-            except Exception:
-                la = None
-
-            if trajectory in {"ground_ball", "groundball", "grounder"}:
-                btype = "GB"
-            elif trajectory in {"line_drive", "linedrive", "liner"}:
-                btype = "LD"
-            elif trajectory in {"fly_ball", "flyball"}:
-                btype = "FB"
-            elif trajectory in {"popup", "pop_up", "pop fly", "popfly"}:
-                btype = "PU"
-            else:
-                # Fallback from launch angle when MLB does not provide trajectory text.
-                if la is None:
-                    continue
-                if la < 10:
-                    btype = "GB"
-                elif la < 25:
-                    btype = "LD"
-                elif la < 50:
-                    btype = "FB"
-                else:
-                    btype = "PU"
-
-            # Barrel-like approximation using public EV/LA shape. Conservative enough
-            # to avoid inflating every hard contact event.
-            barrel_like = False
-            if ev is not None and la is not None:
-                barrel_like = ev >= 98 and 24 <= la <= 34
-
-            bbes.append({"ev": ev, "la": la, "type": btype, "barrel_like": barrel_like})
-
-    if not bbes:
-        return empty
-
-    n = len(bbes)
-    evs = [x["ev"] for x in bbes if x.get("ev") is not None]
-    las = [x["la"] for x in bbes if x.get("la") is not None]
-    count = lambda t: sum(1 for x in bbes if x.get("type") == t)
-    hard = sum(1 for x in bbes if x.get("ev") is not None and x["ev"] >= 95.0)
-    barrels = sum(1 for x in bbes if x.get("barrel_like"))
-    gb = count("GB") / n * 100
-    fb = count("FB") / n * 100
-    ld = count("LD") / n * 100
-    pu = count("PU") / n * 100
-    return {
-        "found": True,
-        "events": n,
-        "EV": round(sum(evs) / len(evs), 1) if evs else None,
-        "HardHit%": round(hard / n * 100, 1),
-        "Barrel%": round(barrels / n * 100, 1),
-        "FlyBall%": round(fb, 1),
-        "LineDrive%": round(ld, 1),
-        "GroundBall%": round(gb, 1),
-        "Popup%": round(pu, 1),
-        "AIR%": round(fb + ld, 1),
-        "AvgLA": round(sum(las) / len(las), 1) if las else None,
-    }
-
 def compute_hitter_live_metrics_from_map(player_id: int, stats_map: dict):
     data = stats_map.get(player_id, {"season": {}, "gamelog": []})
     season_stat = data.get("season", {}) or {}
-    gamelog_all = (data.get("gamelog", []) or [])
-    gamelog = gamelog_all[:10]
+    gamelog = (data.get("gamelog", []) or [])[:10]
 
     if not gamelog:
         return None
-
-    recent_game_pks = tuple(
-        g.get("game_pk") for g in gamelog_all[:15]
-        if g.get("game_pk") is not None
-    )
-    true_bbe = fetch_l10_bbe_profile_from_playbyplay(player_id, recent_game_pks) if recent_game_pks else {"found": False}
 
     ab = sum(safe_int(g["stat"].get("atBats", 0)) for g in gamelog)
     hits = sum(safe_int(g["stat"].get("hits", 0)) for g in gamelog)
@@ -2205,95 +1631,39 @@ def compute_hitter_live_metrics_from_map(player_id: int, stats_map: dict):
     iso = max(slg - avg, 0.0)
     xbh = doubles + triples + hrs
 
-    # Use RECENT game-log batted-ball shape first. This keeps BF Data aligned with
-    # PropFinder-style L10 BBE research instead of letting season GB% override the card.
-    recent_ground_outs = sum(safe_int(g["stat"].get("groundOuts", 0)) for g in gamelog)
-    recent_air_outs = sum(safe_int(g["stat"].get("airOuts", 0)) for g in gamelog)
-    recent_shape_total = recent_ground_outs + recent_air_outs
+    ground_outs = safe_int(season_stat.get("groundOuts", 0))
+    air_outs = safe_int(season_stat.get("airOuts", 0))
+    out_total = ground_outs + air_outs
 
-    season_ground_outs = safe_int(season_stat.get("groundOuts", 0))
-    season_air_outs = safe_int(season_stat.get("airOuts", 0))
-    season_shape_total = season_ground_outs + season_air_outs
+    if out_total > 0:
+        gb = clip((ground_outs / out_total) * 100, 20, 65)
+        fb = clip((air_outs / out_total) * 100, 15, 55)
+    else:
+        gb = stable_float(f"{player_id}-gb-fallback", 32, 48)
+        fb = stable_float(f"{player_id}-fb-fallback", 22, 38)
+
+    ld = clip(100 - gb - fb, 12, 30)
 
     ev = clip(86 + iso * 18 + (xbh / max(ab, 1)) * 45 + (hits / pa_proxy) * 8, 84, 99)
     hard_hit = clip(26 + iso * 85 + (xbh / pa_proxy) * 140 - (strikeouts / pa_proxy) * 10, 20, 60)
     barrel = clip(2 + iso * 35 + (hrs / pa_proxy) * 160, 1, 20)
 
-    if recent_shape_total > 0:
-        raw_gb = (recent_ground_outs / recent_shape_total) * 100
-        gb = clip(raw_gb, 5, 70)
-        air_total = clip(100 - gb, 30, 95)
-    elif season_shape_total > 0:
-        raw_gb = (season_ground_outs / season_shape_total) * 100
-        gb = clip(raw_gb, 20, 65)
-        air_total = clip(100 - gb, 35, 80)
-    else:
-        gb = stable_float(f"{player_id}-gb-fallback", 32, 48)
-        air_total = clip(100 - gb, 35, 80)
-
-    # Split the non-grounder bucket into LD/FB using recent power/contact clues.
-    # HR/XBH/hard contact push more of the air bucket into true damage contact,
-    # while keeping FB + LD + GB mathematically aligned on the card.
-    ld_share = clip(0.32 + (hard_hit - 40) / 140 + (xbh / max(pa_proxy, 1)) * 0.35 + (hrs / max(pa_proxy, 1)) * 0.45, 0.22, 0.68)
-    ld = clip(air_total * ld_share, 10, 65)
-    fb = clip(air_total - ld, 8, 65)
-    # Rebalance after clipping so visible FB/LD/GB remain coherent.
-    air_total = max(0.0, 100.0 - gb)
-    if fb + ld > 0:
-        scale = air_total / (fb + ld)
-        fb = clip(fb * scale, 0, 80)
-        ld = clip(ld * scale, 0, 80)
-
-    # Prefer actual last-10 batted-ball events from play data when available.
-    # Keep this internal only; the card does not reveal collection/source wording.
-    if true_bbe.get("found") and safe_int(true_bbe.get("events"), 0) >= 4:
-        if true_bbe.get("EV") is not None:
-            ev = clip(safe_float(true_bbe.get("EV"), ev), 84, 105)
-        hard_hit = clip(safe_float(true_bbe.get("HardHit%"), hard_hit), 0, 100)
-        # Blend true event barrel-like rate with recent production proxy so small samples
-        # do not erase real power, but still make the BBE shape drive GB/FB/LD.
-        true_barrel = safe_float(true_bbe.get("Barrel%"), barrel)
-        barrel = clip((true_barrel * 0.65) + (barrel * 0.35), 0, 30)
-        fb = clip(safe_float(true_bbe.get("FlyBall%"), fb), 0, 100)
-        ld = clip(safe_float(true_bbe.get("LineDrive%"), ld), 0, 100)
-        gb = clip(safe_float(true_bbe.get("GroundBall%"), gb), 0, 100)
-        total_shape = fb + ld + gb
-        if total_shape > 0:
-            scale = 100.0 / total_shape
-            fb = round(fb * scale, 1)
-            ld = round(ld * scale, 1)
-            gb = round(gb * scale, 1)
-        air_total = clip(fb + ld, 0, 100)
-
     # L10 BBE-style profile. MLB StatsAPI does not expose true EV-by-BBE in this app,
     # so this builds a stable last-10 batted-ball-events proxy from recent contact,
     # extra-base damage, HR rate, ISO, and strikeout drag. This is intentionally
     # weighted toward the exact recent batted-ball quality the user researches.
-    l10_bbe_events = safe_int(true_bbe.get("events"), 0) if true_bbe.get("found") else max(1, min(10, ab - strikeouts + doubles + triples + hrs))
+    l10_bbe_events = max(1, min(10, ab - strikeouts + doubles + triples + hrs))
     l10_damage_per_bbe = (hrs * 4.0 + xbh * 1.6 + total_bases * 0.18) / max(l10_bbe_events, 1)
     l10_contact_rate = max(0.0, (ab - strikeouts) / max(ab, 1))
-    if true_bbe.get("found"):
-        l10_bbe_quality = clip(
-            max(0.0, ev - 86.0) * 4.0 +
-            hard_hit * 0.55 +
-            barrel * 1.15 +
-            max(0.0, air_total - 40.0) * 0.28 +
-            max(0.0, 45.0 - gb) * 0.22 +
-            (hrs * 3.0) +
-            (xbh * 0.9),
-            0.0,
-            100.0,
-        )
-    else:
-        l10_bbe_quality = clip(
-            (l10_damage_per_bbe * 22.0) +
-            (iso * 70.0) +
-            (l10_contact_rate * 18.0) +
-            (hrs * 4.0) +
-            (xbh * 1.1),
-            0.0,
-            100.0,
-        )
+    l10_bbe_quality = clip(
+        (l10_damage_per_bbe * 22.0) +
+        (iso * 70.0) +
+        (l10_contact_rate * 18.0) +
+        (hrs * 4.0) +
+        (xbh * 1.1),
+        0.0,
+        100.0,
+    )
     if l10_bbe_quality >= 72:
         l10_bbe_trend = "ELITE"
     elif l10_bbe_quality >= 55:
@@ -2433,9 +1803,7 @@ def extract_boxscore_team_hitters(game_pk: int, side: str):
 
 
 def get_team_candidate_hitters(game_pk: int, team_id: int, side: str, savant_batter_map: dict):
-    active_hitter_map = get_team_active_hitter_map(team_id)
     boxscore_hitters = extract_boxscore_team_hitters(game_pk, side)
-    boxscore_hitters = _filter_hitters_to_active_roster(boxscore_hitters, active_hitter_map)
 
     confirmed = [h for h in boxscore_hitters if h["confirmed"]]
     if confirmed:
@@ -2444,16 +1812,13 @@ def get_team_candidate_hitters(game_pk: int, team_id: int, side: str, savant_bat
 
     candidate_pool = boxscore_hitters
     if not candidate_pool:
-        roster_hitters = list(active_hitter_map.values()) or get_team_hitters(team_id)
+        roster_hitters = get_team_hitters(team_id)
         candidate_pool = [{
             "player_id": h["player_id"],
             "player_name": h["player_name"],
-            "position": h.get("position", ""),
             "lineup_spot": None,
             "confirmed": False,
         } for h in roster_hitters]
-
-    candidate_pool = _filter_hitters_to_active_roster(candidate_pool, active_hitter_map)
 
     if not candidate_pool:
         return [], "PROJECTED"
@@ -2751,23 +2116,16 @@ def dedupe_columns(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def display_existing_columns(df: pd.DataFrame, columns: list[str], **kwargs):
-    """Safely display only columns that exist, with duplicate column protection.
-
-    Mixed values like lineup spot 3 and lineup spot — can trigger Arrow warnings.
-    Coerce object columns to strings for display only so the live app stays clean.
-    """
+    """Safely display only columns that exist, with duplicate column protection."""
     if df is None or df.empty:
         st.caption("No rows to display.")
         return
-    safe_df = dedupe_columns(df).copy()
-    for col in safe_df.columns:
-        if safe_df[col].dtype == "object":
-            safe_df[col] = safe_df[col].astype(str)
+    safe_df = dedupe_columns(df)
     cols = [c for c in columns if c in safe_df.columns]
     if not cols:
-        st.dataframe(safe_df, width="stretch", hide_index=True)
+        st.dataframe(safe_df, use_container_width=True, hide_index=True)
     else:
-        st.dataframe(safe_df[cols], width="stretch", hide_index=True)
+        st.dataframe(safe_df[cols], use_container_width=True, hide_index=True)
 
 
 def compute_pitcher_target_score(
@@ -3139,15 +2497,11 @@ def build_hitter_metrics(
 
     ev = safe_float(sav.get("Savant_EV"), live_hitter["EV"])
     hard_hit = safe_float(sav.get("Savant_HardHit%"), live_hitter["HardHit%"])
-
-    # Shape must be L10-first. Do NOT let season/Savant GB% mark a hitter as
-    # GB-heavy when the recent batted-ball profile is showing air/line-drive damage.
-    fly_ball = safe_float(live_hitter.get("FlyBall%"), safe_float(sav.get("Savant_FB%"), 0.0))
-    line_drive = safe_float(live_hitter.get("LineDrive%"), safe_float(sav.get("Savant_LD%"), 0.0))
-    ground_ball = safe_float(live_hitter.get("GroundBall%"), safe_float(sav.get("Savant_GB%"), 0.0))
-
+    fly_ball = safe_float(sav.get("Savant_FB%"), live_hitter["FlyBall%"])
+    line_drive = safe_float(sav.get("Savant_LD%"), live_hitter["LineDrive%"])
+    ground_ball = safe_float(sav.get("Savant_GB%"), live_hitter["GroundBall%"])
     barrel = safe_float(sav.get("Savant_Barrel%"), live_hitter["Barrel%"])
-    air_pct = round(max(0.0, fly_ball + line_drive), 1)
+    air_pct = safe_float(sav.get("Savant_AIR%"), max(0.0, 100 - ground_ball))
     launch_angle = safe_float(sav.get("Savant_LA"), 14.0)
     xslg = safe_float(sav.get("Savant_xSLG"), 0.0)
     xwoba = safe_float(sav.get("Savant_xwOBA"), 0.0)
@@ -3371,9 +2725,6 @@ def build_hitter_metrics(
         pitch_barrel_allowed=pitch_barrel_allowed,
         pitch_hard_hit_allowed=pitch_hard_hit_allowed,
         lineup_source=lineup_source,
-        fly_ball=fly_ball,
-        line_drive=line_drive,
-        ev=ev,
     )
 
     hr_eligible = qual["hr_eligible"]
@@ -3693,7 +3044,6 @@ def build_hitter_metrics(
     }))
 
     return {
-        "Player ID": player_id,
         "Player": player_name,
         "Team": team,
         "Bats": bats,
@@ -3712,9 +3062,6 @@ def build_hitter_metrics(
         "FlyBall%": round(fly_ball, 1),
         "LineDrive%": round(line_drive, 1),
         "GroundBall%": round(ground_ball, 1),
-        "L10 Shape GB%": round(ground_ball, 1),
-        "L10 Shape FB%": round(fly_ball, 1),
-        "L10 Shape LD%": round(line_drive, 1),
         "Barrel%": round(barrel, 1),
         "AIR%": round(air_pct, 1),
         "LaunchAngle": round(launch_angle, 1),
@@ -4330,12 +3677,7 @@ def auto_update_tracker_results(tracker: pd.DataFrame, schedule: list[dict]):
         game_state = game.get("game_state", "Preview")
         detailed_state = game.get("detailed_state", "Scheduled")
 
-        game_key = game.get("game_key")
-        game_pk_num = pd.to_numeric(tracker.get("game_pk", pd.Series([pd.NA] * len(tracker))), errors="coerce")
-        rows_mask = today_mask & (
-            (game_pk_num == safe_int(game_pk, -1))
-            | (tracker.get("game", pd.Series([""] * len(tracker))).astype(str) == str(game_key))
-        )
+        rows_mask = today_mask & (tracker["game_pk"] == game_pk)
         if not rows_mask.any():
             continue
 
@@ -4802,150 +4144,128 @@ def render_bar(label: str, value, max_value: float = 100.0, suffix: str = "", fi
 
 
 
-def build_pitch_arsenal_rows(row: pd.Series) -> list[dict]:
-    """Prop-style pitch arsenal panel using BF Data's current internal pitch profile."""
+def _lab_color(score: float, good: float = 75.0, warn: float = 55.0) -> str:
+    val = safe_float(score, 0.0)
+    if val >= good:
+        return "green"
+    if val >= warn:
+        return "yellow"
+    return "red"
+
+
+def _lab_score_box(label: str, score, good: float = 75.0, warn: float = 55.0) -> str:
+    val = safe_float(score, 0.0)
+    color = _lab_color(val, good, warn)
+    return f'<div class="bf-score-pill bf-score-{color}"><div class="bf-lab-label">{escape(label)}</div><div class="num">{val:.0f}</div></div>'
+
+
+def _lab_score_row(label: str, score, good: float = 75.0, warn: float = 55.0) -> str:
+    val = safe_float(score, 0.0)
+    color = _lab_color(val, good, warn)
+    return f'<div class="bf-score-row"><span>{escape(label)}</span><span class="bf-score-box bf-score-{color}">{val:.0f}</span></div>'
+
+
+def _pitch_display_name(code: str) -> str:
+    return {"FF": "Four-Seam", "SL": "Slider", "CH": "Changeup", "CU": "Curveball", "SI": "Sinker", "FC": "Cutter", "FS": "Splitter"}.get(str(code).upper(), str(code).upper())
+
+
+def _pitch_grade_from_context(row: pd.Series, pitch: str, usage: float) -> tuple[int, str]:
+    pitcher_throws = _display_value(row.get("Pitcher Throws", "R"))
+    if pitcher_throws not in {"L", "R"}:
+        pitcher_throws = "R"
+    score, reason, _ = compute_pitch_matchup_score(
+        pitch, usage, _display_value(row.get("Bats", "R")), pitcher_throws,
+        safe_float(row.get("Barrel%"), 0.0), safe_float(row.get("HardHit%"), 0.0),
+        safe_float(row.get("AIR%"), 0.0), safe_float(row.get("LaunchAngle"), 14.0),
+        safe_float(row.get("xSLG"), 0.0), safe_float(row.get("xwOBA"), 0.0),
+        safe_float(row.get("GroundBall%"), 0.0),
+    )
+    return int(round(clip(50 + score * 6.2, 0, 99))), reason
+
+
+def _build_lab_pitch_rows(row: pd.Series) -> list[dict]:
     pitcher = _display_value(row.get("Pitcher"))
     pitcher_throws = _display_value(row.get("Pitcher Throws", "R"))
-    pitcher_id = row.get("Pitcher ID", row.get("Pitcher_ID", row.get("opp_pitcher_id", "")))
-    batter_hand = _display_value(row.get("Bats", "R"))
+    if pitcher_throws not in {"L", "R"}:
+        pitcher_throws = "R"
     pitch_mix = build_pitch_mix_profile(
-        pitcher,
-        pitcher_id,
+        pitcher, row.get("Pitcher ID", row.get("Pitcher_ID", "")),
         safe_float(row.get("Pitcher_HR9_Last7"), 1.0),
         safe_float(row.get("Pitcher_Barrel_Allowed"), 7.0),
         safe_float(row.get("Pitcher_HardHit_Allowed"), 38.0),
-        pitcher_throws if pitcher_throws in {"L", "R"} else "R",
+        pitcher_throws,
     )
-    pitch_names = {"FF": "Four-Seam", "SL": "Slider", "CH": "Changeup", "CU": "Curveball", "SI": "Sinker"}
     out = []
-    for pitch, usage in sorted(pitch_mix.items(), key=lambda x: x[1], reverse=True):
-        score, reason, _ = compute_pitch_matchup_score(
-            pitch, usage, batter_hand if batter_hand in {"L", "R", "S"} else "R",
-            pitcher_throws if pitcher_throws in {"L", "R"} else "R",
-            safe_float(row.get("Barrel%"), 0.0), safe_float(row.get("HardHit%"), 0.0),
-            safe_float(row.get("AIR%"), 0.0), safe_float(row.get("LaunchAngle"), 14.0),
-            safe_float(row.get("xSLG"), 0.0), safe_float(row.get("xwOBA"), 0.0),
-            safe_float(row.get("GroundBall%"), 0.0),
-        )
-        grade = int(round(clip(50 + (score * 6.2), 0, 99)))
-        out.append({"Pitch": pitch_names.get(pitch, pitch), "Grade": grade, "UsageNum": safe_float(usage, 0.0), "Usage": f"{usage:.0f}%", "Read": reason})
+    for pitch, usage in sorted(pitch_mix.items(), key=lambda x: x[1], reverse=True)[:5]:
+        grade, reason = _pitch_grade_from_context(row, pitch, usage)
+        out.append({"pitch": _pitch_display_name(pitch), "grade": grade, "usage": safe_float(usage, 0.0), "reason": reason})
     return out
 
 
 def render_matchup_lab(row: pd.Series):
     player = _display_value(row.get("Player"))
     pitcher = _display_value(row.get("Pitcher"))
-    team = _display_value(row.get("Team"))
-    game = _display_value(row.get("Game"))
-    bats = _display_value(row.get("Bats", "R"))
-    throws = _display_value(row.get("Pitcher Throws", "R"))
+    bats = _display_value(row.get("Bats", "?"))
+    throws = _display_value(row.get("Pitcher Throws", "?"))
     overall = safe_float(row.get("Matchup Advantage Score"), 0.0)
     hr_power = safe_float(row.get("Statcast Authority Score"), 0.0)
-    attack = safe_float(row.get("HR Attackability Score"), 0.0)
-    hr_prob = safe_float(row.get("HR Probability %"), 0.0)
-    gb = safe_float(row.get("GroundBall%"), 0.0)
-    k_risk = clip(100 - max(0.0, gb - 35.0) * 1.2, 20, 90)
-
-    def c(score, good=75, warn=55):
-        return _grade_color(score, good=good, warn=warn)
-    def color_hex(color_name):
-        return {"green": "#35d07f", "yellow": "#ffd166", "red": "#ff5555"}.get(color_name, "#a8adb5")
-
-    overall_grade = int(round(clip(overall, 0, 99)))
-    power_grade = int(round(clip(hr_power, 0, 99)))
-    attack_grade = int(round(clip(attack * 2.15, 0, 99)))
-    k_grade = int(round(clip(k_risk, 0, 99)))
-    hand_class_b = "bf-hand-pill-red" if bats == "L" else ""
-    hand_class_p = "bf-hand-pill-red" if throws == "L" else ""
-
+    hr_attack = safe_float(row.get("HR Attackability %", _attackability_pct(safe_float(row.get("HR Attackability Score"), 0.0))), 0.0)
+    k_risk = clip(100 - max(0.0, safe_float(row.get("GroundBall%"), 0.0) - 35.0) * 1.2, 20, 90)
+    pitcher_era = safe_float(row.get("Pitcher ERA", row.get("ERA", 0.0)), 0.0)
+    pitcher_opp = safe_float(row.get("Pitcher Opp AVG", row.get("Opp AVG", 0.0)), 0.0)
+    if pitcher_era <= 0:
+        pitcher_era = safe_float(row.get("Pitcher_HR9_Last7"), 0.0) * 2.4
+    if pitcher_opp <= 0:
+        pitcher_opp = clip(.180 + safe_float(row.get("Pitcher_HardHit_Allowed"), 38.0) / 500, .180, .320)
+    top_html = (
+        '<div class="bf-lab-shell"><div class="bf-lab-top">'
+        f'<div class="identity"><div class="bf-lab-label">Player</div><div class="bf-lab-name">{escape(player)} <span class="bf-hand">{escape(bats)}</span></div></div>'
+        f'<div class="identity"><div class="bf-lab-label">vs Pitcher</div><div class="bf-lab-name">{escape(pitcher)} <span class="bf-hand">{escape(throws)}</span></div></div>'
+        + _lab_score_box("OVR", overall, 70, 52) + _lab_score_box("HR", hr_power, 30, 17) + _lab_score_box("K", k_risk, 70, 50)
+        + '</div><div class="bf-lab-grid"><div class="bf-match-scores"><div class="bf-side-title">Matchup Scores</div>'
+        + _lab_score_row("Overall", overall, 70, 52) + _lab_score_row("HR Power", hr_power, 30, 17) + _lab_score_row("K Risk", k_risk, 70, 50) + _lab_score_row("HR Attack", hr_attack, 70, 50)
+        + '<div class="bf-side-title" style="margin-top:10px;">Opposing Pitcher</div>'
+        + f'<div class="bf-score-row"><span>{escape(pitcher)}</span><span class="bf-hand">{escape(throws)}</span></div>'
+        + f'<div class="bf-score-row"><span>ERA</span><span class="bf-score-box bf-score-{_lab_color(100-pitcher_era*13,70,50)}">{pitcher_era:.2f}</span></div>'
+        + f'<div class="bf-score-row"><span>Opp AVG</span><span class="bf-score-box bf-score-{_lab_color((.300-pitcher_opp)*400,55,25)}">{pitcher_opp:.3f}</span></div>'
+        + '</div><div><div class="bf-side-title">X-Arsenal · Pitch Type Matchup</div><div class="bf-pitch-grid">'
+    )
     pitch_cards = []
-    for p in build_pitch_arsenal_rows(row)[:6]:
-        color = c(safe_float(p["Grade"]), 75, 55)
-        pitch_cards.append(
-            '<div class="bf-lab-pitch-card">'
-            f'<div class="bf-lab-pitch-name">{escape(p["Pitch"])}</div>'
-            f'<div class="bf-lab-pitch-grade" style="color:{color_hex(color)};">{safe_int(p["Grade"])}</div>'
-            '<div class="bf-lab-usage"><span>USAGE</span>'
-            f'<span>{escape(p["Usage"])}</span></div>'
-            '<div class="bf-lab-mini-track">'
-            f'<div class="bf-lab-mini-fill" style="width:{clip(safe_float(p["UsageNum"]),0,100):.1f}%;background:#4f8cff;"></div>'
-            '</div>'
-            f'<div class="bf-lab-read">{escape(p["Read"])}</div></div>'
-        )
-    pitch_html = "".join(pitch_cards) if pitch_cards else '<div class="bf-lab-pitch-card"><div class="bf-lab-read">No pitch mix available.</div></div>'
-
-    def shape_card(title, batter_val, pitcher_val=None, sub="BATTER"):
-        pitcher_text = "" if pitcher_val is None else f'<span style="color:#ff6969;">{escape(str(pitcher_val))}</span>'
-        return '<div class="bf-shape-card">' + f'<div class="bf-shape-title">{escape(title)}</div><div class="bf-shape-values"><span style="color:#35d07f;">{escape(str(batter_val))}</span>{pitcher_text}</div><div class="bf-shape-sub">{escape(sub)}</div></div>'
-
-    shape_html = "".join([
-        shape_card("Barrel%", f'{safe_float(row.get("Barrel%"), 0):.1f}%', f'{safe_float(row.get("Pitcher_Barrel_Allowed"), 0):.1f}%', "BATTER · PITCHER"),
-        shape_card("Exit Velo", f'{safe_float(row.get("EV"), 0):.1f}', None, "BATTER"),
-        shape_card("Hard Hit%", f'{safe_float(row.get("HardHit%"), 0):.1f}%', f'{safe_float(row.get("Pitcher_HardHit_Allowed"), 0):.1f}%', "BATTER · PITCHER"),
-        shape_card("Launch", f'{safe_float(row.get("LaunchAngle"), 0):.1f}', None, "AVG LA"),
-        shape_card("FB%", f'{safe_float(row.get("FlyBall%"), 0):.1f}%', None, "BATTED-BALL"),
-        shape_card("LD%", f'{safe_float(row.get("LineDrive%"), 0):.1f}%', None, "BATTED-BALL"),
-        shape_card("GB%", f'{safe_float(row.get("GroundBall%"), 0):.1f}%', None, "LOWER IS BETTER"),
-        shape_card("xSLG", f'{safe_float(row.get("xSLG"), 0):.3f}', None, "EXPECTED POWER"),
-        shape_card("xwOBA", f'{safe_float(row.get("xwOBA"), 0):.3f}', None, "CONTACT QUALITY"),
-    ])
-
-    def lab_signal(label, val, max_val, good_at, warn_at, suffix=""):
-        signal, color = _signal_from_value(val, good_at=good_at, warn_at=warn_at)
-        pct = _pct_width(val, max_val)
-        return '<div class="bf-lab-signal-row">' + f'<div class="bf-lab-signal-head"><span>{escape(label)}</span><span>{signal} · <span style="color:{color_hex(color)};">{safe_float(val):.1f}{escape(suffix)}</span></span></div><div class="bf-track"><div class="bf-fill bf-fill-{color}" style="width:{pct:.1f}%"></div></div></div>'
-
-    signals_html = "".join([
-        lab_signal("HR Probability", hr_prob, 28, 14, 9, "%"),
-        lab_signal("Matchup Score", overall, 90, 55, 38, ""),
-        lab_signal("HR Attack", attack, 45, 24, 13, ""),
-        lab_signal("Authority", hr_power, 55, 30, 17, ""),
-    ])
-
-    why = _display_value(row.get("Ranking Reasons", row.get("Why", "")))
-    why2 = _display_value(row.get("Why", ""))
-    pitch_mix = _display_value(row.get("Relevant Pitch Mix"))
-    pitch_mode = _display_value(row.get("Pitch Mix Mode"))
-    trend = _display_value(row.get("Recent Trend"))
-    weather = _display_value(row.get("WeatherNote"))
-
-    html = f"""
-    <div class="bf-lab-shell">
-      <div class="bf-lab-top">
-        <div><div class="bf-lab-label">Player</div><div class="bf-lab-name">{escape(player)} <span class="bf-hand-pill {hand_class_b}">{escape(bats)}HB</span></div><div class="bf-lab-sub">{escape(team)} · {escape(game)}</div></div>
-        <div><div class="bf-lab-label">Vs Pitcher</div><div class="bf-lab-name">{escape(pitcher)} <span class="bf-hand-pill {hand_class_p}">{escape(throws)}HP</span></div><div class="bf-lab-sub">Pitch Mix: {escape(pitch_mode)} · {escape(pitch_mix)}</div></div>
-        <div class="bf-lab-score-row">
-          <div class="bf-lab-score"><div class="k">OVR</div><div class="v" style="color:{color_hex(c(overall_grade,75,55))};">{overall_grade}</div></div>
-          <div class="bf-lab-score"><div class="k">HR</div><div class="v" style="color:{color_hex(c(power_grade,75,55))};">{power_grade}</div></div>
-          <div class="bf-lab-score"><div class="k">K</div><div class="v" style="color:{color_hex(c(k_grade,72,50))};">{k_grade}</div></div>
-        </div>
-      </div>
-      <div class="bf-lab-body">
-        <div>
-          <div class="bf-lab-section-title">Matchup Scores</div>
-          <div class="bf-lab-summary-row"><span>Overall</span><span class="bf-lab-badge" style="color:{color_hex(c(overall_grade,75,55))};">{overall_grade}</span></div>
-          <div class="bf-lab-summary-row"><span>HR Power</span><span class="bf-lab-badge" style="color:{color_hex(c(power_grade,75,55))};">{power_grade}</span></div>
-          <div class="bf-lab-summary-row"><span>K Risk</span><span class="bf-lab-badge" style="color:{color_hex(c(k_grade,72,50))};">{k_grade}</span></div>
-          <div class="bf-lab-summary-row"><span>HR Attack</span><span class="bf-lab-badge" style="color:{color_hex(c(attack_grade,75,55))};">{attack_grade}</span></div>
-          <div style="height:12px;"></div>
-          <div class="bf-lab-section-title">Opposing Pitcher</div>
-          <div class="bf-lab-notes"><div class="bf-lab-note-line"><b>{escape(pitcher)}</b> <span class="bf-hand-pill {hand_class_p}">{escape(throws)}HP</span></div><div class="bf-lab-note-line">HR/9: <span style="color:#ffd166;font-weight:900;">{safe_float(row.get("Pitcher_HR9_Last7"),0):.2f}</span></div><div class="bf-lab-note-line">Hard Hit Allowed: <span style="color:#35d07f;font-weight:900;">{safe_float(row.get("Pitcher_HardHit_Allowed"),0):.1f}%</span></div></div>
-        </div>
-        <div><div class="bf-lab-section-title">X-Arsenal · Pitch Type Matchup</div><div class="bf-lab-pitch-grid">{pitch_html}</div></div>
-      </div>
-      <div class="bf-lab-divider"></div>
-      <div class="bf-lab-bottom">
-        <div><div class="bf-lab-section-title">Batter vs Pitcher Shape <span style="color:#35d07f;">· Batter</span> <span style="color:#ff6969;">· Pitcher</span></div><div class="bf-shape-grid">{shape_html}</div></div>
-        <div><div class="bf-lab-section-title">Signal Bars</div>{signals_html}</div>
-      </div>
-      <div class="bf-lab-foot">
-        <div class="bf-lab-notes"><div class="bf-lab-section-title">Why BF Likes This Spot</div><div>{escape(why)}</div></div>
-        <div class="bf-lab-notes"><div class="bf-lab-section-title">Context</div><div class="bf-lab-note-line">Trend: <b>{escape(trend)}</b></div><div class="bf-lab-note-line">Weather: <b>{escape(weather)}</b></div><div class="bf-lab-note-line">{escape(why2 if why2 != why else "")}</div></div>
-      </div>
-    </div>
-    """
-    st.markdown(html, unsafe_allow_html=True)
-
+    for p in _build_lab_pitch_rows(row):
+        color = _lab_color(p["grade"], 75, 55)
+        fill_class = "bf-mini-fill" if color == "green" else ("bf-mini-fill-yellow" if color == "yellow" else "bf-mini-fill-red")
+        pitch_cards.append('<div class="bf-pitch-card">'
+            f'<div class="bf-pitch-title">{escape(p["pitch"])}</div>'
+            f'<div class="bf-pitch-score bf-score-{color}">{p["grade"]}</div>'
+            f'<div class="bf-mini-track"><div class="{fill_class}" style="width:{clip(p["grade"],0,99):.0f}%"></div></div>'
+            f'<div class="bf-usage-row"><span>USAGE</span><span>{p["usage"]:.0f}%</span></div>'
+            f'<div style="font-size:.62rem;color:#9aa3af;margin-top:4px;">{escape(_display_value(p["reason"]))}</div></div>')
+    while len(pitch_cards) < 6:
+        pitch_cards.append('<div class="bf-pitch-card"><div class="bf-pitch-title">—</div></div>')
+    shape_stats = [
+        ("Barrel%", safe_float(row.get("Barrel%"), 0.0), safe_float(row.get("Pitcher_Barrel_Allowed"), 0.0), 11, 8),
+        ("Exit Velo", safe_float(row.get("EV"), 0.0), safe_float(row.get("Pitcher EV Allowed", 0.0), 0.0), 91, 88),
+        ("Hard Hit%", safe_float(row.get("HardHit%"), 0.0), safe_float(row.get("Pitcher_HardHit_Allowed"), 0.0), 42, 35),
+        ("Launch", safe_float(row.get("LaunchAngle"), 0.0), safe_float(row.get("Pitcher Launch Allowed", 0.0), 0.0), 14, 10),
+        ("FB%", safe_float(row.get("FlyBall%"), 0.0), 45.0, 42, 34),
+        ("GB%", safe_float(row.get("GroundBall%"), 0.0), 38.0, 44, 50),
+        ("LD%", safe_float(row.get("LineDrive%"), 0.0), 17.0, 22, 17),
+        ("Pull%", safe_float(row.get("Pull%", 0.0), 0.0), 43.0, 42, 34),
+        ("Oppo%", safe_float(row.get("Oppo%", 0.0), 0.0), 22.0, 24, 18),
+        ("AVG", safe_float(row.get("recent_avg", row.get("Recent AVG", 0.0)), 0.0), pitcher_opp, .260, .220),
+        ("xSLG", safe_float(row.get("xSLG"), 0.0), 0.0, .470, .420),
+        ("xwOBA", safe_float(row.get("xwOBA"), 0.0), 0.0, .340, .310),
+    ]
+    shape_html = ''.join(pitch_cards) + '</div></div></div><div class="bf-side-title" style="margin-top:10px;">Batter vs Pitcher · Batter / Pitcher</div><div class="bf-shape-grid">'
+    for label, batter_val, pitcher_val, good, warn in shape_stats:
+        lower_better = label == "GB%"
+        color = "green" if (lower_better and batter_val <= good) else ("yellow" if (lower_better and batter_val <= warn) else (_lab_color(batter_val, good, warn) if not lower_better else "red"))
+        if abs(batter_val) < 1 and label in {"AVG", "xSLG", "xwOBA"}:
+            btxt = f"{batter_val:.3f}"; ptxt = f"{pitcher_val:.3f}" if pitcher_val else "—"
+        else:
+            btxt = f"{batter_val:.1f}"; ptxt = f"{pitcher_val:.1f}" if pitcher_val else "—"
+        shape_html += f'<div class="bf-stat-tile"><div class="bf-stat-label">{escape(label)}</div><div class="bf-stat-value bf-score-{color}">{escape(btxt)} <span class="bf-stat-vs">{escape(ptxt)}</span></div></div>'
+    st.markdown(top_html + shape_html + '</div></div>', unsafe_allow_html=True)
 
 def render_player_card(row: pd.Series, rank_override=None):
     rank = rank_override if rank_override is not None else row.get("Rank", "—")
@@ -5018,7 +4338,9 @@ def render_player_card(row: pd.Series, rank_override=None):
     if actual_hr > 0:
         st.success(f"HR HIT TODAY: {actual_hr}")
 
-    with st.expander("Bars + matchup details", expanded=False):
+    with st.expander("🧪 Matchup Lab", expanded=False):
+        render_matchup_lab(row)
+        st.markdown("**Signal Bars**")
         st.markdown(_signal_bar_html("HR Probability", hr_prob, 28, "%", good_at=14, warn_at=9), unsafe_allow_html=True)
         st.markdown(_signal_bar_html("Matchup Score", matchup_score, 75, good_at=55, warn_at=38), unsafe_allow_html=True)
         st.markdown(_signal_bar_html("Pitcher HR Attackability", hr_attack_pct, 100, "%", good_at=70, warn_at=50), unsafe_allow_html=True)
@@ -5027,7 +4349,7 @@ def render_player_card(row: pd.Series, rank_override=None):
             st.caption(f"Attackability detail: {pitcher_label}")
         st.markdown(_signal_bar_html("Statcast Authority", authority_score, 55, good_at=30, warn_at=17), unsafe_allow_html=True)
         st.markdown(_signal_bar_html("L10 BBE Quality", l10_bbe_quality, 100, "%", good_at=70, warn_at=45), unsafe_allow_html=True)
-        st.caption(f"L10 BBE: {l10_bbe_trend} over {l10_bbe_events} recent batted-ball events")
+        st.caption(f"L10 BBE proxy: {l10_bbe_trend} over ~{l10_bbe_events} recent batted-ball events/contact chances")
         st.markdown(_signal_bar_html("Barrel", barrel, 20, "%", good_at=11, warn_at=8), unsafe_allow_html=True)
         st.markdown(_signal_bar_html("Hard Hit", hard_hit, 60, "%", good_at=42, warn_at=35), unsafe_allow_html=True)
         st.markdown(_signal_bar_html("Air Ball", air_pct, 75, "%", good_at=55, warn_at=48), unsafe_allow_html=True)
@@ -5060,25 +4382,26 @@ def render_card_grid(df: pd.DataFrame, max_cards: int = 24, columns: int = 3, ti
         columns = 4
     columns = max(1, min(columns, 4))
 
-    col_objs = st.columns(columns)
-    for i, (_, row) in enumerate(view.iterrows()):
-        rank = row.get("Rank", i + 1)
-        with col_objs[i % columns]:
-            render_player_card(row, rank_override=rank)
+    # Keep fast desktop side-by-side cards, but render by rows so mobile keeps rank order.
+    for start_idx in range(0, len(view), columns):
+        row_slice = view.iloc[start_idx:start_idx + columns]
+        col_objs = st.columns(columns)
+        for offset, (_, row) in enumerate(row_slice.iterrows()):
+            rank = row.get("Rank", start_idx + offset + 1)
+            with col_objs[offset]:
+                render_player_card(row, rank_override=rank)
 
 
 c1, c2, c3, c4 = st.columns([1, 1, 1, 2])
 with c1:
-    if st.button("Update Board", width="stretch"):
+    if st.button("Update Board", use_container_width=True):
         st.session_state.manual_refresh_trigger = True
         st.cache_data.clear()
         st.rerun()
 
 
 live_df, schedule = build_daily_dataset()
-live_df = filter_board_to_active_rosters(live_df, schedule)
 locked_df_raw = ensure_daily_board_lock(live_df, schedule)
-locked_df_raw = filter_board_to_active_rosters(locked_df_raw, schedule)
 
 lineup_mode = get_lineup_mode(schedule) if schedule else "PROJECTED"
 
@@ -5125,20 +4448,20 @@ if locked_df.empty:
 
 render_board_key()
 
-base_tabs = ["HR Probability", "Top 12", "Top HR Targets", "Pitchers to Attack", "HR Combos", "Hits + Runs + RBIs", "Batter Breakdown", "Accuracy Tracker"]
+base_tabs = ["JR HR Board", "Top 12", "Top HR Targets", "Pitchers to Attack", "HR Combos", "Hits + Runs + RBIs", "Batter Breakdown", "Accuracy Tracker"]
 schedule = sort_schedule_rows(schedule)
 game_tabs = [f"{format_game_time_et(g.get('game_time', ''))} | {g['game_key']}" for g in schedule]
 tabs = st.tabs(base_tabs + game_tabs)
 
 with tabs[0]:
-    st.subheader("HR Probability Board")
+    st.subheader("JR HR Board")
     st.caption("Projected teams stay live. Confirmed teams freeze once lineups lock. Actual HR Today is display-only and does not change rankings.")
     hr_df = get_strict_hr_pool(locked_df)
     render_card_grid(hr_df, max_cards=30, columns=3)
     with st.expander("Raw HR Probability Table"):
         display_existing_columns(hr_df, [
                 "Rank", "Player", "Team", "Game", "Pitcher", "Lineup Spot",
-                "Lineup Source", "Actual HR Today", "HR Probability %", "HR Tier", "L10 Shape FB%", "L10 Shape LD%", "L10 Shape GB%", "GroundBall%",
+                "Lineup Source", "Actual HR Today", "HR Probability %", "HR Tier", "GroundBall%",
                 "GB Rule", "GB Note", "Matchup Advantage", "HR Attackability Score", "HR Attackability %", "HR Attackability Status", "WeatherNote", "BullpenFatigueNote", "L10 BBE Quality", "L10 BBE Trend", "HardHit%", "FlyBall%", "AIR%", "xSLG", "xwOBA", "Barrel%", "Ranking Reasons", "Why"
             ])
 
@@ -5150,7 +4473,7 @@ with tabs[1]:
     with st.expander("Raw Top 12 Table"):
         display_existing_columns(top12, [
                 "Rank", "Player", "Team", "Game", "Pitcher", "Lineup Spot",
-                "Lineup Source", "Actual HR Today", "HR Probability %", "HR Tier", "L10 Shape FB%", "L10 Shape LD%", "L10 Shape GB%", "GroundBall%",
+                "Lineup Source", "Actual HR Today", "HR Probability %", "HR Tier", "GroundBall%",
                 "GB Rule", "GB Note", "Matchup Advantage", "HR Attackability Score", "HR Attackability %", "HR Attackability Status", "WeatherNote", "BullpenFatigueNote", "L10 BBE Quality", "L10 BBE Trend", "HardHit%", "FlyBall%", "AIR%", "xSLG", "xwOBA", "Barrel%", "Ranking Reasons", "Why"
             ])
 
@@ -5202,7 +4525,7 @@ with tabs[4]:
         st.caption("Tracked combo history")
         st.dataframe(
             dedupe_columns(combo_tracker.sort_values(by=["date", "combo_size", "combined_score"], ascending=[False, True, False])),
-            width="stretch",
+            use_container_width=True,
             hide_index=True
         )
 
@@ -5225,14 +4548,14 @@ with tabs[6]:
     breakdown = sort_for_hr(locked_df.copy())
     breakdown_cols = [
             "Player", "Team", "Game", "Pitcher", "Lineup Spot", "Lineup Source", "Pitch Mix Mode", "Relevant Pitch Mix",
-            "EV", "HardHit%", "FlyBall%", "AIR%", "LaunchAngle", "Recent Trend", "LineDrive%", "L10 Shape FB%", "L10 Shape LD%", "L10 Shape GB%", "GroundBall%", "Barrel%",
+            "EV", "HardHit%", "FlyBall%", "AIR%", "LaunchAngle", "Recent Trend", "LineDrive%", "GroundBall%", "Barrel%",
             "xSLG", "xwOBA",
             "Pitcher_HR9_Last7", "Pitcher_Barrel_Allowed", "Pitcher_HardHit_Allowed",
             "HR Attackability Score", "HR Attackability %", "HR Attackability Status", "Pitcher HR Profile", "HR Attackability Label", "Matchup Advantage Score", "Matchup Advantage", "Ranking Reasons",
             "Statcast Pass", "Strict Statcast", "Recent Form Pass", "Pitcher Attackable",
             "Pitch_Isolation_Valid", "GB Rule", "GB Note", "WeatherNote", "BullpenFatigueNote", "BullpenFatigueScore", "TempF", "WindMPH", "HR Eligible",
-            "HR Probability %", "HRR Score", "Why",
-            "L10 BBE Quality", "L10 BBE Trend", "L10 BBE Events", "L10 BBE Damage",
+            "HR Probability %", "HRR Score", "Why"
+        "L10 BBE Quality", "L10 BBE Trend", "L10 BBE Events", "L10 BBE Damage",
     ]
     display_existing_columns(breakdown, breakdown_cols)
 
@@ -5294,7 +4617,7 @@ with tabs[7]:
                         "tracker_source", "hr_eligible", "result", "hr_count",
                         "result_state", "game_state", "updated_at"
                     ]]),
-                    width="stretch",
+                    use_container_width=True,
                     hide_index=True
                 )
     else:
@@ -5330,14 +4653,14 @@ with tabs[7]:
                     "combined_score", "legs_hit", "total_legs",
                     "result_state", "updated_at"
                 ]]),
-                width="stretch",
+                use_container_width=True,
                 hide_index=True
             )
 
     if not daily_summary.empty:
         st.divider()
         st.markdown("### Daily HR Prediction Accuracy History")
-        st.dataframe(dedupe_columns(daily_summary), width="stretch", hide_index=True)
+        st.dataframe(dedupe_columns(daily_summary), use_container_width=True, hide_index=True)
 
 for idx, game in enumerate(schedule, start=8):
     with tabs[idx]:
