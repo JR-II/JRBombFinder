@@ -115,14 +115,45 @@ def save_daily_tracker_snapshot(tracker_df: pd.DataFrame, snapshot_date: str):
 
 
 def save_daily_board_snapshot(board_df: pd.DataFrame, snapshot_date: str):
-    """Persist the original surfaced HR board once per day so historical predictions cannot be rewritten."""
+    """Persist surfaced prediction rows without rewriting earlier rankings.
+
+    Important: this app has separate sections (CORE_BOARD, TOP12, GAME_HR).
+    Older saves may be missing TOP12 rows, so do not simply return when the
+    snapshot exists.  Merge in newly surfaced section rows by a stable key while
+    preserving the existing row order and original predictions.
+    """
     ensure_snapshot_folder()
     board_path = os.path.join(SNAPSHOT_DIR, f"hr_board_{snapshot_date}.csv")
-    if os.path.exists(board_path):
-        return
     clean_board = board_df.copy()
     if "Actual HR Today" in clean_board.columns:
         clean_board = clean_board.drop(columns=["Actual HR Today"])
+
+    if clean_board.empty:
+        return
+
+    key_cols = [c for c in ["Tracker Source", "Player", "Team", "Game"] if c in clean_board.columns]
+    if len(key_cols) < 4:
+        clean_board.to_csv(board_path, index=False)
+        return
+
+    if os.path.exists(board_path):
+        try:
+            old_board = pd.read_csv(board_path)
+        except Exception:
+            old_board = pd.DataFrame()
+        if not old_board.empty and all(c in old_board.columns for c in key_cols):
+            old_keys = set(zip(*[old_board[c].astype(str).map(normalize_name if c == "Player" else str) for c in key_cols]))
+            add_rows = []
+            for _, r in clean_board.iterrows():
+                k = tuple(normalize_name(r[c]) if c == "Player" else str(r[c]) for c in key_cols)
+                if k not in old_keys:
+                    add_rows.append(r)
+                    old_keys.add(k)
+            if add_rows:
+                merged = pd.concat([old_board, pd.DataFrame(add_rows)], ignore_index=True)
+                merged.to_csv(board_path, index=False)
+            return
+
     clean_board.to_csv(board_path, index=False)
 
 
@@ -384,7 +415,43 @@ def load_tracker() -> pd.DataFrame:
     return pd.DataFrame(columns=columns)
 
 
+def dedupe_tracker_rows(df: pd.DataFrame) -> pd.DataFrame:
+    """Keep one tracker row per visible section pick and preserve the best result.
+
+    A player can appear in CORE_BOARD, TOP12, and GAME_HR on the same date.
+    Those must remain separate section records, but repeated refreshes must not
+    inflate counts. Multi-HR games keep the highest hr_count found.
+    """
+    if df is None or df.empty:
+        return df
+    work = df.copy()
+    for col in ["date", "player", "team", "game", "tracker_source"]:
+        if col not in work.columns:
+            work[col] = ""
+    if "hr_count" not in work.columns:
+        work["hr_count"] = 0
+    if "result" not in work.columns:
+        work["result"] = pd.NA
+
+    work["_player_key"] = work["player"].astype(str).map(normalize_name)
+    work["_hr_count_num"] = pd.to_numeric(work["hr_count"], errors="coerce").fillna(0).astype(int)
+    work["_result_num"] = pd.to_numeric(work["result"], errors="coerce").fillna(0).astype(int)
+    work["_updated_sort"] = work.get("updated_at", "").astype(str) if "updated_at" in work.columns else ""
+    work = work.sort_values(["_hr_count_num", "_result_num", "_updated_sort"], ascending=[False, False, False])
+
+    deduped = work.drop_duplicates(
+        subset=["date", "_player_key", "team", "game", "tracker_source"],
+        keep="first"
+    ).copy()
+
+    for c in ["_player_key", "_hr_count_num", "_result_num", "_updated_sort"]:
+        if c in deduped.columns:
+            deduped = deduped.drop(columns=[c])
+    return deduped.reset_index(drop=True)
+
+
 def save_tracker(df: pd.DataFrame):
+    df = dedupe_tracker_rows(df)
     df.to_csv(TRACKER_FILE, index=False)
 
 
@@ -824,7 +891,7 @@ def summarize_tracker(df: pd.DataFrame):
     work = df.copy()
     if "tracker_source" not in work.columns:
         work["tracker_source"] = "CORE_BOARD"
-    work["tracker_source"] = work["tracker_source"].fillna("CORE_BOARD").astype(str)
+    work["tracker_source"] = work["tracker_source"].fillna("CORE_BOARD").astype(str).str.strip().str.upper()
     work["result_num"] = pd.to_numeric(work["result"], errors="coerce").fillna(0).astype(int)
     if "hr_count" in work.columns:
         work["result_num"] = (pd.to_numeric(work["hr_count"], errors="coerce").fillna(0).astype(int) > 0).astype(int)
@@ -869,7 +936,7 @@ def summarize_tracker_by_day(df: pd.DataFrame) -> pd.DataFrame:
     work = df.copy()
     if "tracker_source" not in work.columns:
         work["tracker_source"] = "CORE_BOARD"
-    work["tracker_source"] = work["tracker_source"].fillna("CORE_BOARD").astype(str)
+    work["tracker_source"] = work["tracker_source"].fillna("CORE_BOARD").astype(str).str.strip().str.upper()
     work["result_num"] = pd.to_numeric(work["result"], errors="coerce").fillna(0).astype(int)
 
     all_daily = (
@@ -3636,7 +3703,7 @@ def build_visible_tracker_pool(df: pd.DataFrame, schedule: list[dict]) -> pd.Dat
     return visible_df
 
 
-@st.cache_data(ttl=45)
+@st.cache_data(ttl=15)
 def get_live_feed_homers(game_pk: int):
     """Count HRs from MLB live feed play-by-play.
 
@@ -3657,7 +3724,8 @@ def get_live_feed_homers(game_pk: int):
         result = play.get("result", {}) or {}
         event_type = str(result.get("eventType", "") or "").lower()
         event = str(result.get("event", "") or "").lower()
-        if event_type != "home_run" and "home run" not in event and "homers" not in event:
+        description = str(result.get("description", "") or "").lower()
+        if event_type != "home_run" and "home run" not in event and "homers" not in event and "home run" not in description and "homers" not in description:
             continue
         batter = (play.get("matchup", {}) or {}).get("batter", {}) or {}
         name = batter.get("fullName")
@@ -3670,7 +3738,7 @@ def get_live_feed_homers(game_pk: int):
     return homer_map
 
 
-@st.cache_data(ttl=45)
+@st.cache_data(ttl=15)
 def get_boxscore_homers(game_pk: int):
     url = f"https://statsapi.mlb.com/api/v1/game/{game_pk}/boxscore"
     homer_map = {}
@@ -3732,7 +3800,7 @@ def add_live_homer_counts_to_board(df: pd.DataFrame, schedule: list[dict]) -> pd
         if game_pk is None:
             continue
         homer_map = get_boxscore_homers(game_pk)
-        mask = out["game_pk"] == game_pk
+        mask = pd.to_numeric(out["game_pk"], errors="coerce") == safe_int(game_pk, -1)
         if mask.any():
             out.loc[mask, "Actual HR Today"] = out.loc[mask, "Player"].apply(
                 lambda p: get_player_hr_count_from_map(homer_map, p)
@@ -3740,11 +3808,35 @@ def add_live_homer_counts_to_board(df: pd.DataFrame, schedule: list[dict]) -> pd
     return out
 
 
+
+def get_locked_section_snapshot(source_key: str, fallback_df: pd.DataFrame, schedule: list[dict], limit: int | None = None) -> pd.DataFrame:
+    """Use the saved surfaced board for display so upgrades/refreshes do not rewrite rankings."""
+    snap = load_daily_board_snapshot(today_str())
+    if snap is not None and not snap.empty and "Tracker Source" in snap.columns:
+        section = snap[snap["Tracker Source"].astype(str).str.strip().str.upper() == str(source_key).upper()].copy()
+        if not section.empty:
+            section = add_live_homer_counts_to_board(section, schedule)
+            if "Rank" in section.columns:
+                section = section.drop(columns=["Rank"])
+            section = section.reset_index(drop=True)
+            section.insert(0, "Rank", range(1, len(section) + 1))
+            if limit is not None:
+                section = section.head(limit).copy()
+            return dedupe_columns(section)
+    out = fallback_df.copy()
+    if "Rank" not in out.columns:
+        out = add_rank_column(out.reset_index(drop=True))
+    if limit is not None:
+        out = out.head(limit).copy()
+    return dedupe_columns(out)
+
+
 def sync_tracker_with_board(tracked_df: pd.DataFrame):
-    tracker = load_tracker()
+    tracker = dedupe_tracker_rows(load_tracker())
     date_key = today_str()
 
     if tracked_df.empty:
+        save_tracker(tracker)
         return tracker
 
     if "hr_count" not in tracker.columns:
@@ -3775,51 +3867,61 @@ def sync_tracker_with_board(tracked_df: pd.DataFrame):
             "player": player_name,
             "team": row["Team"],
             "game": row["Game"],
-            "game_pk": row["game_pk"],
-            "hr_probability": row["HR Probability %"],
-            "hr_tier": row["HR Tier"],
-            "hr_eligible": int(bool(row["HR Eligible"])),
+            "game_pk": row.get("game_pk", pd.NA),
+            "hr_probability": row.get("HR Probability %", pd.NA),
+            "hr_tier": row.get("HR Tier", pd.NA),
+            "hr_eligible": int(bool(row.get("HR Eligible", False))),
             "tracker_source": source,
             "result": pd.NA,
             "hr_count": 0,
             "result_state": "PENDING",
-            "game_state": row["game_state"],
+            "game_state": row.get("game_state", pd.NA),
             "updated_at": now_et_string(),
         })
+        existing_keys.add(key)
 
     if new_rows:
         tracker = pd.concat([tracker, pd.DataFrame(new_rows)], ignore_index=True)
-        save_tracker(tracker)
 
+    tracker = dedupe_tracker_rows(tracker)
+    save_tracker(tracker)
     return tracker
-
 
 def auto_update_tracker_results(tracker: pd.DataFrame, schedule: list[dict]):
     if tracker.empty:
         return tracker
 
-    tracker = tracker.copy()
+    tracker = dedupe_tracker_rows(tracker.copy())
     if "hr_count" not in tracker.columns:
         tracker["hr_count"] = 0
+    if "game_pk" not in tracker.columns:
+        tracker["game_pk"] = pd.NA
 
     date_key = today_str()
     today_mask = tracker["date"].astype(str) == date_key
+    tracker_game_pk_num = pd.to_numeric(tracker["game_pk"], errors="coerce")
 
     for game in schedule:
         game_pk = game["game_pk"]
         game_state = game.get("game_state", "Preview")
         detailed_state = game.get("detailed_state", "Scheduled")
 
-        rows_mask = today_mask & (tracker["game_pk"] == game_pk)
+        rows_mask = today_mask & (tracker_game_pk_num == safe_int(game_pk, -1))
+        if not rows_mask.any():
+            # Fallback by game key so older rows with bad/missing game_pk still update.
+            rows_mask = today_mask & (tracker["game"].astype(str) == str(game.get("game_key", "")))
         if not rows_mask.any():
             continue
 
-        # Always read boxscore. Some MLB schedule states lag or stay weird while boxscore already has HR data.
+        # Always read boxscore + live play feed. Schedule states can lag, and boxscore
+        # alone can temporarily miss multi-HR totals.
         homer_map = get_boxscore_homers(game_pk)
 
         for idx in tracker.index[rows_mask]:
             player = tracker.at[idx, "player"]
             hr_count = get_player_hr_count_from_map(homer_map, player)
+            old_hr = safe_int(tracker.at[idx, "hr_count"], 0)
+            hr_count = max(int(hr_count), old_hr)
             tracker.at[idx, "hr_count"] = int(hr_count)
 
             if hr_count > 0:
@@ -3838,9 +3940,9 @@ def auto_update_tracker_results(tracker: pd.DataFrame, schedule: list[dict]):
             tracker.at[idx, "game_state"] = detailed_state
             tracker.at[idx, "updated_at"] = now_et_string()
 
+    tracker = dedupe_tracker_rows(tracker)
     save_tracker(tracker)
     return tracker
-
 
 def _combo_signature(players: list[str]) -> str:
     return " | ".join(sorted(players))
@@ -4042,8 +4144,10 @@ def summarize_tracker_sources(df: pd.DataFrame) -> dict:
     work = df.copy()
     if "tracker_source" not in work.columns:
         work["tracker_source"] = "CORE_BOARD"
-    work["tracker_source"] = work["tracker_source"].fillna("CORE_BOARD").astype(str)
+    work["tracker_source"] = work["tracker_source"].fillna("CORE_BOARD").astype(str).str.strip().str.upper()
     work["result_num"] = pd.to_numeric(work["result"], errors="coerce").fillna(0).astype(int)
+    if "hr_count" in work.columns:
+        work["result_num"] = (pd.to_numeric(work["hr_count"], errors="coerce").fillna(0).astype(int) > 0).astype(int)
     today_mask = work["date"].astype(str) == today_str()
 
     for source in buckets.keys():
@@ -4079,7 +4183,7 @@ def summarize_tracker_sources_for_date(df: pd.DataFrame, date_key: str) -> dict:
         work["tracker_source"] = "CORE_BOARD"
     if "hr_count" not in work.columns:
         work["hr_count"] = pd.to_numeric(work.get("result", 0), errors="coerce").fillna(0)
-    work["tracker_source"] = work["tracker_source"].fillna("CORE_BOARD").astype(str)
+    work["tracker_source"] = work["tracker_source"].fillna("CORE_BOARD").astype(str).str.strip().str.upper()
     work["result_num"] = pd.to_numeric(work["result"], errors="coerce").fillna(0).astype(int)
     work["hr_count_num"] = pd.to_numeric(work["hr_count"], errors="coerce").fillna(0).astype(int)
     day = work[work["date"].astype(str) == str(date_key)].copy()
@@ -4324,16 +4428,22 @@ def render_card_grid(df: pd.DataFrame, max_cards: int = 24, columns: int = 3, ti
     except Exception:
         columns = 3
 
-    if columns >= 3:
-        columns = 4
+    # Desktop keeps the fast side-by-side scan. We render by ROWS (1-4, 5-8, ...),
+    # not by Streamlit's default column stacking, so phones keep true rank order.
     columns = max(1, min(columns, 4))
+    if columns == 1:
+        for i, (_, row) in enumerate(view.iterrows()):
+            rank = row.get("Rank", i + 1)
+            render_player_card(row, rank_override=rank)
+        return
 
-    # Render sequentially instead of using st.columns. Streamlit columns stack by column on iPhone,
-    # which makes the board look like #1, #5, #9 instead of true rank order.
-    for i, (_, row) in enumerate(view.iterrows()):
-        rank = row.get("Rank", i + 1)
-        render_player_card(row, rank_override=rank)
-
+    for start_idx in range(0, len(view), columns):
+        row_slice = view.iloc[start_idx:start_idx + columns]
+        cols = st.columns(columns)
+        for offset, (_, row) in enumerate(row_slice.iterrows()):
+            with cols[offset]:
+                rank = row.get("Rank", start_idx + offset + 1)
+                render_player_card(row, rank_override=rank)
 
 c1, c2, c3, c4 = st.columns([1, 1, 1, 2])
 with c1:
@@ -4404,7 +4514,8 @@ tabs = st.tabs(base_tabs + game_tabs)
 with tabs[0]:
     st.subheader("JR HR Board")
     st.caption("Projected teams stay live. Confirmed teams freeze once lineups lock. Actual HR Today is display-only and does not change rankings.")
-    hr_df = get_strict_hr_pool(locked_df)
+    hr_df_live = get_strict_hr_pool(locked_df)
+    hr_df = get_locked_section_snapshot("CORE_BOARD", hr_df_live, schedule, limit=30)
     render_card_grid(hr_df, max_cards=30, columns=3)
     with st.expander("Raw JR HR Board Table"):
         st.dataframe(
@@ -4420,7 +4531,8 @@ with tabs[0]:
 with tabs[1]:
     st.subheader("Top 12 HR Candidates")
     st.caption("Confirmed teams freeze once lineups lock. Projected teams can still update. Actual HR Today is display-only and does not change rankings.")
-    top12 = get_top12_hybrid(locked_df)
+    top12_live = get_top12_hybrid(locked_df)
+    top12 = get_locked_section_snapshot("TOP12", top12_live, schedule, limit=12)
     render_card_grid(top12, max_cards=12, columns=3)
     with st.expander("Raw Top 12 Table"):
         st.dataframe(
@@ -4568,7 +4680,7 @@ with tabs[7]:
     if not selected_tracker.empty:
         st.markdown("### Selected Date Split Tracker Tables")
         for section_name, source_key in [("Core Board", "CORE_BOARD"), ("Top 12", "TOP12"), ("Per-Game HR", "GAME_HR")]:
-            section_df = selected_tracker[selected_tracker["tracker_source"].astype(str) == source_key].copy()
+            section_df = selected_tracker[selected_tracker["tracker_source"].astype(str).str.strip().str.upper() == source_key].copy()
             st.markdown(f"**{section_name}**")
             if section_df.empty:
                 st.caption("No tracked rows in this section for selected date.")
