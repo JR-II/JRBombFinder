@@ -120,12 +120,10 @@ hr { margin-top: .38rem !important; margin-bottom: .38rem !important; }
   min-width: 0 !important;
 }
 .bf-lab-grid {
-  grid-template-columns: 160px minmax(0, 1fr) !important;
-  gap: 9px !important;
+  grid-template-columns: 1fr !important;
 }
 .bf-pitch-grid {
-  grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
-  gap: 6px !important;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
 }
 .bf-pitch-card {
   min-width: 0 !important;
@@ -146,25 +144,6 @@ hr { margin-top: .38rem !important; margin-bottom: .38rem !important; }
   text-overflow: ellipsis !important;
   vertical-align: bottom !important;
 }
-.bf-compact-detail-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 6px;
-  margin-top: 8px;
-}
-.bf-compact-detail {
-  border: 1px solid rgba(255,255,255,.10);
-  border-radius: 9px;
-  background: rgba(255,255,255,.035);
-  padding: 6px 7px;
-  font-size: .68rem;
-  color: #c9d0da;
-}
-.bf-compact-detail strong { color:#f5f5f5; }
-@media (max-width: 900px) {
-  .bf-lab-grid { grid-template-columns: 1fr !important; }
-  .bf-pitch-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
-}
 @media (max-width: 520px) {
   .bf-title { font-size: 1.65rem !important; }
   .bf-chip, .bf-key-chip { font-size: .66rem !important; padding: 3px 7px !important; }
@@ -172,7 +151,7 @@ hr { margin-top: .38rem !important; margin-bottom: .38rem !important; }
   .bf-lab-shell { padding: 8px !important; }
   .bf-lab-top { grid-template-columns: repeat(3, minmax(0, 1fr)) !important; }
   .bf-lab-name { font-size: .86rem !important; }
-  .bf-pitch-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+  .bf-pitch-grid { grid-template-columns: 1fr !important; }
   .bf-shape-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
 }
 
@@ -259,12 +238,11 @@ def save_daily_tracker_snapshot(tracker_df: pd.DataFrame, snapshot_date: str):
 
 
 def save_daily_board_snapshot(board_df: pd.DataFrame, snapshot_date: str):
-    """Persist surfaced HR board rows without erasing earlier locked predictions.
+    """Persist the exact visible surfaced board for the selected date.
 
-    Important:
-    - Existing rows are kept so old predictions are not rewritten after refresh/reboot.
-    - Newly surfaced rows, especially per-game GAME_HR rows after lineup/news updates,
-      are appended so every visible name has a tracker trail.
+    Current-day snapshots must mirror the visible boards, not every name that
+    appeared earlier in projected mode. This prevents removed projected players
+    from getting backfilled into Per-Game tracking after lineups confirm.
     """
     ensure_snapshot_folder()
     board_path = os.path.join(SNAPSHOT_DIR, f"hr_board_{snapshot_date}.csv")
@@ -276,32 +254,16 @@ def save_daily_board_snapshot(board_df: pd.DataFrame, snapshot_date: str):
     if "Actual HR Today" in clean_board.columns:
         clean_board = clean_board.drop(columns=["Actual HR Today"])
 
-    if os.path.exists(board_path):
-        try:
-            existing = pd.read_csv(board_path)
-        except Exception:
-            existing = pd.DataFrame()
+    if "Tracker Source" not in clean_board.columns:
+        clean_board["Tracker Source"] = "CORE_BOARD"
 
-        if existing is not None and not existing.empty:
-            all_cols = list(dict.fromkeys(list(existing.columns) + list(clean_board.columns)))
-            for col in all_cols:
-                if col not in existing.columns:
-                    existing[col] = pd.NA
-                if col not in clean_board.columns:
-                    clean_board[col] = pd.NA
-            merged = pd.concat([existing[all_cols], clean_board[all_cols]], ignore_index=True)
-
-            dedupe_cols = [c for c in ["Tracker Source", "Player", "Team", "Game"] if c in merged.columns]
-            if dedupe_cols:
-                merged = merged.drop_duplicates(subset=dedupe_cols, keep="first")
-            else:
-                merged = merged.drop_duplicates(keep="first")
-
-            atomic_write_csv(merged.reset_index(drop=True), board_path)
-            return
+    dedupe_cols = [c for c in ["Tracker Source", "Player", "Team", "Game"] if c in clean_board.columns]
+    if dedupe_cols:
+        clean_board = clean_board.drop_duplicates(subset=dedupe_cols, keep="first")
+    else:
+        clean_board = clean_board.drop_duplicates(keep="first")
 
     atomic_write_csv(clean_board.reset_index(drop=True), board_path)
-
 
 def load_daily_board_snapshot(snapshot_date: str) -> pd.DataFrame:
     ensure_snapshot_folder()
@@ -623,8 +585,14 @@ def get_locked_board_for_date(date_key: str) -> pd.DataFrame:
 
 
 def ensure_daily_board_lock(live_df: pd.DataFrame, schedule: list[dict]) -> pd.DataFrame:
-    """Keep projected teams live, but freeze teams once their lineup confirms.
-    Manual pregame refresh may rebuild confirmed-team locks before first pitch.
+    """Freeze confirmed lineup reads without letting stale locked players survive.
+
+    Rules:
+    - Projected teams remain live.
+    - Once a team lineup confirms, existing confirmed players keep their locked read.
+    - If a confirmed player is removed/scratched from the lineup, that locked row is pruned.
+    - If a replacement appears in the confirmed lineup, that new row is added live once.
+    - Manual Update Board does not rewrite confirmed-player scores.
     """
     if live_df.empty:
         return live_df.copy()
@@ -632,92 +600,100 @@ def ensure_daily_board_lock(live_df: pd.DataFrame, schedule: list[dict]) -> pd.D
     date_key = today_str()
     locks = load_board_locks()
 
-    if not locks.empty and "lock_scope" in locks.columns:
+    if not locks.empty and "date" in locks.columns:
         locks_today = locks[locks["date"].astype(str) == str(date_key)].copy()
+        locks_not_today = locks[locks["date"].astype(str) != str(date_key)].copy()
     else:
         locks_today = pd.DataFrame(columns=list(live_df.columns) + ["lock_created_at", "lock_scope"])
+        locks_not_today = pd.DataFrame()
 
     confirmed_team_keys = set()
-    pregame_confirmed_keys = set()
     for game in schedule:
         game_key = game["game_key"]
         away_team = team_abbr(game["away_team"])
         home_team = team_abbr(game["home_team"])
-        game_state = str(game.get("game_state", "Preview"))
 
         if game.get("away_confirmed_count", 0) >= 9:
             confirmed_team_keys.add((game_key, away_team))
-            if game_state == "Preview":
-                pregame_confirmed_keys.add((game_key, away_team))
         if game.get("home_confirmed_count", 0) >= 9:
             confirmed_team_keys.add((game_key, home_team))
-            if game_state == "Preview":
-                pregame_confirmed_keys.add((game_key, home_team))
-
-    rebuild_confirmed = bool(st.session_state.get("manual_refresh_trigger", False))
-
-    if rebuild_confirmed and not locks_today.empty and {"Game", "Team"}.issubset(locks_today.columns):
-        drop_mask_today = locks_today.apply(
-            lambda r: (r.get("Game"), r.get("Team")) in pregame_confirmed_keys,
-            axis=1
-        )
-        locks_today = locks_today[~drop_mask_today].copy()
-
-        if not locks.empty and {"Game", "Team", "date"}.issubset(locks.columns):
-            drop_mask_all = (
-                (locks["date"].astype(str) == str(date_key))
-                & locks.apply(lambda r: (r.get("Game"), r.get("Team")) in pregame_confirmed_keys, axis=1)
-            )
-            locks = locks[~drop_mask_all].copy()
-
-    existing_locked_keys = set()
-    if not locks_today.empty and {"Game", "Team"}.issubset(locks_today.columns):
-        existing_locked_keys = set(zip(locks_today["Game"], locks_today["Team"]))
-
-    new_lock_frames = []
-    for game_key, team in confirmed_team_keys:
-        if (game_key, team) in existing_locked_keys:
-            continue
-        team_rows = live_df[(live_df["Game"] == game_key) & (live_df["Team"] == team)].copy()
-        if team_rows.empty:
-            continue
-        team_rows["lock_created_at"] = now_et_string()
-        team_rows["lock_scope"] = "CONFIRMED_TEAM"
-        new_lock_frames.append(team_rows)
-
-    if new_lock_frames:
-        append_df = pd.concat(new_lock_frames, ignore_index=True)
-        locks = pd.concat([locks, append_df], ignore_index=True)
-        save_board_locks(locks)
-        locks_today = pd.concat([locks_today, append_df], ignore_index=True)
-    elif rebuild_confirmed:
-        save_board_locks(locks)
 
     output_frames = []
-    used_locked_keys = set()
-    if not locks_today.empty and {"Game", "Team"}.issubset(locks_today.columns):
-        for game_key, team in confirmed_team_keys:
-            locked_rows = locks_today[(locks_today["Game"] == game_key) & (locks_today["Team"] == team)].copy()
-            if not locked_rows.empty:
-                output_frames.append(locked_rows)
-                used_locked_keys.add((game_key, team))
+    refreshed_lock_frames = []
+    used_confirmed_keys = set()
 
-    live_rows = []
+    for game_key, team in confirmed_team_keys:
+        live_team_rows = live_df[(live_df["Game"] == game_key) & (live_df["Team"] == team)].copy()
+        if live_team_rows.empty:
+            continue
+
+        live_player_keys = set(live_team_rows["Player"].astype(str).map(normalize_name))
+
+        if not locks_today.empty and {"Game", "Team", "Player"}.issubset(locks_today.columns):
+            locked_team_rows = locks_today[
+                (locks_today["Game"] == game_key) &
+                (locks_today["Team"] == team)
+            ].copy()
+        else:
+            locked_team_rows = pd.DataFrame(columns=list(live_team_rows.columns) + ["lock_created_at", "lock_scope"])
+
+        if not locked_team_rows.empty:
+            locked_team_rows = locked_team_rows[
+                locked_team_rows["Player"].astype(str).map(normalize_name).isin(live_player_keys)
+            ].copy()
+
+        locked_player_keys = set()
+        if not locked_team_rows.empty and "Player" in locked_team_rows.columns:
+            locked_player_keys = set(locked_team_rows["Player"].astype(str).map(normalize_name))
+
+        new_live_rows = live_team_rows[
+            ~live_team_rows["Player"].astype(str).map(normalize_name).isin(locked_player_keys)
+        ].copy()
+
+        if not new_live_rows.empty:
+            new_live_rows["date"] = date_key
+            new_live_rows["lock_created_at"] = now_et_string()
+            new_live_rows["lock_scope"] = "CONFIRMED_TEAM"
+
+        team_locked_output = pd.concat([locked_team_rows, new_live_rows], ignore_index=True)
+        if not team_locked_output.empty:
+            team_locked_output["date"] = date_key
+            output_frames.append(team_locked_output)
+            refreshed_lock_frames.append(team_locked_output)
+            used_confirmed_keys.add((game_key, team))
+
+    live_unlocked_rows = []
     for _, row in live_df.iterrows():
         key = (row["Game"], row["Team"])
-        if key in confirmed_team_keys and key in used_locked_keys:
+        if key in confirmed_team_keys and key in used_confirmed_keys:
             continue
-        live_rows.append(row)
+        live_unlocked_rows.append(row)
 
-    if live_rows:
-        output_frames.append(pd.DataFrame(live_rows))
+    if live_unlocked_rows:
+        output_frames.append(pd.DataFrame(live_unlocked_rows))
+
+    refreshed_locks_today = (
+        pd.concat(refreshed_lock_frames, ignore_index=True)
+        if refreshed_lock_frames
+        else pd.DataFrame(columns=list(live_df.columns) + ["date", "lock_created_at", "lock_scope"])
+    )
+
+    if not locks_not_today.empty:
+        all_cols = list(dict.fromkeys(list(locks_not_today.columns) + list(refreshed_locks_today.columns)))
+        for col in all_cols:
+            if col not in locks_not_today.columns:
+                locks_not_today[col] = pd.NA
+            if col not in refreshed_locks_today.columns:
+                refreshed_locks_today[col] = pd.NA
+        save_board_locks(pd.concat([locks_not_today[all_cols], refreshed_locks_today[all_cols]], ignore_index=True))
+    else:
+        save_board_locks(refreshed_locks_today.reset_index(drop=True))
 
     if not output_frames:
         return live_df.copy().reset_index(drop=True)
 
     result = pd.concat(output_frames, ignore_index=True)
     return result.reset_index(drop=True)
-
 
 def isolate_primary_pitch(pitch_mix: dict):
     if not pitch_mix:
@@ -747,38 +723,6 @@ def estimate_handedness_from_name(name: str, role: str = "batter") -> str:
     if role == "pitcher":
         return "L" if seed < 32 else "R"
     return "L" if seed < 45 else "R"
-
-
-def normalize_hand_code(value, default="R") -> str:
-    txt = str(value or "").upper().strip()
-    if txt in {"L", "LEFT", "LHB", "LHP"}:
-        return "L"
-    if txt in {"R", "RIGHT", "RHB", "RHP"}:
-        return "R"
-    if txt in {"S", "B", "SWITCH", "SWITCH HITTER", "SH", "SHB"}:
-        return "S"
-    return default
-
-
-def hitter_hand_label(value, default="R") -> str:
-    code = normalize_hand_code(value, default)
-    if code == "L":
-        return "LHB"
-    if code == "S":
-        return "SHB"
-    return "RHB"
-
-
-def pitcher_hand_label(value, default="R") -> str:
-    code = normalize_hand_code(value, default)
-    return "LHP" if code == "L" else "RHP"
-
-
-def matchup_hand_code(value, default="R") -> str:
-    # Switch hitters should not be treated as same-handed by accident.
-    # For matchup math, mark switch hitters as opposite-hand neutral/edge.
-    code = normalize_hand_code(value, default)
-    return "L" if code == "S" else code
 
 
 def build_pitch_mix_profile(
@@ -1640,9 +1584,7 @@ def fetch_people_stats(person_ids_tuple: tuple, group: str):
 
         for person in data.get("people", []):
             pid = person.get("id")
-            bat_side = ((person.get("batSide") or {}).get("code") or (person.get("batSide") or {}).get("description") or "")
-            pitch_hand = ((person.get("pitchHand") or {}).get("code") or (person.get("pitchHand") or {}).get("description") or "")
-            stats = {"season": {}, "gamelog": [], "bat_side": bat_side, "pitch_hand": pitch_hand}
+            stats = {"season": {}, "gamelog": []}
 
             for stat_block in person.get("stats", []):
                 stat_type = ((stat_block.get("type") or {}).get("displayName") or "").lower()
@@ -2692,12 +2634,8 @@ def build_hitter_metrics(
         recent_trend = "NEUTRAL"
 
     display_spot = display_lineup_spot(lineup_spot)
-    hitter_bio = hitter_stats_map.get(player_id, {}) if isinstance(hitter_stats_map, dict) else {}
-    pitcher_bio = pitcher_stats_map.get(opp_pitcher_id, {}) if isinstance(pitcher_stats_map, dict) and opp_pitcher_id is not None and not pd.isna(opp_pitcher_id) else {}
-    bats_code = normalize_hand_code(hitter_bio.get("bat_side"), estimate_handedness_from_name(player_name, "batter"))
-    pitcher_throws_code = normalize_hand_code(pitcher_bio.get("pitch_hand"), estimate_handedness_from_name(opp_pitcher, "pitcher"))
-    bats = hitter_hand_label(bats_code)
-    pitcher_throws = pitcher_hand_label(pitcher_throws_code)
+    bats = estimate_handedness_from_name(player_name, "batter")
+    pitcher_throws = estimate_handedness_from_name(opp_pitcher, "pitcher")
 
     if live_pitcher is None:
         pitch_hr9 = stable_float(f"{opp_pitcher}-hr9", 0.7, 1.9)
@@ -2719,12 +2657,12 @@ def build_hitter_metrics(
         pitch_hr9,
         pitch_barrel_allowed,
         pitch_hard_hit_allowed,
-        pitcher_throws_code,
+        pitcher_throws,
     )
     pitch_context = compute_relevant_pitch_matchup(
         pitch_mix_example,
-        matchup_hand_code(bats_code),
-        pitcher_throws_code,
+        bats,
+        pitcher_throws,
         barrel,
         hard_hit,
         air_pct,
@@ -3202,9 +3140,7 @@ def build_hitter_metrics(
         "Player": player_name,
         "Team": team,
         "Bats": bats,
-        "Bats Code": matchup_hand_code(bats_code),
         "Pitcher Throws": pitcher_throws,
-        "Pitcher Throws Code": pitcher_throws_code,
         "Pitch Mix Mode": pitch_mix_mode,
         "Relevant Pitch Mix": relevant_pitch_mix,
         "Primary Pitch": primary_pitch if primary_pitch is not None else "Mix",
@@ -3775,110 +3711,43 @@ def add_live_homer_counts_to_board(df: pd.DataFrame, schedule: list[dict]) -> pd
     return out
 
 
-
-def backfill_tracker_from_board_snapshots(tracker: pd.DataFrame) -> pd.DataFrame:
-    """Backfill missing tracker rows from saved board snapshots.
-
-    This protects past days when Streamlit refreshed/rebooted before every visible
-    per-game card was written to hr_tracker.csv. It does not overwrite existing
-    result/hr_count data; it only inserts missing rows by date/player/team/game/source.
-    """
-    columns = [
-        "date", "player", "team", "game", "game_pk",
-        "hr_probability", "hr_tier", "hr_eligible", "tracker_source",
-        "result", "hr_count", "result_state", "game_state", "updated_at"
-    ]
-
-    if tracker is None or tracker.empty:
-        tracker = pd.DataFrame(columns=columns)
-    else:
-        tracker = tracker.copy()
-        for col in columns:
-            if col not in tracker.columns:
-                tracker[col] = pd.NA
-        tracker = tracker[columns]
-
-    ensure_snapshot_folder()
-    if not os.path.exists(SNAPSHOT_DIR):
-        return tracker
-
-    existing_keys = set()
-    if not tracker.empty:
-        existing_keys = set(zip(
-            tracker["date"].astype(str),
-            tracker["player"].astype(str).map(normalize_name),
-            tracker["team"].astype(str),
-            tracker["game"].astype(str),
-            tracker["tracker_source"].astype(str),
-        ))
-
-    new_rows = []
-    for name in os.listdir(SNAPSHOT_DIR):
-        match = re.match(r"hr_board_(\d{4}-\d{2}-\d{2})\.csv$", name)
-        if not match:
-            continue
-
-        date_key = match.group(1)
-        try:
-            snap = pd.read_csv(os.path.join(SNAPSHOT_DIR, name))
-        except Exception:
-            continue
-        if snap is None or snap.empty:
-            continue
-
-        if "Tracker Source" not in snap.columns:
-            snap["Tracker Source"] = "CORE_BOARD"
-
-        for _, row in snap.iterrows():
-            player_name = str(row.get("Player", "")).strip()
-            team = str(row.get("Team", "")).strip()
-            game = str(row.get("Game", "")).strip()
-            source = str(row.get("Tracker Source", "CORE_BOARD")).strip() or "CORE_BOARD"
-            if not player_name or not team or not game:
-                continue
-
-            key = (str(date_key), normalize_name(player_name), team, game, source)
-            if key in existing_keys:
-                continue
-
-            new_rows.append({
-                "date": date_key,
-                "player": player_name,
-                "team": team,
-                "game": game,
-                "game_pk": row.get("game_pk", pd.NA),
-                "hr_probability": row.get("HR Probability %", pd.NA),
-                "hr_tier": row.get("HR Tier", pd.NA),
-                "hr_eligible": int(bool(row.get("HR Eligible", True))),
-                "tracker_source": source,
-                "result": pd.NA,
-                "hr_count": 0,
-                "result_state": "BACKFILLED_FROM_BOARD",
-                "game_state": row.get("game_state", pd.NA),
-                "updated_at": now_et_string(),
-            })
-            existing_keys.add(key)
-
-    if new_rows:
-        tracker = pd.concat([tracker, pd.DataFrame(new_rows)], ignore_index=True)
-        tracker = tracker.drop_duplicates(
-            subset=["date", "player", "team", "game", "tracker_source"],
-            keep="last"
-        ).reset_index(drop=True)
-        save_tracker(tracker)
-
-    return tracker
-
-
 def sync_tracker_with_board(tracked_df: pd.DataFrame):
     tracker = load_tracker()
     date_key = today_str()
 
-    if tracked_df.empty:
-        return tracker
-
     if "hr_count" not in tracker.columns:
         tracker["hr_count"] = 0
+
+    if tracked_df is None or tracked_df.empty:
+        return tracker
+
+    tracked_clean = tracked_df.copy()
+    if "Tracker Source" not in tracked_clean.columns:
+        tracked_clean["Tracker Source"] = "CORE_BOARD"
+
+    visible_keys = set()
+    for _, row in tracked_clean.iterrows():
+        visible_keys.add((
+            str(date_key),
+            normalize_name(str(row.get("Player", ""))),
+            str(row.get("Team", "")),
+            str(row.get("Game", "")),
+            str(row.get("Tracker Source", "CORE_BOARD")),
+        ))
+
+    if not tracker.empty:
+        def _tracker_key(r):
+            return (
+                str(r.get("date", "")),
+                normalize_name(str(r.get("player", ""))),
+                str(r.get("team", "")),
+                str(r.get("game", "")),
+                str(r.get("tracker_source", "CORE_BOARD")),
+            )
+
+        today_mask = tracker["date"].astype(str) == str(date_key)
+        keep_mask = ~today_mask | tracker.apply(lambda r: _tracker_key(r) in visible_keys, axis=1)
+        tracker = tracker[keep_mask].copy().reset_index(drop=True)
 
     existing_keys = set()
     if not tracker.empty:
@@ -3893,7 +3762,7 @@ def sync_tracker_with_board(tracked_df: pd.DataFrame):
             ))
 
     new_rows = []
-    for _, row in tracked_df.iterrows():
+    for _, row in tracked_clean.iterrows():
         source = str(row.get("Tracker Source", "CORE_BOARD"))
         player_name = str(row["Player"])
         key = (str(date_key), normalize_name(player_name), str(row["Team"]), str(row["Game"]), source)
@@ -3919,10 +3788,14 @@ def sync_tracker_with_board(tracked_df: pd.DataFrame):
 
     if new_rows:
         tracker = pd.concat([tracker, pd.DataFrame(new_rows)], ignore_index=True)
-        save_tracker(tracker)
 
+    tracker = tracker.drop_duplicates(
+        subset=["date", "player", "team", "game", "tracker_source"],
+        keep="last"
+    ).reset_index(drop=True)
+
+    save_tracker(tracker)
     return tracker
-
 
 def auto_update_tracker_results(tracker: pd.DataFrame, schedule: list[dict]):
     if tracker.empty:
@@ -4229,42 +4102,6 @@ def summarize_tracker_sources_for_date(df: pd.DataFrame, date_key: str) -> dict:
     return buckets
 
 
-
-def find_snapshot_tracker_missing_rows(snapshot_df: pd.DataFrame, tracker_df: pd.DataFrame, date_key: str) -> pd.DataFrame:
-    """Show saved board rows that still do not have a matching tracker row."""
-    if snapshot_df is None or snapshot_df.empty:
-        return pd.DataFrame()
-    snap = snapshot_df.copy()
-    if "Tracker Source" not in snap.columns:
-        snap["Tracker Source"] = "CORE_BOARD"
-
-    if tracker_df is None or tracker_df.empty:
-        existing_keys = set()
-    else:
-        day = tracker_df[tracker_df["date"].astype(str) == str(date_key)].copy()
-        existing_keys = set(zip(
-            day["player"].astype(str).map(normalize_name),
-            day["team"].astype(str),
-            day["game"].astype(str),
-            day["tracker_source"].astype(str),
-        ))
-
-    missing_rows = []
-    for _, row in snap.iterrows():
-        key = (
-            normalize_name(row.get("Player", "")),
-            str(row.get("Team", "")),
-            str(row.get("Game", "")),
-            str(row.get("Tracker Source", "CORE_BOARD")),
-        )
-        if key not in existing_keys:
-            missing_rows.append(row)
-
-    if not missing_rows:
-        return pd.DataFrame()
-    return pd.DataFrame(missing_rows).reset_index(drop=True)
-
-
 def summarize_combo_tracker(df: pd.DataFrame) -> dict:
     summary = {
         "today_total": 0, "today_full_hits": 0, "today_partial_hits": 0,
@@ -4469,10 +4306,11 @@ def _pitch_display_name(code: str) -> str:
 
 
 def _pitch_grade_from_context(row: pd.Series, pitch: str, usage: float) -> tuple[int, str]:
-    pitcher_throws = normalize_hand_code(row.get("Pitcher Throws Code", row.get("Pitcher Throws", "R")), "R")
-    batter_bats = matchup_hand_code(row.get("Bats Code", row.get("Bats", "R")), "R")
+    pitcher_throws = _display_value(row.get("Pitcher Throws", "R"))
+    if pitcher_throws not in {"L", "R"}:
+        pitcher_throws = "R"
     score, reason, _ = compute_pitch_matchup_score(
-        pitch, usage, batter_bats, pitcher_throws,
+        pitch, usage, _display_value(row.get("Bats", "R")), pitcher_throws,
         safe_float(row.get("Barrel%"), 0.0), safe_float(row.get("HardHit%"), 0.0),
         safe_float(row.get("AIR%"), 0.0), safe_float(row.get("LaunchAngle"), 14.0),
         safe_float(row.get("xSLG"), 0.0), safe_float(row.get("xwOBA"), 0.0),
@@ -4483,7 +4321,9 @@ def _pitch_grade_from_context(row: pd.Series, pitch: str, usage: float) -> tuple
 
 def _build_lab_pitch_rows(row: pd.Series) -> list[dict]:
     pitcher = _display_value(row.get("Pitcher"))
-    pitcher_throws = normalize_hand_code(row.get("Pitcher Throws Code", row.get("Pitcher Throws", "R")), "R")
+    pitcher_throws = _display_value(row.get("Pitcher Throws", "R"))
+    if pitcher_throws not in {"L", "R"}:
+        pitcher_throws = "R"
     pitch_mix = build_pitch_mix_profile(
         pitcher, row.get("Pitcher ID", row.get("Pitcher_ID", "")),
         safe_float(row.get("Pitcher_HR9_Last7"), 1.0),
@@ -4636,17 +4476,24 @@ def render_player_card(row: pd.Series, rank_override=None):
 
     with st.expander("🧪 Matchup Lab", expanded=False):
         render_matchup_lab(row)
-        compact_bits = [
-            f"<div class='bf-compact-detail'><strong>Pitcher HR</strong><br>L7 {pitch_hr9_l7:.2f} · Season {pitch_hr9_season:.2f} · Recent {pitch_hr9_recent:.2f}</div>",
-            f"<div class='bf-compact-detail'><strong>Contact Allowed</strong><br>Barrel {pitch_barrel_allowed:.1f}% · HH {pitch_hh_allowed:.1f}%</div>",
-            f"<div class='bf-compact-detail'><strong>L10 BBE</strong><br>{escape(l10_bbe_trend)} · {l10_bbe_quality:.1f} · ~{l10_bbe_events} events</div>",
-            f"<div class='bf-compact-detail'><strong>Context</strong><br>{escape(pitch_mode)} {escape(pitch_mix)} · xSLG {xslg:.3f} · {escape(recent)}</div>",
-        ]
-        st.markdown("<div class='bf-compact-detail-grid'>" + "".join(compact_bits) + "</div>", unsafe_allow_html=True)
-        st.caption(f"Weather: {weather}")
-        st.caption(f"Why: {why}")
+        st.markdown("**Signal Bars**")
+        st.markdown(_signal_bar_html("HR Probability", hr_prob, 28, "%", good_at=14, warn_at=9), unsafe_allow_html=True)
+        st.markdown(_signal_bar_html("Matchup Score", matchup_score, 75, good_at=55, warn_at=38), unsafe_allow_html=True)
+        st.markdown(_signal_bar_html("Pitcher HR Attackability", hr_attack_pct, 100, "%", good_at=70, warn_at=50), unsafe_allow_html=True)
+        st.caption(f"Pitcher profile: {pitcher_profile} | L7 HR/9: {pitch_hr9_l7:.2f} | Season HR/9: {pitch_hr9_season:.2f} | Recent HR/9: {pitch_hr9_recent:.2f} | Barrels allowed: {pitch_barrel_allowed:.1f} | Hard-hit allowed: {pitch_hh_allowed:.1f}")
         if pitcher_label:
-            st.caption(f"Attackability: {pitcher_label}")
+            st.caption(f"Attackability detail: {pitcher_label}")
+        st.markdown(_signal_bar_html("Statcast Authority", authority_score, 55, good_at=30, warn_at=17), unsafe_allow_html=True)
+        st.markdown(_signal_bar_html("L10 BBE Quality", l10_bbe_quality, 100, "%", good_at=70, warn_at=45), unsafe_allow_html=True)
+        st.caption(f"L10 BBE proxy: {l10_bbe_trend} over ~{l10_bbe_events} recent batted-ball events/contact chances")
+        st.markdown(_signal_bar_html("Barrel", barrel, 20, "%", good_at=11, warn_at=8), unsafe_allow_html=True)
+        st.markdown(_signal_bar_html("Hard Hit", hard_hit, 60, "%", good_at=42, warn_at=35), unsafe_allow_html=True)
+        st.markdown(_signal_bar_html("Air Ball", air_pct, 75, "%", good_at=55, warn_at=48), unsafe_allow_html=True)
+        st.markdown(_signal_bar_html("Ground Ball Risk", ground_ball, 60, "%", good_at=44, warn_at=50, lower_is_better=True), unsafe_allow_html=True)
+
+        st.caption(f"Pitch Mix: {pitch_mode} • {pitch_mix} | xSLG: {xslg:.3f} | Trend: {recent}")
+        st.caption(f"Weather: {weather}")
+        st.write(f"Why: {why}")
         if why2 and why2 != why:
             st.caption(why2)
 
@@ -4701,7 +4548,6 @@ tracked_df = build_visible_tracker_pool(locked_df_raw, schedule)
 save_daily_board_snapshot(tracked_df, today_str())
 
 tracker = sync_tracker_with_board(tracked_df)
-tracker = backfill_tracker_from_board_snapshots(tracker)
 combo_board = build_combo_board(locked_df_raw)
 combo_tracker = sync_combo_tracker_with_board(combo_board)
 
@@ -4739,7 +4585,7 @@ if locked_df.empty:
 
 render_board_key()
 
-base_tabs = ["JR HR Board", "Top 12", "Top HR Targets", "Pitchers to Attack", "HR Combos", "Hits + Runs + RBIs", "Batter Breakdown", "Homerun Tracker"]
+base_tabs = ["JR HR Board", "Top 12", "Top HR Targets", "Pitchers to Attack", "HR Combos", "Hits + Runs + RBIs", "Batter Breakdown", "Accuracy Tracker"]
 schedule = sort_schedule_rows(schedule)
 game_tabs = [f"{format_game_time_et(g.get('game_time', ''))} | {g['game_key']}" for g in schedule]
 tabs = st.tabs(base_tabs + game_tabs)
@@ -4851,8 +4697,8 @@ with tabs[6]:
     display_existing_columns(breakdown, breakdown_cols)
 
 with tabs[7]:
-    st.subheader("Homerun Tracker")
-    st.caption("Homerun tracker is broken into separate sections. Every visible per-game HR card is now tied to tracker rows, with snapshot backfill protecting past slates.")
+    st.subheader("Accuracy Tracker")
+    st.caption("Tracker is broken into separate sections. Newly surfaced per-game picks are now added instead of being blocked after the first tracker write.")
 
     date_options = available_tracker_dates(tracker)
     selected_tracker_date = st.selectbox("Review slate date", options=date_options, index=0)
@@ -4915,11 +4761,6 @@ with tabs[7]:
         st.caption("No tracker rows for selected date.")
 
     selected_board_snapshot = load_daily_board_snapshot(selected_tracker_date)
-    missing_from_tracker = find_snapshot_tracker_missing_rows(selected_board_snapshot, tracker, selected_tracker_date)
-    if not missing_from_tracker.empty:
-        st.warning("Saved board rows were found that are not in the tracker yet. They will be backfilled on refresh/update.")
-        display_existing_columns(missing_from_tracker, ["Tracker Source", "Player", "Team", "Game", "Pitcher", "HR Probability %", "HR Tier"])
-
     if not selected_board_snapshot.empty:
         st.divider()
         st.markdown("### Saved Board Snapshot for Selected Date")
