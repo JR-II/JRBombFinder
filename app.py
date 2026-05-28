@@ -120,10 +120,12 @@ hr { margin-top: .38rem !important; margin-bottom: .38rem !important; }
   min-width: 0 !important;
 }
 .bf-lab-grid {
-  grid-template-columns: 1fr !important;
+  grid-template-columns: 160px minmax(0, 1fr) !important;
+  gap: 9px !important;
 }
 .bf-pitch-grid {
-  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  gap: 6px !important;
 }
 .bf-pitch-card {
   min-width: 0 !important;
@@ -144,6 +146,25 @@ hr { margin-top: .38rem !important; margin-bottom: .38rem !important; }
   text-overflow: ellipsis !important;
   vertical-align: bottom !important;
 }
+.bf-compact-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  margin-top: 8px;
+}
+.bf-compact-detail {
+  border: 1px solid rgba(255,255,255,.10);
+  border-radius: 9px;
+  background: rgba(255,255,255,.035);
+  padding: 6px 7px;
+  font-size: .68rem;
+  color: #c9d0da;
+}
+.bf-compact-detail strong { color:#f5f5f5; }
+@media (max-width: 900px) {
+  .bf-lab-grid { grid-template-columns: 1fr !important; }
+  .bf-pitch-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+}
 @media (max-width: 520px) {
   .bf-title { font-size: 1.65rem !important; }
   .bf-chip, .bf-key-chip { font-size: .66rem !important; padding: 3px 7px !important; }
@@ -151,7 +172,7 @@ hr { margin-top: .38rem !important; margin-bottom: .38rem !important; }
   .bf-lab-shell { padding: 8px !important; }
   .bf-lab-top { grid-template-columns: repeat(3, minmax(0, 1fr)) !important; }
   .bf-lab-name { font-size: .86rem !important; }
-  .bf-pitch-grid { grid-template-columns: 1fr !important; }
+  .bf-pitch-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
   .bf-shape-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
 }
 
@@ -238,15 +259,48 @@ def save_daily_tracker_snapshot(tracker_df: pd.DataFrame, snapshot_date: str):
 
 
 def save_daily_board_snapshot(board_df: pd.DataFrame, snapshot_date: str):
-    """Persist the original surfaced HR board once per day so historical predictions cannot be rewritten."""
+    """Persist surfaced HR board rows without erasing earlier locked predictions.
+
+    Important:
+    - Existing rows are kept so old predictions are not rewritten after refresh/reboot.
+    - Newly surfaced rows, especially per-game GAME_HR rows after lineup/news updates,
+      are appended so every visible name has a tracker trail.
+    """
     ensure_snapshot_folder()
     board_path = os.path.join(SNAPSHOT_DIR, f"hr_board_{snapshot_date}.csv")
-    if os.path.exists(board_path):
+
+    if board_df is None or board_df.empty:
         return
+
     clean_board = board_df.copy()
     if "Actual HR Today" in clean_board.columns:
         clean_board = clean_board.drop(columns=["Actual HR Today"])
-    atomic_write_csv(clean_board, board_path)
+
+    if os.path.exists(board_path):
+        try:
+            existing = pd.read_csv(board_path)
+        except Exception:
+            existing = pd.DataFrame()
+
+        if existing is not None and not existing.empty:
+            all_cols = list(dict.fromkeys(list(existing.columns) + list(clean_board.columns)))
+            for col in all_cols:
+                if col not in existing.columns:
+                    existing[col] = pd.NA
+                if col not in clean_board.columns:
+                    clean_board[col] = pd.NA
+            merged = pd.concat([existing[all_cols], clean_board[all_cols]], ignore_index=True)
+
+            dedupe_cols = [c for c in ["Tracker Source", "Player", "Team", "Game"] if c in merged.columns]
+            if dedupe_cols:
+                merged = merged.drop_duplicates(subset=dedupe_cols, keep="first")
+            else:
+                merged = merged.drop_duplicates(keep="first")
+
+            atomic_write_csv(merged.reset_index(drop=True), board_path)
+            return
+
+    atomic_write_csv(clean_board.reset_index(drop=True), board_path)
 
 
 def load_daily_board_snapshot(snapshot_date: str) -> pd.DataFrame:
@@ -347,51 +401,6 @@ PARK_COORDS = {
     "TOR": (43.6414, -79.3894),
     "WSH": (38.8730, -77.0074),
 }
-
-# High-confidence handedness corrections used when old locked rows or API fallbacks carry only R/L/S.
-# MLB StatsAPI batSide / pitchHand is still the primary source; this only prevents bad fallback displays.
-KNOWN_BAT_HAND_OVERRIDES = {
-    "jesus sanchez": "L",
-    "jesús sánchez": "L",
-    "yordan alvarez": "L",
-    "yordan álvarez": "L",
-}
-
-KNOWN_PITCH_HAND_OVERRIDES = {}
-
-def corrected_batter_hand_code(player_name: str, raw_value=None, default="R") -> str:
-    key = normalize_name(player_name)
-    if key in KNOWN_BAT_HAND_OVERRIDES:
-        return KNOWN_BAT_HAND_OVERRIDES[key]
-    return normalize_hand_code(raw_value, default)
-
-def corrected_pitcher_hand_code(pitcher_name: str, raw_value=None, default="R") -> str:
-    key = normalize_name(pitcher_name)
-    if key in KNOWN_PITCH_HAND_OVERRIDES:
-        return KNOWN_PITCH_HAND_OVERRIDES[key]
-    return normalize_hand_code(raw_value, default)
-
-def enforce_display_hand_labels(df: pd.DataFrame) -> pd.DataFrame:
-    """Make every displayed/locked row show LHB/RHB/SHB and RHP/LHP, never bare R/L/S."""
-    if df is None or df.empty:
-        return df
-    out = df.copy()
-    if "Player" in out.columns:
-        raw_bats = out["Bats"] if "Bats" in out.columns else pd.Series([pd.NA] * len(out), index=out.index)
-        out["Bats Code"] = [
-            corrected_batter_hand_code(p, b, "R")
-            for p, b in zip(out["Player"], raw_bats)
-        ]
-        out["Bats"] = out["Bats Code"].apply(hitter_hand_label)
-    if "Pitcher" in out.columns:
-        raw_throws = out["Pitcher Throws"] if "Pitcher Throws" in out.columns else pd.Series([pd.NA] * len(out), index=out.index)
-        out["Pitcher Throws Code"] = [
-            corrected_pitcher_hand_code(p, t, "R")
-            for p, t in zip(out["Pitcher"], raw_throws)
-        ]
-        out["Pitcher Throws"] = out["Pitcher Throws Code"].apply(pitcher_hand_label)
-    return out
-
 
 
 
@@ -766,6 +775,8 @@ def pitcher_hand_label(value, default="R") -> str:
 
 
 def matchup_hand_code(value, default="R") -> str:
+    # Switch hitters should not be treated as same-handed by accident.
+    # For matchup math, mark switch hitters as opposite-hand neutral/edge.
     code = normalize_hand_code(value, default)
     return "L" if code == "S" else code
 
@@ -1209,7 +1220,7 @@ def passes_air_authority_profile(
         or (hard_hit >= 45 and air_total >= 45)
     )
 
-    hard_reject = ground_ball >= 58 and not authority_override
+    hard_reject = ground_ball >= 55 and not authority_override
     survives = (air_authority_core or authority_override) and not hard_reject
 
     return {
@@ -1276,28 +1287,15 @@ def compute_multi_pitch_authority_score(
 
     return round(score, 2)
 
-def get_gb_explanation(ground_ball: float, barrel: float, air_pct: float, xslg: float, l10_bbe_quality: float = 0.0, l10_bbe_events: int = 0) -> str:
-    """GB label guardrail.
-
-    Do not hand out scary GB grades to hitters with real damage/lift indicators.
-    A hitter showing strong recent BBE quality or high authority should stay as plain GB PASS/CAUTION,
-    not a false "heavy downgrade" tag.
-    """
-    strong_recent_bbe = safe_float(l10_bbe_quality, 0.0) >= 65 and safe_int(l10_bbe_events, 0) >= 6
-    authority_override = barrel >= 12 or xslg >= 0.500 or air_pct >= 58 or strong_recent_bbe
-
-    if ground_ball >= 58 and not authority_override:
-        return "Stay away: 58%+ GB"
+def get_gb_explanation(ground_ball: float, barrel: float, air_pct: float, xslg: float) -> str:
     if ground_ball >= 55:
-        if authority_override:
-            return "GB elevated, but damage traits keep it alive"
-        return "Heavy GB downgrade"
+        return "Stay away: 55%+ GB"
     if ground_ball >= 50:
-        if authority_override:
-            return "GB caution cleared by damage/lift traits"
-        return "GB caution"
+        if barrel >= 12 or xslg >= 0.500 or air_pct >= 60:
+            return "Heavy GB, but real damage traits keep it in play"
+        return "Heavy GB downgrade"
     if ground_ball >= 45:
-        if authority_override:
+        if barrel >= 11 or xslg >= 0.470 or air_pct >= 58:
             return "Borderline GB, but damage traits keep it alive"
         return "Borderline GB caution"
     return "Clean enough launch shape"
@@ -1642,7 +1640,9 @@ def fetch_people_stats(person_ids_tuple: tuple, group: str):
 
         for person in data.get("people", []):
             pid = person.get("id")
-            stats = {"season": {}, "gamelog": []}
+            bat_side = ((person.get("batSide") or {}).get("code") or (person.get("batSide") or {}).get("description") or "")
+            pitch_hand = ((person.get("pitchHand") or {}).get("code") or (person.get("pitchHand") or {}).get("description") or "")
+            stats = {"season": {}, "gamelog": [], "bat_side": bat_side, "pitch_hand": pitch_hand}
 
             for stat_block in person.get("stats", []):
                 stat_type = ((stat_block.get("type") or {}).get("displayName") or "").lower()
@@ -2233,7 +2233,7 @@ def qualifies_hr_profile(
         hr_eligible = False
     elif awful_hr_shape and not elite_override:
         hr_eligible = False
-    elif ground_ball >= 58 and not elite_override and not profile_gate["survives"]:
+    elif ground_ball >= 55 and not elite_override and not profile_gate["survives"]:
         hr_eligible = False
     elif not borderline_gb_survival:
         hr_eligible = False
@@ -2692,8 +2692,12 @@ def build_hitter_metrics(
         recent_trend = "NEUTRAL"
 
     display_spot = display_lineup_spot(lineup_spot)
-    bats = estimate_handedness_from_name(player_name, "batter")
-    pitcher_throws = estimate_handedness_from_name(opp_pitcher, "pitcher")
+    hitter_bio = hitter_stats_map.get(player_id, {}) if isinstance(hitter_stats_map, dict) else {}
+    pitcher_bio = pitcher_stats_map.get(opp_pitcher_id, {}) if isinstance(pitcher_stats_map, dict) and opp_pitcher_id is not None and not pd.isna(opp_pitcher_id) else {}
+    bats_code = normalize_hand_code(hitter_bio.get("bat_side"), estimate_handedness_from_name(player_name, "batter"))
+    pitcher_throws_code = normalize_hand_code(pitcher_bio.get("pitch_hand"), estimate_handedness_from_name(opp_pitcher, "pitcher"))
+    bats = hitter_hand_label(bats_code)
+    pitcher_throws = pitcher_hand_label(pitcher_throws_code)
 
     if live_pitcher is None:
         pitch_hr9 = stable_float(f"{opp_pitcher}-hr9", 0.7, 1.9)
@@ -2715,12 +2719,12 @@ def build_hitter_metrics(
         pitch_hr9,
         pitch_barrel_allowed,
         pitch_hard_hit_allowed,
-        pitcher_throws,
+        pitcher_throws_code,
     )
     pitch_context = compute_relevant_pitch_matchup(
         pitch_mix_example,
-        bats,
-        pitcher_throws,
+        matchup_hand_code(bats_code),
+        pitcher_throws_code,
         barrel,
         hard_hit,
         air_pct,
@@ -2853,26 +2857,13 @@ def build_hitter_metrics(
     elif statcast_authority_tier == "WEAK" and pitch_mix_mode == "BALANCED" and not elite_statcast_profile:
         pitch_isolation_bonus = min(pitch_isolation_bonus, -2.0)
 
-    strong_recent_bbe_gb_guard = l10_bbe_quality >= 65 and l10_bbe_events >= 6
-    gb_damage_override = (
-        strong_recent_bbe_gb_guard
-        or barrel >= 12
-        or xslg >= 0.500
-        or air_pct >= 58
-        or (hard_hit >= 45 and air_pct >= 50)
-    )
-
     gb_status = "PASS"
-    if ground_ball >= 58 and not gb_damage_override:
+    if ground_ball >= 55:
         gb_status = "AUTO NO"
-    elif ground_ball >= 55 and not gb_damage_override:
+    elif ground_ball >= 50:
         gb_status = "HEAVY DOWNGRADE"
-    elif ground_ball >= 50 and not gb_damage_override:
+    elif ground_ball >= 45:
         gb_status = "CAUTION"
-    elif ground_ball >= 45 and not gb_damage_override:
-        gb_status = "CAUTION"
-    else:
-        gb_status = "PASS"
 
     qual = qualifies_hr_profile(
         barrel=barrel,
@@ -2979,14 +2970,12 @@ def build_hitter_metrics(
 
     if ground_ball < 40:
         base_score += 4.0
-    elif gb_damage_override and ground_ball >= 45:
-        base_score += 1.0
     elif 45 <= ground_ball < 50:
-        base_score -= 4.0
+        base_score -= 7.0
     elif 50 <= ground_ball < 55:
-        base_score -= 8.0
+        base_score -= 14.0
     elif ground_ball >= 55:
-        base_score -= 16.0
+        base_score -= 25.0
 
     if air_pct >= 65:
         base_score += 5.0
@@ -3072,7 +3061,7 @@ def build_hitter_metrics(
     if lineup_spot is not None:
         hrr_score += max(0, 10 - lineup_spot) * 1.5
 
-    gb_note = get_gb_explanation(ground_ball, barrel, air_pct, xslg, l10_bbe_quality, l10_bbe_events)
+    gb_note = get_gb_explanation(ground_ball, barrel, air_pct, xslg)
 
     reasons = []
     reasons.append(f"{lineup_source} lineup pool")
@@ -3128,9 +3117,7 @@ def build_hitter_metrics(
     else:
         reasons.append("Bullpen rested")
 
-    if gb_damage_override and ground_ball >= 45:
-        reasons.append("GB cleared by damage traits")
-    elif ground_ball >= 55:
+    if ground_ball >= 50:
         reasons.append("Heavy GB downgrade")
     elif ground_ball >= 45:
         reasons.append("Borderline GB caution")
@@ -3190,14 +3177,12 @@ def build_hitter_metrics(
     elif recent_trend == "COLD":
         model_rank_score -= 5.0
 
-    if gb_damage_override and ground_ball >= 45:
-        model_rank_score += 1.0
-    elif ground_ball >= 55:
-        model_rank_score -= 14.0
+    if ground_ball >= 55:
+        model_rank_score -= 18.0
     elif ground_ball >= 50:
-        model_rank_score -= 7.0
+        model_rank_score -= 10.0
     elif ground_ball >= 45:
-        model_rank_score -= 3.0
+        model_rank_score -= 4.0
 
     if lineup_spot is not None:
         if lineup_spot <= 4:
@@ -3217,7 +3202,9 @@ def build_hitter_metrics(
         "Player": player_name,
         "Team": team,
         "Bats": bats,
+        "Bats Code": matchup_hand_code(bats_code),
         "Pitcher Throws": pitcher_throws,
+        "Pitcher Throws Code": pitcher_throws_code,
         "Pitch Mix Mode": pitch_mix_mode,
         "Relevant Pitch Mix": relevant_pitch_mix,
         "Primary Pitch": primary_pitch if primary_pitch is not None else "Mix",
@@ -3553,16 +3540,11 @@ def get_research_shortlist_pool(df: pd.DataFrame) -> pd.DataFrame:
         | authority_keep
     )
 
-    l10_bbe_quality = safe_numeric_series(pool, "L10 BBE Quality", 0.0)
-    l10_bbe_events = safe_numeric_series(pool, "L10 BBE Events", 0.0)
-    recent_bbe_keep = (l10_bbe_quality >= 65.0) & (l10_bbe_events >= 6.0)
-
     gb_keep = (
-        (gb <= 50.0)
+        (gb <= 47.5)
         | elite_shape
         | authority_keep
-        | recent_bbe_keep
-        | ((gb <= 55.0) & ((barrel >= 11.0) | (xslg >= 0.485) | (air_pct >= 58.0)))
+        | ((gb <= 50.0) & (barrel >= 11.0) & (xslg >= 0.485))
     )
 
     projected_keep = (
@@ -3791,6 +3773,101 @@ def add_live_homer_counts_to_board(df: pd.DataFrame, schedule: list[dict]) -> pd
                 lambda p: get_player_hr_count_from_map(homer_map, p)
             )
     return out
+
+
+
+def backfill_tracker_from_board_snapshots(tracker: pd.DataFrame) -> pd.DataFrame:
+    """Backfill missing tracker rows from saved board snapshots.
+
+    This protects past days when Streamlit refreshed/rebooted before every visible
+    per-game card was written to hr_tracker.csv. It does not overwrite existing
+    result/hr_count data; it only inserts missing rows by date/player/team/game/source.
+    """
+    columns = [
+        "date", "player", "team", "game", "game_pk",
+        "hr_probability", "hr_tier", "hr_eligible", "tracker_source",
+        "result", "hr_count", "result_state", "game_state", "updated_at"
+    ]
+
+    if tracker is None or tracker.empty:
+        tracker = pd.DataFrame(columns=columns)
+    else:
+        tracker = tracker.copy()
+        for col in columns:
+            if col not in tracker.columns:
+                tracker[col] = pd.NA
+        tracker = tracker[columns]
+
+    ensure_snapshot_folder()
+    if not os.path.exists(SNAPSHOT_DIR):
+        return tracker
+
+    existing_keys = set()
+    if not tracker.empty:
+        existing_keys = set(zip(
+            tracker["date"].astype(str),
+            tracker["player"].astype(str).map(normalize_name),
+            tracker["team"].astype(str),
+            tracker["game"].astype(str),
+            tracker["tracker_source"].astype(str),
+        ))
+
+    new_rows = []
+    for name in os.listdir(SNAPSHOT_DIR):
+        match = re.match(r"hr_board_(\d{4}-\d{2}-\d{2})\.csv$", name)
+        if not match:
+            continue
+
+        date_key = match.group(1)
+        try:
+            snap = pd.read_csv(os.path.join(SNAPSHOT_DIR, name))
+        except Exception:
+            continue
+        if snap is None or snap.empty:
+            continue
+
+        if "Tracker Source" not in snap.columns:
+            snap["Tracker Source"] = "CORE_BOARD"
+
+        for _, row in snap.iterrows():
+            player_name = str(row.get("Player", "")).strip()
+            team = str(row.get("Team", "")).strip()
+            game = str(row.get("Game", "")).strip()
+            source = str(row.get("Tracker Source", "CORE_BOARD")).strip() or "CORE_BOARD"
+            if not player_name or not team or not game:
+                continue
+
+            key = (str(date_key), normalize_name(player_name), team, game, source)
+            if key in existing_keys:
+                continue
+
+            new_rows.append({
+                "date": date_key,
+                "player": player_name,
+                "team": team,
+                "game": game,
+                "game_pk": row.get("game_pk", pd.NA),
+                "hr_probability": row.get("HR Probability %", pd.NA),
+                "hr_tier": row.get("HR Tier", pd.NA),
+                "hr_eligible": int(bool(row.get("HR Eligible", True))),
+                "tracker_source": source,
+                "result": pd.NA,
+                "hr_count": 0,
+                "result_state": "BACKFILLED_FROM_BOARD",
+                "game_state": row.get("game_state", pd.NA),
+                "updated_at": now_et_string(),
+            })
+            existing_keys.add(key)
+
+    if new_rows:
+        tracker = pd.concat([tracker, pd.DataFrame(new_rows)], ignore_index=True)
+        tracker = tracker.drop_duplicates(
+            subset=["date", "player", "team", "game", "tracker_source"],
+            keep="last"
+        ).reset_index(drop=True)
+        save_tracker(tracker)
+
+    return tracker
 
 
 def sync_tracker_with_board(tracked_df: pd.DataFrame):
@@ -4152,6 +4229,42 @@ def summarize_tracker_sources_for_date(df: pd.DataFrame, date_key: str) -> dict:
     return buckets
 
 
+
+def find_snapshot_tracker_missing_rows(snapshot_df: pd.DataFrame, tracker_df: pd.DataFrame, date_key: str) -> pd.DataFrame:
+    """Show saved board rows that still do not have a matching tracker row."""
+    if snapshot_df is None or snapshot_df.empty:
+        return pd.DataFrame()
+    snap = snapshot_df.copy()
+    if "Tracker Source" not in snap.columns:
+        snap["Tracker Source"] = "CORE_BOARD"
+
+    if tracker_df is None or tracker_df.empty:
+        existing_keys = set()
+    else:
+        day = tracker_df[tracker_df["date"].astype(str) == str(date_key)].copy()
+        existing_keys = set(zip(
+            day["player"].astype(str).map(normalize_name),
+            day["team"].astype(str),
+            day["game"].astype(str),
+            day["tracker_source"].astype(str),
+        ))
+
+    missing_rows = []
+    for _, row in snap.iterrows():
+        key = (
+            normalize_name(row.get("Player", "")),
+            str(row.get("Team", "")),
+            str(row.get("Game", "")),
+            str(row.get("Tracker Source", "CORE_BOARD")),
+        )
+        if key not in existing_keys:
+            missing_rows.append(row)
+
+    if not missing_rows:
+        return pd.DataFrame()
+    return pd.DataFrame(missing_rows).reset_index(drop=True)
+
+
 def summarize_combo_tracker(df: pd.DataFrame) -> dict:
     summary = {
         "today_total": 0, "today_full_hits": 0, "today_partial_hits": 0,
@@ -4356,11 +4469,10 @@ def _pitch_display_name(code: str) -> str:
 
 
 def _pitch_grade_from_context(row: pd.Series, pitch: str, usage: float) -> tuple[int, str]:
-    pitcher_throws = _display_value(row.get("Pitcher Throws", "R"))
-    if pitcher_throws not in {"L", "R"}:
-        pitcher_throws = "R"
+    pitcher_throws = normalize_hand_code(row.get("Pitcher Throws Code", row.get("Pitcher Throws", "R")), "R")
+    batter_bats = matchup_hand_code(row.get("Bats Code", row.get("Bats", "R")), "R")
     score, reason, _ = compute_pitch_matchup_score(
-        pitch, usage, _display_value(row.get("Bats", "R")), pitcher_throws,
+        pitch, usage, batter_bats, pitcher_throws,
         safe_float(row.get("Barrel%"), 0.0), safe_float(row.get("HardHit%"), 0.0),
         safe_float(row.get("AIR%"), 0.0), safe_float(row.get("LaunchAngle"), 14.0),
         safe_float(row.get("xSLG"), 0.0), safe_float(row.get("xwOBA"), 0.0),
@@ -4371,9 +4483,7 @@ def _pitch_grade_from_context(row: pd.Series, pitch: str, usage: float) -> tuple
 
 def _build_lab_pitch_rows(row: pd.Series) -> list[dict]:
     pitcher = _display_value(row.get("Pitcher"))
-    pitcher_throws = _display_value(row.get("Pitcher Throws", "R"))
-    if pitcher_throws not in {"L", "R"}:
-        pitcher_throws = "R"
+    pitcher_throws = normalize_hand_code(row.get("Pitcher Throws Code", row.get("Pitcher Throws", "R")), "R")
     pitch_mix = build_pitch_mix_profile(
         pitcher, row.get("Pitcher ID", row.get("Pitcher_ID", "")),
         safe_float(row.get("Pitcher_HR9_Last7"), 1.0),
@@ -4391,8 +4501,8 @@ def _build_lab_pitch_rows(row: pd.Series) -> list[dict]:
 def render_matchup_lab(row: pd.Series):
     player = _display_value(row.get("Player"))
     pitcher = _display_value(row.get("Pitcher"))
-    bats = hitter_hand_label(corrected_batter_hand_code(player, row.get("Bats", row.get("Bats Code", "R")), "R"))
-    throws = pitcher_hand_label(corrected_pitcher_hand_code(pitcher, row.get("Pitcher Throws", row.get("Pitcher Throws Code", "R")), "R"))
+    bats = _display_value(row.get("Bats", "?"))
+    throws = _display_value(row.get("Pitcher Throws", "?"))
     overall = safe_float(row.get("Matchup Advantage Score"), 0.0)
     hr_power = safe_float(row.get("Statcast Authority Score"), 0.0)
     hr_attack = safe_float(row.get("HR Attackability %", _attackability_pct(safe_float(row.get("HR Attackability Score"), 0.0))), 0.0)
@@ -4526,24 +4636,17 @@ def render_player_card(row: pd.Series, rank_override=None):
 
     with st.expander("🧪 Matchup Lab", expanded=False):
         render_matchup_lab(row)
-        st.markdown("**Signal Bars**")
-        st.markdown(_signal_bar_html("HR Probability", hr_prob, 28, "%", good_at=14, warn_at=9), unsafe_allow_html=True)
-        st.markdown(_signal_bar_html("Matchup Score", matchup_score, 75, good_at=55, warn_at=38), unsafe_allow_html=True)
-        st.markdown(_signal_bar_html("Pitcher HR Attackability", hr_attack_pct, 100, "%", good_at=70, warn_at=50), unsafe_allow_html=True)
-        st.caption(f"Pitcher profile: {pitcher_profile} | L7 HR/9: {pitch_hr9_l7:.2f} | Season HR/9: {pitch_hr9_season:.2f} | Recent HR/9: {pitch_hr9_recent:.2f} | Barrels allowed: {pitch_barrel_allowed:.1f} | Hard-hit allowed: {pitch_hh_allowed:.1f}")
-        if pitcher_label:
-            st.caption(f"Attackability detail: {pitcher_label}")
-        st.markdown(_signal_bar_html("Statcast Authority", authority_score, 55, good_at=30, warn_at=17), unsafe_allow_html=True)
-        st.markdown(_signal_bar_html("L10 BBE Quality", l10_bbe_quality, 100, "%", good_at=70, warn_at=45), unsafe_allow_html=True)
-        st.caption(f"L10 BBE proxy: {l10_bbe_trend} over ~{l10_bbe_events} recent batted-ball events/contact chances")
-        st.markdown(_signal_bar_html("Barrel", barrel, 20, "%", good_at=11, warn_at=8), unsafe_allow_html=True)
-        st.markdown(_signal_bar_html("Hard Hit", hard_hit, 60, "%", good_at=42, warn_at=35), unsafe_allow_html=True)
-        st.markdown(_signal_bar_html("Air Ball", air_pct, 75, "%", good_at=55, warn_at=48), unsafe_allow_html=True)
-        st.markdown(_signal_bar_html("Ground Ball Risk", ground_ball, 60, "%", good_at=44, warn_at=50, lower_is_better=True), unsafe_allow_html=True)
-
-        st.caption(f"Pitch Mix: {pitch_mode} • {pitch_mix} | xSLG: {xslg:.3f} | Trend: {recent}")
+        compact_bits = [
+            f"<div class='bf-compact-detail'><strong>Pitcher HR</strong><br>L7 {pitch_hr9_l7:.2f} · Season {pitch_hr9_season:.2f} · Recent {pitch_hr9_recent:.2f}</div>",
+            f"<div class='bf-compact-detail'><strong>Contact Allowed</strong><br>Barrel {pitch_barrel_allowed:.1f}% · HH {pitch_hh_allowed:.1f}%</div>",
+            f"<div class='bf-compact-detail'><strong>L10 BBE</strong><br>{escape(l10_bbe_trend)} · {l10_bbe_quality:.1f} · ~{l10_bbe_events} events</div>",
+            f"<div class='bf-compact-detail'><strong>Context</strong><br>{escape(pitch_mode)} {escape(pitch_mix)} · xSLG {xslg:.3f} · {escape(recent)}</div>",
+        ]
+        st.markdown("<div class='bf-compact-detail-grid'>" + "".join(compact_bits) + "</div>", unsafe_allow_html=True)
         st.caption(f"Weather: {weather}")
-        st.write(f"Why: {why}")
+        st.caption(f"Why: {why}")
+        if pitcher_label:
+            st.caption(f"Attackability: {pitcher_label}")
         if why2 and why2 != why:
             st.caption(why2)
 
@@ -4589,7 +4692,6 @@ with c1:
 
 live_df, schedule = build_daily_dataset()
 locked_df_raw = ensure_daily_board_lock(live_df, schedule)
-locked_df_raw = enforce_display_hand_labels(locked_df_raw)
 
 lineup_mode = get_lineup_mode(schedule) if schedule else "PROJECTED"
 
@@ -4599,6 +4701,7 @@ tracked_df = build_visible_tracker_pool(locked_df_raw, schedule)
 save_daily_board_snapshot(tracked_df, today_str())
 
 tracker = sync_tracker_with_board(tracked_df)
+tracker = backfill_tracker_from_board_snapshots(tracker)
 combo_board = build_combo_board(locked_df_raw)
 combo_tracker = sync_combo_tracker_with_board(combo_board)
 
@@ -4636,7 +4739,7 @@ if locked_df.empty:
 
 render_board_key()
 
-base_tabs = ["JR HR Board", "Top 12", "Top HR Targets", "Pitchers to Attack", "HR Combos", "Hits + Runs + RBIs", "Batter Breakdown", "Accuracy Tracker"]
+base_tabs = ["JR HR Board", "Top 12", "Top HR Targets", "Pitchers to Attack", "HR Combos", "Hits + Runs + RBIs", "Batter Breakdown", "Homerun Tracker"]
 schedule = sort_schedule_rows(schedule)
 game_tabs = [f"{format_game_time_et(g.get('game_time', ''))} | {g['game_key']}" for g in schedule]
 tabs = st.tabs(base_tabs + game_tabs)
@@ -4748,8 +4851,8 @@ with tabs[6]:
     display_existing_columns(breakdown, breakdown_cols)
 
 with tabs[7]:
-    st.subheader("Accuracy Tracker")
-    st.caption("Tracker is broken into separate sections. Newly surfaced per-game picks are now added instead of being blocked after the first tracker write.")
+    st.subheader("Homerun Tracker")
+    st.caption("Homerun tracker is broken into separate sections. Every visible per-game HR card is now tied to tracker rows, with snapshot backfill protecting past slates.")
 
     date_options = available_tracker_dates(tracker)
     selected_tracker_date = st.selectbox("Review slate date", options=date_options, index=0)
@@ -4812,6 +4915,11 @@ with tabs[7]:
         st.caption("No tracker rows for selected date.")
 
     selected_board_snapshot = load_daily_board_snapshot(selected_tracker_date)
+    missing_from_tracker = find_snapshot_tracker_missing_rows(selected_board_snapshot, tracker, selected_tracker_date)
+    if not missing_from_tracker.empty:
+        st.warning("Saved board rows were found that are not in the tracker yet. They will be backfilled on refresh/update.")
+        display_existing_columns(missing_from_tracker, ["Tracker Source", "Player", "Team", "Game", "Pitcher", "HR Probability %", "HR Tier"])
+
     if not selected_board_snapshot.empty:
         st.divider()
         st.markdown("### Saved Board Snapshot for Selected Date")
