@@ -8,7 +8,8 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import requests
 import streamlit as st
-import time 
+import time
+import tempfile
 st.set_page_config(page_title="BF Data", layout="wide")
 
 st.markdown("""
@@ -107,66 +108,55 @@ def ensure_snapshot_folder():
     os.makedirs(SNAPSHOT_DIR, exist_ok=True)
 
 
-
-
-def atomic_write_csv(df: pd.DataFrame, path: str):
-    """Write CSV safely so refresh/restart does not leave a half-written file.
-
-    This function must exist before any snapshot/tracker save uses it.
-    """
-    folder = os.path.dirname(path)
-    if folder:
-        os.makedirs(folder, exist_ok=True)
-    tmp_folder = folder if folder else "."
-    fd, tmp_path = tempfile.mkstemp(prefix=".bfdata_", suffix=".csv", dir=tmp_folder)
-    os.close(fd)
-    try:
-        df.to_csv(tmp_path, index=False)
-        os.replace(tmp_path, path)
-    finally:
-        if os.path.exists(tmp_path):
-            try:
-                os.remove(tmp_path)
-            except Exception:
-                pass
-
 def save_daily_tracker_snapshot(tracker_df: pd.DataFrame, snapshot_date: str):
     """Persist the day's tracker state so historical results never disappear."""
     ensure_snapshot_folder()
     tracker_path = os.path.join(SNAPSHOT_DIR, f"hr_tracker_{snapshot_date}.csv")
-    atomic_write_csv(tracker_df, tracker_path)
+    tracker_df.to_csv(tracker_path, index=False)
 
 
 def save_daily_board_snapshot(board_df: pd.DataFrame, snapshot_date: str):
-    """Persist the exact surfaced tracker pool for the slate date.
+    """Persist surfaced prediction rows without rewriting earlier rankings.
 
-    For the current date this intentionally mirrors the visible board pool every run.
-    That prevents early projected-only names from staying in the Per-Game tracker
-    after confirmed lineups remove them. Older dates are left untouched unless the
-    selected date is today.
+    Important: this app has separate sections (CORE_BOARD, TOP12, GAME_HR).
+    Older saves may be missing TOP12 rows, so do not simply return when the
+    snapshot exists.  Merge in newly surfaced section rows by a stable key while
+    preserving the existing row order and original predictions.
     """
     ensure_snapshot_folder()
     board_path = os.path.join(SNAPSHOT_DIR, f"hr_board_{snapshot_date}.csv")
-
-    if board_df is None or board_df.empty:
-        return
-
-    # Do not rewrite historical snapshots from an older slate.
-    if str(snapshot_date) != today_str() and os.path.exists(board_path):
-        return
-
     clean_board = board_df.copy()
     if "Actual HR Today" in clean_board.columns:
         clean_board = clean_board.drop(columns=["Actual HR Today"])
 
-    if "Tracker Source" not in clean_board.columns:
-        clean_board["Tracker Source"] = "CORE_BOARD"
+    if clean_board.empty:
+        return
 
-    dedupe_cols = [c for c in ["Tracker Source", "Player", "Team", "Game"] if c in clean_board.columns]
-    if dedupe_cols:
-        clean_board = clean_board.drop_duplicates(subset=dedupe_cols, keep="first")
+    key_cols = [c for c in ["Tracker Source", "Player", "Team", "Game"] if c in clean_board.columns]
+    if len(key_cols) < 4:
+        clean_board.to_csv(board_path, index=False)
+        return
 
-    atomic_write_csv(clean_board.reset_index(drop=True), board_path)
+    if os.path.exists(board_path):
+        try:
+            old_board = pd.read_csv(board_path)
+        except Exception:
+            old_board = pd.DataFrame()
+        if not old_board.empty and all(c in old_board.columns for c in key_cols):
+            old_keys = set(zip(*[old_board[c].astype(str).map(normalize_name if c == "Player" else str) for c in key_cols]))
+            add_rows = []
+            for _, r in clean_board.iterrows():
+                k = tuple(normalize_name(r[c]) if c == "Player" else str(r[c]) for c in key_cols)
+                if k not in old_keys:
+                    add_rows.append(r)
+                    old_keys.add(k)
+            if add_rows:
+                merged = pd.concat([old_board, pd.DataFrame(add_rows)], ignore_index=True)
+                merged.to_csv(board_path, index=False)
+            return
+
+    clean_board.to_csv(board_path, index=False)
+
 
 def load_daily_board_snapshot(snapshot_date: str) -> pd.DataFrame:
     ensure_snapshot_folder()
@@ -463,7 +453,7 @@ def dedupe_tracker_rows(df: pd.DataFrame) -> pd.DataFrame:
 
 def save_tracker(df: pd.DataFrame):
     df = dedupe_tracker_rows(df)
-    atomic_write_csv(df, TRACKER_FILE)
+    df.to_csv(TRACKER_FILE, index=False)
 
 
 def load_combo_tracker() -> pd.DataFrame:
@@ -485,7 +475,7 @@ def load_combo_tracker() -> pd.DataFrame:
 
 
 def save_combo_tracker(df: pd.DataFrame):
-    atomic_write_csv(df, COMBO_TRACKER_FILE)
+    df.to_csv(COMBO_TRACKER_FILE, index=False)
 
 
 def load_board_locks() -> pd.DataFrame:
@@ -498,7 +488,7 @@ def load_board_locks() -> pd.DataFrame:
 
 
 def save_board_locks(df: pd.DataFrame):
-    atomic_write_csv(df, LOCK_FILE)
+    df.to_csv(LOCK_FILE, index=False)
 
 
 def get_locked_board_for_date(date_key: str) -> pd.DataFrame:
@@ -3670,15 +3660,6 @@ def get_team_game_view(df: pd.DataFrame, game_key: str, team: str):
 
 
 def build_visible_tracker_pool(df: pd.DataFrame, schedule: list[dict]) -> pd.DataFrame:
-    """Build the tracker pool from only the rows the user can actually see.
-
-    Permanent rule:
-    - Core Board tracks exactly the current visible Core board cap.
-    - Top 12 tracks exactly the current visible Top 12 cap.
-    - Per-Game HR tracks exactly each visible game-card HR board.
-    - Do not dedupe across sections, because the same player can be valid in
-      Core, Top 12, and Per-Game at the same time.
-    """
     visible_frames = []
 
     core_board = get_research_shortlist_pool(df).copy()
@@ -3689,10 +3670,11 @@ def build_visible_tracker_pool(df: pd.DataFrame, schedule: list[dict]) -> pd.Dat
 
     top12 = get_top12_hybrid(df).copy()
     if not top12.empty:
-        top12 = sort_for_hr(top12).head(12)
         top12["Tracker Source"] = "TOP12"
         visible_frames.append(top12)
 
+    # Match tracker entries to the actual per-game HR boards the user sees.
+    # If BF Data surfaces a hitter in a visible per-game HR table, that hitter must be tracked.
     for game in schedule:
         gdf = df[df["Game"] == game["game_key"]].copy()
         if gdf.empty:
@@ -3703,13 +3685,13 @@ def build_visible_tracker_pool(df: pd.DataFrame, schedule: list[dict]) -> pd.Dat
 
         away_hr, _ = get_team_game_view(gdf, game["game_key"], away_team)
         if not away_hr.empty:
-            away_hr = sort_for_hr(away_hr.copy()).head(4)
+            away_hr = away_hr.copy()
             away_hr["Tracker Source"] = "GAME_HR"
             visible_frames.append(away_hr)
 
         home_hr, _ = get_team_game_view(gdf, game["game_key"], home_team)
         if not home_hr.empty:
-            home_hr = sort_for_hr(home_hr.copy()).head(4)
+            home_hr = home_hr.copy()
             home_hr["Tracker Source"] = "GAME_HR"
             visible_frames.append(home_hr)
 
@@ -3717,17 +3699,10 @@ def build_visible_tracker_pool(df: pd.DataFrame, schedule: list[dict]) -> pd.Dat
         return pd.DataFrame(columns=df.columns.tolist() + ["Tracker Source"])
 
     visible_df = pd.concat(visible_frames, ignore_index=True)
-
-    if "Tracker Source" not in visible_df.columns:
-        visible_df["Tracker Source"] = "CORE_BOARD"
-
-    visible_df = visible_df.drop_duplicates(
-        subset=["Player", "Team", "Game", "Tracker Source"],
-        keep="first"
-    ).reset_index(drop=True)
-
+    visible_df = visible_df.drop_duplicates(subset=["Player", "Team", "Game", "Tracker Source"]).reset_index(drop=True)
     visible_df = sort_for_hr(visible_df)
     return visible_df
+
 
 @st.cache_data(ttl=15)
 def get_live_feed_homers(game_pk: int):
@@ -3858,50 +3833,15 @@ def get_locked_section_snapshot(source_key: str, fallback_df: pd.DataFrame, sche
 
 
 def sync_tracker_with_board(tracked_df: pd.DataFrame):
-    """Sync today's tracker to the exact current visible tracker pool.
-
-    This is the permanent guard against Per-Game drifting from 48 to 50+:
-    today's rows are reconciled to visible board keys every run. Old projected
-    names that disappear after confirmed lineups are removed from today's
-    tracker, while older dates remain untouched.
-    """
-    tracker = load_tracker()
+    tracker = dedupe_tracker_rows(load_tracker())
     date_key = today_str()
+
+    if tracked_df.empty:
+        save_tracker(tracker)
+        return tracker
 
     if "hr_count" not in tracker.columns:
         tracker["hr_count"] = 0
-
-    if tracked_df is None or tracked_df.empty:
-        return tracker
-
-    tracked_clean = tracked_df.copy()
-    if "Tracker Source" not in tracked_clean.columns:
-        tracked_clean["Tracker Source"] = "CORE_BOARD"
-
-    visible_keys = set()
-    for _, row in tracked_clean.iterrows():
-        visible_keys.add((
-            str(date_key),
-            normalize_name(str(row.get("Player", ""))),
-            str(row.get("Team", "")),
-            str(row.get("Game", "")),
-            str(row.get("Tracker Source", "CORE_BOARD")),
-        ))
-
-    # Reconcile ONLY today's tracker rows. Historical rows are sacred.
-    if not tracker.empty:
-        def _tracker_key(r):
-            return (
-                str(r.get("date", "")),
-                normalize_name(str(r.get("player", ""))),
-                str(r.get("team", "")),
-                str(r.get("game", "")),
-                str(r.get("tracker_source", "CORE_BOARD")),
-            )
-
-        today_mask = tracker["date"].astype(str) == str(date_key)
-        keep_mask = ~today_mask | tracker.apply(lambda r: _tracker_key(r) in visible_keys, axis=1)
-        tracker = tracker[keep_mask].copy().reset_index(drop=True)
 
     existing_keys = set()
     if not tracker.empty:
@@ -3916,7 +3856,7 @@ def sync_tracker_with_board(tracked_df: pd.DataFrame):
             ))
 
     new_rows = []
-    for _, row in tracked_clean.iterrows():
+    for _, row in tracked_df.iterrows():
         source = str(row.get("Tracker Source", "CORE_BOARD"))
         player_name = str(row["Player"])
         key = (str(date_key), normalize_name(player_name), str(row["Team"]), str(row["Game"]), source)
@@ -3928,26 +3868,23 @@ def sync_tracker_with_board(tracked_df: pd.DataFrame):
             "player": player_name,
             "team": row["Team"],
             "game": row["Game"],
-            "game_pk": row["game_pk"],
-            "hr_probability": row["HR Probability %"],
-            "hr_tier": row["HR Tier"],
-            "hr_eligible": int(bool(row["HR Eligible"])),
+            "game_pk": row.get("game_pk", pd.NA),
+            "hr_probability": row.get("HR Probability %", pd.NA),
+            "hr_tier": row.get("HR Tier", pd.NA),
+            "hr_eligible": int(bool(row.get("HR Eligible", False))),
             "tracker_source": source,
             "result": pd.NA,
             "hr_count": 0,
             "result_state": "PENDING",
-            "game_state": row["game_state"],
+            "game_state": row.get("game_state", pd.NA),
             "updated_at": now_et_string(),
         })
+        existing_keys.add(key)
 
     if new_rows:
         tracker = pd.concat([tracker, pd.DataFrame(new_rows)], ignore_index=True)
 
-    tracker = tracker.drop_duplicates(
-        subset=["date", "player", "team", "game", "tracker_source"],
-        keep="last"
-    ).reset_index(drop=True)
-
+    tracker = dedupe_tracker_rows(tracker)
     save_tracker(tracker)
     return tracker
 
@@ -4570,7 +4507,7 @@ if locked_df.empty:
     st.warning("No games or hitter data loaded.")
     st.stop()
 
-base_tabs = ["JR HR Board", "Top 12", "Top HR Targets", "Pitchers to Attack", "HR Combos", "Hits + Runs + RBIs", "Batter Breakdown", "Accuracy Tracker"]
+base_tabs = ["JR HR Board", "Top 12", "Top HR Targets", "Pitchers to Attack", "HR Combos", "Hits + Runs + RBIs", "Batter Breakdown", "Homerun Tracker"]
 schedule = sort_schedule_rows(schedule)
 game_tabs = [f"{format_game_time_et(g.get('game_time', ''))} | {g['game_key']}" for g in schedule]
 tabs = st.tabs(base_tabs + game_tabs)
@@ -4702,7 +4639,7 @@ with tabs[6]:
     )
 
 with tabs[7]:
-    st.subheader("Accuracy Tracker")
+    st.subheader("Homerun Tracker")
     st.caption("Tracker is broken into separate sections. Newly surfaced per-game picks are now added instead of being blocked after the first tracker write.")
 
     date_options = available_tracker_dates(tracker)
