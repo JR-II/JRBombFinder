@@ -1,4 +1,5 @@
 import hashlib
+import json
 import os
 import re
 from html import escape
@@ -60,66 +61,6 @@ st.markdown("""
 div[data-testid="stDataFrame"] { border: 1px solid rgba(255,255,255,.12); border-radius: 14px; overflow:hidden; }
 div[data-testid="stExpander"] { background: rgba(255,255,255,.018); border-radius: 12px; }
 hr { margin-top: .38rem !important; margin-bottom: .38rem !important; }
-
-.bf-quick-list { display: flex; flex-direction: column; gap: 6px; }
-.bf-quick-row { display: grid; grid-template-columns: minmax(150px, 1.2fr) minmax(120px, .8fr) repeat(3, 58px); gap: 8px; align-items: center; padding: 8px 10px; border: 1px solid rgba(255,255,255,.10); background:#0d1118; border-radius: 11px; margin-bottom: 6px; }
-.bf-quick-player { font-weight: 950; color:#f8fbff; font-size: .92rem; }
-.bf-quick-sub { color:#95a0b2; font-size:.72rem; margin-top:2px; }
-.bf-mini-score { text-align:center; border-radius:8px; padding:4px 5px; background:#111823; border:1px solid rgba(255,255,255,.09); }
-.bf-mini-score b { display:block; color:#6da2ff; font-size:.58rem; letter-spacing:.08em; }
-.bf-mini-score span { display:block; font-weight:950; font-size:.9rem; }
-.bf-match-card { border:1px solid #263040; border-radius:14px; overflow:hidden; background:#080d14; margin:6px 0 10px 0; box-shadow:0 0 0 1px rgba(0,0,0,.35) inset; }
-.bf-match-topline { display:grid; grid-template-columns:minmax(180px,1.2fr) minmax(170px,1fr) 70px 70px 70px; gap:0; align-items:stretch; background:#141b28; border-bottom:1px solid #2b3547; }
-.bf-cell-head { padding:10px 12px; border-right:1px solid rgba(255,255,255,.08); }
-.bf-head-label { color:#4e83ff; font-size:.62rem; font-weight:950; letter-spacing:.13em; text-transform:uppercase; }
-.bf-head-main { color:#f7f9ff; font-size:1.02rem; font-weight:950; margin-top:5px; line-height:1.08; }
-.bf-hand-badge { display:inline-flex; align-items:center; justify-content:center; margin-left:5px; padding:1px 4px; border-radius:4px; background:rgba(255,85,85,.22); color:#ff9d9d; border:1px solid rgba(255,85,85,.45); font-size:.58rem; font-weight:950; vertical-align:middle; }
-.bf-score-box { display:flex; flex-direction:column; align-items:center; justify-content:center; border-right:1px solid rgba(255,255,255,.08); min-height:58px; }
-.bf-score-box .lab { color:#4e83ff; font-size:.58rem; letter-spacing:.12em; font-weight:950; }
-.bf-score-box .num { margin-top:5px; font-size:1.03rem; font-weight:950; padding:5px 9px; border-radius:7px; min-width:36px; text-align:center; }
-.bf-num-green { color:#00f2a0; background:rgba(0,242,160,.12); border:1px solid rgba(0,242,160,.22); }
-.bf-num-yellow { color:#ffd166; background:rgba(255,209,102,.15); border:1px solid rgba(255,209,102,.22); }
-.bf-num-red { color:#ff6666; background:rgba(255,85,85,.14); border:1px solid rgba(255,85,85,.22); }
-.bf-card-body { display:grid; grid-template-columns:210px 1fr; gap:16px; padding:12px; }
-.bf-side-panel { border-right:1px solid rgba(255,255,255,.08); padding-right:12px; }
-.bf-section-title { color:#7e9bd3; font-size:.62rem; font-weight:950; letter-spacing:.16em; text-transform:uppercase; margin:4px 0 9px 0; }
-.bf-score-line { display:grid; grid-template-columns:1fr 48px; gap:8px; align-items:center; font-size:.78rem; margin-bottom:8px; color:#dfe8ff; }
-.bf-pill-num { display:inline-flex; justify-content:center; align-items:center; padding:4px 7px; border-radius:7px; background:#141b25; font-weight:950; }
-.bf-pitcher-stat { display:grid; grid-template-columns:1fr 58px; gap:8px; align-items:center; color:#dfe8ff; font-size:.78rem; margin-bottom:8px; }
-.bf-arsenal-grid { display:grid; grid-template-columns:repeat(3,minmax(110px,1fr)); gap:8px; }
-.bf-pitch-tile { background:#0e141d; border:1px solid #263040; border-radius:10px; padding:9px 10px; min-height:92px; }
-.bf-pitch-name { color:#f0f5ff; font-weight:950; font-size:.7rem; text-transform:uppercase; }
-.bf-pitch-score { font-weight:950; font-size:1.45rem; line-height:1; margin-top:6px; }
-.bf-usage-label { color:#e8f1ff; font-size:.58rem; font-weight:950; margin-top:6px; text-transform:uppercase; }
-.bf-usage-track { height:5px; background:#1e2632; border-radius:999px; overflow:hidden; margin-top:4px; }
-.bf-usage-fill { height:100%; background:#3c82ff; border-radius:999px; }
-.bf-pitch-note { color:#aab4c4; font-size:.66rem; line-height:1.25; margin-top:5px; }
-.bf-bvp-title { margin-top:14px; border-top:1px solid rgba(255,255,255,.08); padding-top:10px; color:#7e9bd3; font-size:.62rem; font-weight:950; letter-spacing:.16em; text-transform:uppercase; }
-.bf-bvp-grid { display:grid; grid-template-columns:repeat(6, minmax(78px,1fr)); gap:5px; margin-top:8px; }
-.bf-bvp-cell { background:#0e141d; border:1px solid rgba(255,255,255,.08); border-radius:5px; padding:7px 8px; }
-.bf-bvp-label { color:#c5d0e4; font-size:.58rem; font-weight:900; text-transform:uppercase; }
-.bf-bvp-values { margin-top:5px; font-size:.77rem; font-weight:950; }
-.bf-green-txt { color:#00f2a0; } .bf-red-txt { color:#ff6262; } .bf-yellow-txt { color:#ffd166; }
-.bf-card-foot { padding:0 12px 12px 12px; color:#aab4c4; font-size:.72rem; line-height:1.35; }
-@media(max-width: 900px){
-  .bf-quick-row { grid-template-columns:1fr 1fr 46px 46px 46px; gap:5px; padding:7px; }
-  .bf-quick-player { font-size:.82rem; }
-  .bf-quick-sub { font-size:.65rem; }
-  .bf-mini-score { padding:3px; }
-  .bf-mini-score b { font-size:.48rem; }
-  .bf-mini-score span { font-size:.74rem; }
-  .bf-match-topline { grid-template-columns:1fr 1fr 50px 50px 50px; }
-  .bf-cell-head { padding:8px 7px; }
-  .bf-head-label { font-size:.5rem; }
-  .bf-head-main { font-size:.78rem; overflow-wrap:anywhere; }
-  .bf-score-box .lab { font-size:.48rem; }
-  .bf-score-box .num { font-size:.78rem; min-width:28px; padding:4px 5px; }
-  .bf-card-body { grid-template-columns:1fr; gap:8px; padding:8px; }
-  .bf-side-panel { border-right:0; border-bottom:1px solid rgba(255,255,255,.08); padding-right:0; padding-bottom:7px; }
-  .bf-arsenal-grid { grid-template-columns:repeat(2,minmax(95px,1fr)); }
-  .bf-bvp-grid { grid-template-columns:repeat(3, minmax(76px,1fr)); }
-}
-
 @media (max-width: 760px) {
     .block-container { padding-left: .65rem; padding-right: .65rem; padding-top: .35rem; }
     .bf-hero { padding: 10px 11px; border-radius: 14px; margin-bottom: 6px; }
@@ -893,6 +834,370 @@ def compute_relevant_pitch_matchup(
 
 
 
+# --- TRUE STATCAST PITCH ARSENAL / CONTACT DATA ---
+# This replaces the old fictional pitch tiles. The app will only display pitch
+# types that Statcast shows the pitcher actually threw. If Statcast cannot verify
+# a pitch, the card says unavailable instead of inventing FF/SL/CH/CU.
+
+PITCH_TYPE_NAMES = {
+    "FF": "FOUR-SEAM",
+    "FA": "FOUR-SEAM",
+    "SI": "SINKER",
+    "FT": "SINKER",
+    "SL": "SLIDER",
+    "ST": "SWEEPER",
+    "CH": "CHANGEUP",
+    "CU": "CURVEBALL",
+    "KC": "KNUCKLE CURVE",
+    "FC": "CUTTER",
+    "FS": "SPLITTER",
+    "SV": "SLURVE",
+    "KN": "KNUCKLEBALL",
+    "EP": "EEPHUS",
+    "FO": "FORKBALL",
+}
+
+SWING_DESCRIPTIONS = {
+    "swinging_strike", "swinging_strike_blocked", "foul", "foul_tip",
+    "foul_bunt", "missed_bunt", "hit_into_play", "hit_into_play_no_out",
+    "hit_into_play_score",
+}
+CONTACT_DESCRIPTIONS = {
+    "foul", "foul_tip", "foul_bunt", "hit_into_play",
+    "hit_into_play_no_out", "hit_into_play_score",
+}
+AB_EVENTS_TRUE = {
+    "single", "double", "triple", "home_run", "field_out", "force_out",
+    "grounded_into_double_play", "fielders_choice_out", "fielders_choice",
+    "double_play", "triple_play", "strikeout", "strikeout_double_play",
+    "field_error", "sac_fly", "sac_bunt", "sac_fly_double_play",
+}
+
+
+def normalize_pitch_type(code) -> str:
+    c = str(code or "").strip().upper()
+    if c == "FT":
+        return "SI"
+    return c
+
+
+def normalize_hand_code(raw) -> str:
+    txt = str(raw or "").strip().upper()
+    if txt in {"L", "LEFT", "LEFTY", "LHB", "LHP"}:
+        return "L"
+    if txt in {"R", "RIGHT", "RIGHTY", "RHB", "RHP"}:
+        return "R"
+    if txt in {"S", "SH", "SHB", "SWITCH"}:
+        return "S"
+    return ""
+
+
+def event_bases_true(event: str) -> int:
+    ev = str(event or "").lower().strip()
+    if ev == "single":
+        return 1
+    if ev == "double":
+        return 2
+    if ev == "triple":
+        return 3
+    if ev == "home_run":
+        return 4
+    return 0
+
+
+@st.cache_data(ttl=21600)
+def fetch_statcast_pitch_csv(player_id: int, role: str, season: int) -> pd.DataFrame:
+    """Verified Baseball Savant pitch-level CSV for one player.
+
+    role='pitcher' returns every pitch thrown by that pitcher.
+    role='batter' returns every pitch seen by that batter.
+    """
+    try:
+        pid = int(player_id)
+    except Exception:
+        return pd.DataFrame()
+    if pid <= 0:
+        return pd.DataFrame()
+
+    role_key = "pitcher" if str(role).lower().startswith("pitch") else "batter"
+    params = {
+        "all": "true",
+        role_key: str(pid),
+        "game_date_gt": f"{int(season)}-03-01",
+        "game_date_lt": datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d"),
+        "type": "details",
+        "min_pitches": "0",
+        "min_results": "0",
+    }
+    try:
+        resp = requests.get(
+            "https://baseballsavant.mlb.com/statcast_search/csv",
+            params=params,
+            headers={"User-Agent": "Mozilla/5.0"},
+            timeout=8,
+        )
+        resp.raise_for_status()
+        raw = resp.text
+        if not raw or "pitch_type" not in raw:
+            return pd.DataFrame()
+        from io import StringIO
+        df = pd.read_csv(StringIO(raw))
+    except Exception:
+        return pd.DataFrame()
+
+    if df.empty or "pitch_type" not in df.columns:
+        return pd.DataFrame()
+    df = df.copy()
+    df["pitch_type"] = df["pitch_type"].map(normalize_pitch_type)
+    df = df[df["pitch_type"].astype(str).str.len().gt(0)].copy()
+    return df
+
+
+def summarize_true_pitch_stats(df: pd.DataFrame) -> dict:
+    if df is None or df.empty or "pitch_type" not in df.columns:
+        return {}
+
+    total_pitches = max(len(df), 1)
+    out = {}
+    desc = df["description"].fillna("").astype(str).str.lower() if "description" in df.columns else pd.Series([""] * len(df), index=df.index)
+    events_all = df["events"].fillna("").astype(str).str.lower() if "events" in df.columns else pd.Series([""] * len(df), index=df.index)
+
+    for pitch, sub in df.groupby("pitch_type"):
+        code = normalize_pitch_type(pitch)
+        if not code:
+            continue
+        sub_desc = desc.loc[sub.index]
+        sub_events = events_all.loc[sub.index]
+
+        swings = int(sub_desc.isin(SWING_DESCRIPTIONS).sum())
+        contacts = int(sub_desc.isin(CONTACT_DESCRIPTIONS).sum())
+        whiffs = max(swings - contacts, 0)
+
+        ab_mask = sub_events.isin(AB_EVENTS_TRUE)
+        ab = int(ab_mask.sum())
+        hits = int(sub_events.isin({"single", "double", "triple", "home_run"}).sum())
+        bases = int(sub_events.map(event_bases_true).sum())
+        hrs = int((sub_events == "home_run").sum())
+
+        if "launch_speed" in sub.columns:
+            bbe = sub[pd.to_numeric(sub["launch_speed"], errors="coerce").notna()].copy()
+        else:
+            bbe = pd.DataFrame()
+        bbe_n = int(len(bbe))
+        evs = pd.to_numeric(bbe.get("launch_speed", pd.Series(dtype=float)), errors="coerce").dropna()
+        las = pd.to_numeric(bbe.get("launch_angle", pd.Series(dtype=float)), errors="coerce").dropna()
+        hard = int((evs >= 95.0).sum()) if not evs.empty else 0
+        barrels = 0
+        if not bbe.empty and "launch_angle" in bbe.columns:
+            for _, rr in bbe.iterrows():
+                ev = safe_float(rr.get("launch_speed"), None)
+                la = safe_float(rr.get("launch_angle"), None)
+                if ev is not None and la is not None and ev >= 98.0 and 8 <= la <= 50:
+                    barrels += 1
+
+        contact_pct = round((contacts / swings) * 100, 1) if swings else None
+        whiff_pct = round((whiffs / swings) * 100, 1) if swings else None
+        ba = round(hits / ab, 3) if ab else None
+        slg = round(bases / ab, 3) if ab else None
+        iso = round(max((bases / ab) - (hits / ab), 0.0), 3) if ab else None
+
+        out[code] = {
+            "code": code,
+            "name": PITCH_TYPE_NAMES.get(code, code),
+            "pitches": int(len(sub)),
+            "usage": round((len(sub) / total_pitches) * 100, 1),
+            "swings": swings,
+            "contact_pct": contact_pct,
+            "whiff_pct": whiff_pct,
+            "ab": ab,
+            "hits": hits,
+            "hr": hrs,
+            "ba": ba,
+            "slg": slg,
+            "iso": iso,
+            "bbe": bbe_n,
+            "ev": round(float(evs.mean()), 1) if not evs.empty else None,
+            "hardhit": round(hard / bbe_n * 100, 1) if bbe_n else None,
+            "barrel": round(barrels / bbe_n * 100, 1) if bbe_n else None,
+            "la": round(float(las.mean()), 1) if not las.empty else None,
+        }
+    return out
+
+
+def filtered_pitcher_pitch_rows(pitcher_df: pd.DataFrame, batter_hand: str) -> pd.DataFrame:
+    hand = normalize_hand_code(batter_hand)
+    if pitcher_df is None or pitcher_df.empty or hand in {"", "S"} or "stand" not in pitcher_df.columns:
+        return pitcher_df
+    split = pitcher_df[pitcher_df["stand"].astype(str).str.upper() == hand].copy()
+    # Use handed split when there is enough pitch sample; otherwise use full arsenal.
+    return split if len(split) >= 50 else pitcher_df
+
+
+def filtered_batter_pitch_rows(batter_df: pd.DataFrame, pitcher_hand: str) -> pd.DataFrame:
+    hand = normalize_hand_code(pitcher_hand)
+    if batter_df is None or batter_df.empty or hand == "" or "p_throws" not in batter_df.columns:
+        return batter_df
+    split = batter_df[batter_df["p_throws"].astype(str).str.upper() == hand].copy()
+    # Use handed split when there is enough pitch sample; otherwise use full batter pitch profile.
+    return split if len(split) >= 35 else batter_df
+
+
+def score_true_pitch_matchup(pitcher_stats: dict, batter_stats: dict | None) -> tuple[float, str]:
+    batter_stats = batter_stats or {}
+    usage = safe_float(pitcher_stats.get("usage"), 0.0)
+    p_contact = safe_float(pitcher_stats.get("contact_pct"), 0.0) if pitcher_stats.get("contact_pct") is not None else 0.0
+    p_slg = safe_float(pitcher_stats.get("slg"), 0.0) if pitcher_stats.get("slg") is not None else 0.0
+    p_iso = safe_float(pitcher_stats.get("iso"), 0.0) if pitcher_stats.get("iso") is not None else 0.0
+    p_hh = safe_float(pitcher_stats.get("hardhit"), 0.0) if pitcher_stats.get("hardhit") is not None else 0.0
+    p_brl = safe_float(pitcher_stats.get("barrel"), 0.0) if pitcher_stats.get("barrel") is not None else 0.0
+
+    b_contact = safe_float(batter_stats.get("contact_pct"), 0.0) if batter_stats.get("contact_pct") is not None else 0.0
+    b_slg = safe_float(batter_stats.get("slg"), 0.0) if batter_stats.get("slg") is not None else 0.0
+    b_iso = safe_float(batter_stats.get("iso"), 0.0) if batter_stats.get("iso") is not None else 0.0
+    b_hh = safe_float(batter_stats.get("hardhit"), 0.0) if batter_stats.get("hardhit") is not None else 0.0
+    b_brl = safe_float(batter_stats.get("barrel"), 0.0) if batter_stats.get("barrel") is not None else 0.0
+
+    batter_sample = safe_int(batter_stats.get("pitches"), 0)
+    pitcher_sample = safe_int(pitcher_stats.get("pitches"), 0)
+
+    # A transparent edge score: batter damage/contact vs this pitch plus pitcher damage allowed on same pitch.
+    raw = (
+        34.0
+        + (b_slg * 18.0) + (b_iso * 28.0) + (b_contact * 0.13) + (b_hh * 0.18) + (b_brl * 0.55)
+        + (p_slg * 15.0) + (p_iso * 24.0) + (p_contact * 0.10) + (p_hh * 0.14) + (p_brl * 0.45)
+    )
+    usage_weight = clip(usage / 35.0, 0.45, 1.20)
+    reliability = clip((min(pitcher_sample, 250) / 250.0 * 0.55) + (min(batter_sample, 150) / 150.0 * 0.45), 0.50, 1.0)
+    score = clip(raw * usage_weight * reliability, 1.0, 99.0)
+
+    if usage < 5:
+        score = min(score, 42.0)
+        note = "tiny pitcher usage"
+    elif batter_sample < 20:
+        note = "true pitcher usage; low batter pitch sample"
+    elif score >= 78:
+        note = "true pitch-type HR edge"
+    elif score >= 55:
+        note = "mixed true pitch-type edge"
+    else:
+        note = "pitch suppresses damage"
+
+    return round(score, 1), note
+
+
+def build_true_pitch_arsenal_matchup(
+    batter_id,
+    pitcher_id,
+    batter_hand: str,
+    pitcher_hand: str,
+    include_batter: bool = False,
+) -> dict:
+    try:
+        pid = int(pitcher_id)
+    except Exception:
+        return {"verified": False, "pitches": [], "mix": {}, "mode": "NO VERIFIED ARSENAL", "label": "No verified arsenal", "score": 0.0, "reason": "No verified Statcast pitcher arsenal"}
+
+    pitcher_df = fetch_statcast_pitch_csv(pid, "pitcher", CURRENT_SEASON)
+    if pitcher_df.empty:
+        return {"verified": False, "pitches": [], "mix": {}, "mode": "NO VERIFIED ARSENAL", "label": "No verified arsenal", "score": 0.0, "reason": "No verified Statcast pitcher arsenal"}
+
+    p_summary = summarize_true_pitch_stats(filtered_pitcher_pitch_rows(pitcher_df, batter_hand))
+
+    b_summary = {}
+    if include_batter:
+        try:
+            bid = int(batter_id)
+        except Exception:
+            bid = 0
+        if bid > 0:
+            batter_df = fetch_statcast_pitch_csv(bid, "batter", CURRENT_SEASON)
+            if not batter_df.empty:
+                b_summary = summarize_true_pitch_stats(filtered_batter_pitch_rows(batter_df, pitcher_hand))
+
+    rows = []
+    for code, pstats in p_summary.items():
+        usage = safe_float(pstats.get("usage"), 0.0)
+        pitches = safe_int(pstats.get("pitches"), 0)
+        if usage < 2.0 and pitches < 10:
+            continue
+        bstats = b_summary.get(code, {})
+        score, note = score_true_pitch_matchup(pstats, bstats)
+        rows.append({
+            "code": code,
+            "name": PITCH_TYPE_NAMES.get(code, code),
+            "usage": usage,
+            "score": score,
+            "note": note,
+            "pitcher": pstats,
+            "batter": bstats,
+        })
+
+    rows = sorted(rows, key=lambda r: safe_float(r.get("usage"), 0.0), reverse=True)
+    if not rows:
+        return {"verified": False, "pitches": [], "mix": {}, "mode": "NO VERIFIED ARSENAL", "label": "No verified arsenal", "score": 0.0, "reason": "No verified Statcast pitcher arsenal"}
+
+    top_usage = safe_float(rows[0].get("usage"), 0.0)
+    second_usage = safe_float(rows[1].get("usage"), 0.0) if len(rows) > 1 else 0.0
+    gap = top_usage - second_usage
+    if top_usage >= 50:
+        mode = "HARD"
+        relevant = rows[:1]
+    elif gap >= 20:
+        mode = "HARD"
+        relevant = rows[:2]
+    elif gap >= 10 or top_usage >= 38:
+        mode = "SOFT"
+        relevant = rows[:2]
+    else:
+        mode = "BALANCED"
+        relevant = rows[:3]
+
+    total_usage = sum(safe_float(r.get("usage"), 0.0) for r in relevant) or 1.0
+    weighted_display = sum(safe_float(r.get("score"), 0.0) * (safe_float(r.get("usage"), 0.0) / total_usage) for r in relevant)
+    return {
+        "verified": True,
+        "pitches": rows,
+        "mix": {r["code"]: round(safe_float(r.get("usage"), 0.0), 1) for r in rows},
+        "mode": mode,
+        "label": " + ".join([r["code"] for r in relevant]),
+        "primary_pitch": rows[0]["code"],
+        "primary_usage": round(top_usage, 1),
+        "gap": round(gap, 1),
+        "score": round(weighted_display / 10.0, 2),
+        "display_score": round(weighted_display, 1),
+        "reason": rows[0].get("note", "Verified true arsenal"),
+    }
+
+
+def serialize_true_arsenal(arsenal: dict) -> str:
+    try:
+        slim = []
+        for r in arsenal.get("pitches", [])[:7]:
+            slim.append({
+                "code": r.get("code"),
+                "name": r.get("name"),
+                "usage": safe_float(r.get("usage"), 0.0),
+                "score": safe_float(r.get("score"), 0.0),
+                "note": r.get("note", ""),
+                "pitcher": r.get("pitcher", {}),
+                "batter": r.get("batter", {}),
+            })
+        return json.dumps({"verified": bool(arsenal.get("verified")), "pitches": slim}, separators=(",", ":"))
+    except Exception:
+        return json.dumps({"verified": False, "pitches": []})
+
+
+def load_true_arsenal_from_row(row: pd.Series) -> list[dict]:
+    raw = row.get("Pitch Arsenal Data", "")
+    try:
+        data = json.loads(str(raw)) if raw not in [None, ""] else {}
+        pitches = data.get("pitches", []) if isinstance(data, dict) else []
+        return pitches if isinstance(pitches, list) else []
+    except Exception:
+        return []
+
+
+
 def compute_statcast_authority(
     ev: float,
     barrel: float,
@@ -1544,7 +1849,12 @@ def fetch_people_stats(person_ids_tuple: tuple, group: str):
 
         for person in data.get("people", []):
             pid = person.get("id")
-            stats = {"season": {}, "gamelog": []}
+            stats = {
+                "season": {},
+                "gamelog": [],
+                "bat_side": ((person.get("batSide") or {}).get("code") or ""),
+                "pitch_hand": ((person.get("pitchHand") or {}).get("code") or ""),
+            }
 
             for stat_block in person.get("stats", []):
                 stat_type = ((stat_block.get("type") or {}).get("displayName") or "").lower()
@@ -1942,6 +2252,327 @@ def compute_hitter_live_metrics_from_map(player_id: int, stats_map: dict, use_tr
         "season_games": season_games,
         "season_ab": season_ab,
     }
+
+
+
+
+PITCH_TYPE_NAMES = {
+    "FF": "FOUR-SEAM",
+    "FA": "FOUR-SEAM",
+    "SI": "SINKER",
+    "SL": "SLIDER",
+    "CH": "CHANGEUP",
+    "CU": "CURVEBALL",
+    "KC": "KNUCKLE CURVE",
+    "FC": "CUTTER",
+    "FS": "SPLITTER",
+    "ST": "SWEEPER",
+    "SV": "SLURVE",
+    "KN": "KNUCKLEBALL",
+    "EP": "EEPHUS",
+    "FO": "FORKBALL",
+    "SC": "SCREWBALL",
+}
+
+HIT_EVENTS_1B = {"single"}
+HIT_EVENTS_2B = {"double"}
+HIT_EVENTS_3B = {"triple"}
+HIT_EVENTS_HR = {"home_run"}
+AB_EVENTS = {
+    "single", "double", "triple", "home_run", "field_out", "force_out",
+    "grounded_into_double_play", "fielders_choice_out", "fielders_choice",
+    "double_play", "triple_play", "strikeout", "strikeout_double_play",
+    "sac_fly", "sac_bunt", "sac_fly_double_play",
+    "field_error", "catcher_interf"
+}
+
+
+def normalize_pitch_code(code) -> str:
+    c = str(code or "").strip().upper()
+    if c in {"FT"}:
+        return "SI"
+    return c
+
+
+def normalized_hand_code(raw) -> str:
+    txt = str(raw or "").strip().upper()
+    if txt in {"L", "LEFT", "LEFTY", "LHB", "LHP"}:
+        return "L"
+    if txt in {"R", "RIGHT", "RIGHTY", "RHB", "RHP"}:
+        return "R"
+    if txt in {"S", "SH", "SHB", "SWITCH"}:
+        return "S"
+    return ""
+
+
+@st.cache_data(ttl=21600)
+def fetch_savant_pitch_detail_csv(player_id: int, player_type: str, season: int):
+    """True Statcast pitch-level source. No data = no verified pitch tiles."""
+    try:
+        pid = int(player_id)
+    except Exception:
+        return pd.DataFrame()
+    if pid <= 0:
+        return pd.DataFrame()
+
+    player_type = "pitcher" if str(player_type).lower().startswith("pitch") else "batter"
+    params = {
+        "all": "true",
+        "game_date_gt": f"{int(season)}-03-01",
+        "game_date_lt": datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d"),
+        "type": "details",
+        "min_pitches": "0",
+        "min_results": "0",
+    }
+    params[player_type] = str(pid)
+
+    try:
+        resp = requests.get(
+            "https://baseballsavant.mlb.com/statcast_search/csv",
+            params=params,
+            headers={"User-Agent": "Mozilla/5.0"},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        raw = resp.text
+        if not raw or "pitch_type" not in raw:
+            return pd.DataFrame()
+        from io import StringIO
+        df = pd.read_csv(StringIO(raw))
+    except Exception:
+        return pd.DataFrame()
+
+    if df.empty or "pitch_type" not in df.columns:
+        return pd.DataFrame()
+
+    df = df.copy()
+    df["pitch_type"] = df["pitch_type"].map(normalize_pitch_code)
+    df = df[df["pitch_type"].astype(str).str.len().gt(0)].copy()
+    return df
+
+
+def _event_bases(event: str) -> int:
+    ev = str(event or "").strip().lower()
+    if ev in HIT_EVENTS_1B:
+        return 1
+    if ev in HIT_EVENTS_2B:
+        return 2
+    if ev in HIT_EVENTS_3B:
+        return 3
+    if ev in HIT_EVENTS_HR:
+        return 4
+    return 0
+
+
+def _is_ab_event(event: str) -> bool:
+    return str(event or "").strip().lower() in AB_EVENTS
+
+
+def _barrel_like(ev, la) -> bool:
+    ev = safe_float(ev, None)
+    la = safe_float(la, None)
+    return ev is not None and la is not None and ev >= 98.0 and 8.0 <= la <= 50.0
+
+
+def summarize_pitch_type_df(df: pd.DataFrame) -> dict:
+    if df is None or df.empty or "pitch_type" not in df.columns:
+        return {}
+
+    out = {}
+    total_pitches = max(len(df), 1)
+    for pitch, sub in df.groupby("pitch_type"):
+        pitch = normalize_pitch_code(pitch)
+        if not pitch:
+            continue
+        if "events" in sub.columns:
+            events = sub["events"].fillna("").astype(str).str.lower()
+        else:
+            events = pd.Series([""] * len(sub), index=sub.index)
+        ab_mask = events.map(_is_ab_event)
+        ab = int(ab_mask.sum())
+        bases = int(events.map(_event_bases).sum())
+        hits = int(events.isin(HIT_EVENTS_1B | HIT_EVENTS_2B | HIT_EVENTS_3B | HIT_EVENTS_HR).sum())
+        hrs = int(events.isin(HIT_EVENTS_HR).sum())
+        if "launch_speed" in sub.columns:
+            bbe = sub[pd.to_numeric(sub["launch_speed"], errors="coerce").notna()].copy()
+        else:
+            bbe = pd.DataFrame()
+        bbe_count = int(len(bbe))
+        evs = pd.to_numeric(bbe.get("launch_speed", pd.Series(dtype=float)), errors="coerce").dropna()
+        las = pd.to_numeric(bbe.get("launch_angle", pd.Series(dtype=float)), errors="coerce").dropna()
+        hard = int((evs >= 95.0).sum()) if not evs.empty else 0
+        barrels = 0
+        if not bbe.empty and "launch_angle" in bbe.columns:
+            barrels = int(sum(_barrel_like(r.get("launch_speed"), r.get("launch_angle")) for _, r in bbe.iterrows()))
+        out[pitch] = {
+            "code": pitch,
+            "name": PITCH_TYPE_NAMES.get(pitch, pitch),
+            "pitches": int(len(sub)),
+            "usage": round(len(sub) / total_pitches * 100, 1),
+            "pa": int(ab),
+            "hits": hits,
+            "hr": hrs,
+            "ba": round(hits / ab, 3) if ab else None,
+            "slg": round(bases / ab, 3) if ab else None,
+            "iso": round(max((bases / ab) - (hits / ab), 0.0), 3) if ab else None,
+            "bbe": bbe_count,
+            "ev": round(float(evs.mean()), 1) if not evs.empty else None,
+            "hardhit": round(hard / bbe_count * 100, 1) if bbe_count else None,
+            "barrel": round(barrels / bbe_count * 100, 1) if bbe_count else None,
+            "la": round(float(las.mean()), 1) if not las.empty else None,
+        }
+    return out
+
+
+def filter_pitcher_rows_vs_batter_hand(df: pd.DataFrame, batter_hand: str) -> pd.DataFrame:
+    if df is None or df.empty:
+        return df
+    hand = normalized_hand_code(batter_hand)
+    if hand and hand != "S" and "stand" in df.columns:
+        filt = df[df["stand"].astype(str).str.upper() == hand].copy()
+        if len(filt) >= 50:
+            return filt
+    return df
+
+
+def filter_batter_rows_vs_pitcher_hand(df: pd.DataFrame, pitcher_hand: str) -> pd.DataFrame:
+    if df is None or df.empty:
+        return df
+    hand = normalized_hand_code(pitcher_hand)
+    if hand and "p_throws" in df.columns:
+        filt = df[df["p_throws"].astype(str).str.upper() == hand].copy()
+        if len(filt) >= 25:
+            return filt
+    return df
+
+
+def _pitch_edge_score(batter_stats: dict | None, pitcher_stats: dict | None, usage: float) -> tuple[float, str]:
+    if not pitcher_stats:
+        return 0.0, "No verified pitcher pitch data"
+    batter_stats = batter_stats or {}
+    b_bbe = safe_int(batter_stats.get("bbe"), 0)
+    p_bbe = safe_int(pitcher_stats.get("bbe"), 0)
+    b_slg = safe_float(batter_stats.get("slg"), 0.0) if batter_stats.get("slg") is not None else 0.0
+    p_slg = safe_float(pitcher_stats.get("slg"), 0.0) if pitcher_stats.get("slg") is not None else 0.0
+    b_iso = safe_float(batter_stats.get("iso"), 0.0) if batter_stats.get("iso") is not None else 0.0
+    p_iso = safe_float(pitcher_stats.get("iso"), 0.0) if pitcher_stats.get("iso") is not None else 0.0
+    b_hh = safe_float(batter_stats.get("hardhit"), 0.0) if batter_stats.get("hardhit") is not None else 0.0
+    p_hh = safe_float(pitcher_stats.get("hardhit"), 0.0) if pitcher_stats.get("hardhit") is not None else 0.0
+    b_brl = safe_float(batter_stats.get("barrel"), 0.0) if batter_stats.get("barrel") is not None else 0.0
+    p_brl = safe_float(pitcher_stats.get("barrel"), 0.0) if pitcher_stats.get("barrel") is not None else 0.0
+
+    batter_damage = (b_slg * 36.0) + (b_iso * 55.0) + (b_hh * 0.35) + (b_brl * 0.85)
+    pitcher_leak = (p_slg * 28.0) + (p_iso * 42.0) + (p_hh * 0.28) + (p_brl * 0.65)
+    raw = 42.0 + batter_damage + pitcher_leak
+    usage_weight = clip(safe_float(usage, 0.0) / 35.0, 0.35, 1.25)
+    reliability = clip((min(b_bbe, 25) / 25.0 * 0.55) + (min(p_bbe, 35) / 35.0 * 0.45), 0.35, 1.0)
+    score = clip(raw * usage_weight * reliability, 1.0, 99.0)
+
+    if safe_float(usage, 0.0) < 5.0:
+        score = min(score, 45.0)
+        note = "Tiny usage; not a main arsenal pitch"
+    elif b_bbe < 3 and p_bbe < 5:
+        score = min(score, 55.0)
+        note = "Low sample pitch data"
+    elif score >= 78:
+        note = "True pitch-type damage edge"
+    elif score >= 55:
+        note = "Mixed true pitch-type edge"
+    else:
+        note = "Pitch suppresses damage"
+
+    return round(score, 1), note
+
+
+def build_true_arsenal_matchups(player_id: int, pitcher_id, batter_hand: str, pitcher_hand: str) -> dict:
+    try:
+        batter_id_int = int(player_id)
+        pitcher_id_int = int(pitcher_id)
+    except Exception:
+        return {"verified": False, "pitches": [], "mix": {}, "primary_pitch": None, "primary_usage": 0.0, "mode": "NO VERIFIED ARSENAL", "label": "No verified arsenal", "score": 0.0, "reason": "No verified Statcast pitch-type data"}
+
+    pitcher_df = fetch_savant_pitch_detail_csv(pitcher_id_int, "pitcher", CURRENT_SEASON)
+    batter_df = fetch_savant_pitch_detail_csv(batter_id_int, "batter", CURRENT_SEASON)
+    if pitcher_df.empty:
+        return {"verified": False, "pitches": [], "mix": {}, "primary_pitch": None, "primary_usage": 0.0, "mode": "NO VERIFIED ARSENAL", "label": "No verified arsenal", "score": 0.0, "reason": "No verified Statcast pitch-type data"}
+
+    pitcher_summary = summarize_pitch_type_df(filter_pitcher_rows_vs_batter_hand(pitcher_df, batter_hand))
+    batter_summary = summarize_pitch_type_df(filter_batter_rows_vs_pitcher_hand(batter_df, pitcher_hand))
+    if not pitcher_summary:
+        return {"verified": False, "pitches": [], "mix": {}, "primary_pitch": None, "primary_usage": 0.0, "mode": "NO VERIFIED ARSENAL", "label": "No verified arsenal", "score": 0.0, "reason": "No verified Statcast pitch-type data"}
+
+    rows = []
+    for code, pstats in pitcher_summary.items():
+        usage = safe_float(pstats.get("usage"), 0.0)
+        if usage < 3.0 and safe_int(pstats.get("pitches"), 0) < 10:
+            continue
+        bstats = batter_summary.get(code, {})
+        score, note = _pitch_edge_score(bstats, pstats, usage)
+        rows.append({"code": code, "name": PITCH_TYPE_NAMES.get(code, code), "usage": usage, "score": score, "note": note, "pitcher": pstats, "batter": bstats})
+
+    rows = sorted(rows, key=lambda x: safe_float(x.get("usage"), 0.0), reverse=True)
+    if not rows:
+        return {"verified": False, "pitches": [], "mix": {}, "primary_pitch": None, "primary_usage": 0.0, "mode": "NO VERIFIED ARSENAL", "label": "No verified arsenal", "score": 0.0, "reason": "No verified Statcast pitch-type data"}
+
+    top_usage = safe_float(rows[0]["usage"], 0.0)
+    second_usage = safe_float(rows[1]["usage"], 0.0) if len(rows) > 1 else 0.0
+    if top_usage >= 50.0:
+        mode = "HARD"
+        relevant = rows[:1]
+    elif (top_usage - second_usage) >= 20.0:
+        mode = "HARD"
+        relevant = rows[:2]
+    elif (top_usage - second_usage) >= 10.0 or top_usage >= 38.0:
+        mode = "SOFT"
+        relevant = rows[:2]
+    else:
+        mode = "BALANCED"
+        relevant = rows[:3]
+
+    total_usage = sum(safe_float(r["usage"], 0.0) for r in relevant) or 1.0
+    weighted_score = sum(safe_float(r["score"], 0.0) * (safe_float(r["usage"], 0.0) / total_usage) for r in relevant)
+    return {
+        "verified": True,
+        "pitches": rows,
+        "mix": {r["code"]: round(safe_float(r["usage"], 0.0), 1) for r in rows},
+        "primary_pitch": rows[0]["code"],
+        "primary_usage": round(top_usage, 1),
+        "gap": round(top_usage - second_usage, 1),
+        "mode": mode,
+        "label": " + ".join([r["code"] for r in relevant]),
+        "score": round(weighted_score / 10.0, 2),
+        "display_score": round(weighted_score, 1),
+        "reason": rows[0].get("note", "True pitch arsenal"),
+    }
+
+
+def serialize_arsenal_for_row(arsenal: dict) -> str:
+    try:
+        slim = []
+        for r in arsenal.get("pitches", [])[:6]:
+            slim.append({
+                "code": r.get("code"),
+                "name": r.get("name"),
+                "usage": safe_float(r.get("usage"), 0.0),
+                "score": safe_float(r.get("score"), 0.0),
+                "note": r.get("note", ""),
+                "pitcher": r.get("pitcher", {}),
+                "batter": r.get("batter", {}),
+            })
+        return json.dumps({"verified": bool(arsenal.get("verified")), "pitches": slim}, separators=(",", ":"))
+    except Exception:
+        return json.dumps({"verified": False, "pitches": []})
+
+
+def load_arsenal_from_row(row: pd.Series) -> list[dict]:
+    raw = row.get("Pitch Arsenal Data", "")
+    try:
+        data = json.loads(str(raw)) if raw not in [None, ""] else {}
+        pitches = data.get("pitches", []) if isinstance(data, dict) else []
+        return pitches if isinstance(pitches, list) else []
+    except Exception:
+        return []
+
 
 
 def compute_pitcher_live_metrics_from_map(pitcher_id: int, pitcher_name: str, stats_map: dict):
@@ -2774,8 +3405,12 @@ def build_hitter_metrics(
         recent_trend = "COLD"
 
     display_spot = display_lineup_spot(lineup_spot)
-    bats = estimate_handedness_from_name(player_name, "batter")
-    pitcher_throws = estimate_handedness_from_name(opp_pitcher, "pitcher")
+    hitter_meta = hitter_stats_map.get(player_id, {}) if isinstance(hitter_stats_map, dict) else {}
+    pitcher_meta = pitcher_stats_map.get(opp_pitcher_id, {}) if isinstance(pitcher_stats_map, dict) else {}
+    bats = normalized_hand_code(hitter_meta.get("bat_side", ""))
+    pitcher_throws = normalized_hand_code(pitcher_meta.get("pitch_hand", ""))
+    calc_bats = bats if bats in {"L", "R", "S"} else "R"
+    calc_pitcher_throws = pitcher_throws if pitcher_throws in {"L", "R"} else "R"
 
     if live_pitcher is None:
         pitch_hr9 = stable_float(f"{opp_pitcher}-hr9", 0.7, 1.9)
@@ -2791,34 +3426,25 @@ def build_hitter_metrics(
     weather_score_boost = weather_boost * 1.6
     bullpen_fatigue_boost = bullpen_fatigue_score * 1.8
 
-    pitch_mix_example = build_pitch_mix_profile(
-        opp_pitcher,
-        opp_pitcher_id,
-        pitch_hr9,
-        pitch_barrel_allowed,
-        pitch_hard_hit_allowed,
-        pitcher_throws,
+    true_arsenal = build_true_pitch_arsenal_matchup(
+        batter_id=player_id,
+        pitcher_id=opp_pitcher_id,
+        batter_hand=calc_bats,
+        pitcher_hand=calc_pitcher_throws,
+        include_batter=bool(deep_bbe),
     )
-    pitch_context = compute_relevant_pitch_matchup(
-        pitch_mix_example,
-        bats,
-        pitcher_throws,
-        barrel,
-        hard_hit,
-        air_pct,
-        launch_angle,
-        xslg,
-        xwoba,
-        ground_ball,
-    )
-    pitch_mix_mode = pitch_context["mode"]
-    relevant_pitch_mix = pitch_context["label"]
-    primary_pitch = pitch_context["primary_pitch"]
-    primary_pitch_usage = pitch_context["usage"]
-    pitch_gap = pitch_context["gap"]
-    pitch_matchup_score = pitch_context["score"]
-    pitch_matchup_label = pitch_context["reason"]
-    handedness_edge = pitch_context["handedness_edge"]
+    pitch_mix_example = true_arsenal.get("mix", {}) if isinstance(true_arsenal, dict) else {}
+    pitch_mix_mode = true_arsenal.get("mode", "NO VERIFIED ARSENAL")
+    relevant_pitch_mix = true_arsenal.get("label", "No verified arsenal")
+    primary_pitch = true_arsenal.get("primary_pitch")
+    primary_pitch_usage = safe_float(true_arsenal.get("primary_usage"), 0.0)
+    pitch_gap = safe_float(true_arsenal.get("gap"), 0.0)
+    pitch_matchup_score = safe_float(true_arsenal.get("score"), 0.0)
+    pitch_matchup_label = true_arsenal.get("reason", "No verified pitch edge")
+    if calc_bats == "S":
+        handedness_edge = 1.4
+    else:
+        handedness_edge = 1.4 if calc_bats and calc_pitcher_throws and calc_bats != calc_pitcher_throws else -0.4
 
     pitch_isolation_bonus = -2.5
     pitch_isolation_valid = "No"
@@ -3280,6 +3906,8 @@ def build_hitter_metrics(
         "Primary Pitch Usage": round(primary_pitch_usage, 1),
         "Pitch Gap": round(pitch_gap, 1),
         "Pitch Matchup Score": round(pitch_matchup_score, 2),
+        "True Arsenal Verified": bool(true_arsenal.get("verified", False)) if isinstance(true_arsenal, dict) else False,
+        "Pitch Arsenal Data": serialize_arsenal_for_row(true_arsenal if isinstance(true_arsenal, dict) else {}),
         "Handedness Edge": round(handedness_edge, 2),
         "Lineup Spot": display_spot,
         "Lineup Source": lineup_source,
@@ -4397,265 +5025,110 @@ def render_bar(label: str, value, max_value: float = 100.0, suffix: str = "", fi
     return f"{label}: {val:.1f}{suffix}"
 
 
-
-
-def _attackability_pct(value) -> float:
-    """Convert BF Data HR Attackability Score into a 0-100 display scale.
-
-    The engine stores HR Attackability Score on roughly a 0-45 scale.
-    The matchup card needs a percentage-like value for OVR/STUFF display.
-    """
-    val = safe_float(value, 0.0)
-    if val <= 0:
-        return 0.0
-    if val <= 45:
-        return round(clip((val / 45.0) * 100.0, 0.0, 100.0), 1)
-    return round(clip(val, 0.0, 100.0), 1)
-
-
-def _score_color_class(value, good=70, warn=50, lower_is_better=False):
-    val = safe_float(value, 0.0)
-    if lower_is_better:
-        if val <= good:
-            return "bf-num-green"
-        if val <= warn:
-            return "bf-num-yellow"
-        return "bf-num-red"
-    if val >= good:
-        return "bf-num-green"
-    if val >= warn:
-        return "bf-num-yellow"
-    return "bf-num-red"
-
-
-def _display_hand(raw, role="batter"):
-    txt = str(raw or "").strip().upper()
-    if role == "pitcher":
-        if txt in {"L", "LHP", "LEFT", "LEFTY"}:
-            return "LHP"
-        if txt in {"R", "RHP", "RIGHT", "RIGHTY"}:
-            return "RHP"
-        return "—"
-    if txt in {"S", "SH", "SHB", "SWITCH"}:
-        return "SHB"
-    if txt in {"L", "LHB", "LEFT", "LEFTY"}:
-        return "LHB"
-    if txt in {"R", "RHB", "RIGHT", "RIGHTY"}:
-        return "RHB"
-    return "—"
-
-
-def _pitch_full_name(code):
-    c = str(code or "").strip().upper()
-    return {
-        "FF": "FOUR-SEAM",
-        "FA": "FOUR-SEAM",
-        "SI": "SINKER",
-        "SL": "SLIDER",
-        "CH": "CHANGEUP",
-        "CU": "CURVEBALL",
-        "KC": "CURVEBALL",
-        "FC": "CUTTER",
-        "FS": "SPLITTER",
-        "ST": "SWEEPER",
-        "MIX": "MIX",
-    }.get(c, c if c else "—")
-
-
-def _parse_relevant_pitches(row: pd.Series):
-    raw = _display_value(row.get("Relevant Pitch Mix", row.get("Primary Pitch", "Mix")))
-    parts = [p.strip().upper() for p in re.split(r"\+|,|/", raw) if p.strip()]
-    primary = str(row.get("Primary Pitch", "") or "").strip().upper()
-    if primary and primary not in {"MIX", "—", "NONE"} and primary not in parts:
-        parts.insert(0, primary)
-    if not parts:
-        parts = [primary if primary else "MIX"]
-    clean = []
-    for p in parts:
-        p = p.replace(" ", "")
-        if p and p not in clean:
-            clean.append(p)
-    fallback = ["FF", "SL", "CH", "CU", "SI"]
-    for f in fallback:
-        if len(clean) >= 5:
-            break
-        if f not in clean:
-            clean.append(f)
-    return clean[:5]
-
-
-def _pitch_tile_html(name, score, usage, note):
-    color_cls = _score_color_class(score, 75, 52)
-    txt_color = "bf-green-txt" if color_cls == "bf-num-green" else ("bf-yellow-txt" if color_cls == "bf-num-yellow" else "bf-red-txt")
-    use_width = max(4, min(100, safe_float(usage, 0)))
-    return (
-        '<div class="bf-pitch-tile">'
-        f'<div class="bf-pitch-name">{escape(_pitch_full_name(name))}</div>'
-        f'<div class="bf-pitch-score {txt_color}">{safe_float(score, 0):.0f}</div>'
-        '<div class="bf-usage-label">USAGE</div>'
-        f'<div class="bf-usage-track"><div class="bf-usage-fill" style="width:{use_width:.1f}%"></div></div>'
-        f'<div class="bf-pitch-note">Usage {safe_float(usage,0):.0f}% · {escape(str(note))}</div>'
-        '</div>'
-    )
-
-
-def _match_card_html(row: pd.Series, rank_override=None):
-    rank = rank_override if rank_override is not None else row.get("Rank", "—")
-    player = _display_value(row.get("Player"))
-    team = _display_value(row.get("Team"))
-    game = _display_value(row.get("Game"))
-    pitcher = _display_value(row.get("Pitcher"))
-    bats = _display_hand(row.get("Bats"), "batter")
-    throws = _display_hand(row.get("Pitcher Throws"), "pitcher")
-
-    hr_prob = safe_float(row.get("HR Probability %"), 0.0)
-    matchup_score = safe_float(row.get("Matchup Advantage Score"), 0.0)
-    hr_attack_pct = safe_float(row.get("HR Attackability %", _attackability_pct(row.get("HR Attackability Score", 0))), 0.0)
-    authority_score = safe_float(row.get("Statcast Authority Score"), 0.0)
-    l10_bbe_quality = safe_float(row.get("L10 BBE Quality"), 0.0)
-    pitch_matchup = safe_float(row.get("Pitch Matchup Score"), 0.0)
-
-    overall_score = clip((matchup_score * 1.25) + (hr_attack_pct * .18) + (hr_prob * .65), 0, 99)
-    hr_score = clip(max(hr_prob * 3.55, authority_score * 2.1, l10_bbe_quality), 0, 99)
-    k_score = clip(100 - max(0, safe_float(row.get("GroundBall%"), 0) - 35) * 1.3 + max(0, safe_float(row.get("AIR%"), 0) - 50) * .35, 0, 99)
-
-    ovr_cls = _score_color_class(overall_score, 70, 50)
-    hr_cls = _score_color_class(hr_score, 70, 50)
-    k_cls = _score_color_class(k_score, 70, 50)
-
-    barrel = safe_float(row.get("Barrel%"), 0.0)
-    hard_hit = safe_float(row.get("HardHit%"), 0.0)
-    ev = safe_float(row.get("EV"), 0.0)
-    contact = clip(100 - max(0, safe_float(row.get("GroundBall%"), 0) - 40) - max(0, 40 - hard_hit) * .6, 0, 100)
-    fb = safe_float(row.get("FlyBall%"), 0.0)
-    gb = safe_float(row.get("GroundBall%"), 0.0)
-    ld = safe_float(row.get("LineDrive%"), 0.0)
-    launch = safe_float(row.get("LaunchAngle"), 0.0)
-    max_ev = max(ev, safe_float(row.get("EV"), 0.0) + 20.5)
-    pull = clip(35 + safe_float(row.get("Handedness Edge"), 0) * 4 + safe_float(row.get("Barrel%"), 0) * .25, 0, 100)
-    oppo = clip(100 - pull - 35, 0, 100)
-
-    pitch_hr9 = safe_float(row.get("Pitcher_HR9_Last7"), 0.0)
-    pitch_barrel = safe_float(row.get("Pitcher_Barrel_Allowed"), 0.0)
-    pitch_hh = safe_float(row.get("Pitcher_HardHit_Allowed"), 0.0)
-    season_hr9 = safe_float(row.get("Pitcher Season HR/9", row.get("Pitcher_Season_HR9", pitch_hr9)), pitch_hr9)
-    opp_avg = clip(.190 + pitch_hh / 500 + pitch_barrel / 1000, .180, .330)
-    era_proxy = clip(2.20 + pitch_hr9 * 1.15 + pitch_barrel * .05, 1.50, 6.50)
-    k_proxy = clip(18 + (100 - k_score) * .12 + pitch_hh * .08, 12, 35)
-    stuff_label = "Elite" if hr_attack_pct < 45 else ("Mixed" if hr_attack_pct < 70 else "Attackable")
-
-    pitches = _parse_relevant_pitches(row)
-    primary_usage = safe_float(row.get("Primary Pitch Usage"), 0.0)
-    if primary_usage <= 0:
-        primary_usage = 38.0
-    base_pitch_score = clip(55 + pitch_matchup * 6.0 + authority_score * .35, 25, 99)
-    pitch_notes = [
-        _display_value(row.get("Ranking Reasons", row.get("Why", "Pitch edge"))),
-        _display_value(row.get("Pitch_Isolation_Valid", "Pitch path")),
-        _display_value(row.get("GB Note", "Contact path")),
-        _display_value(row.get("Recent Trend", "Trend")),
-        _display_value(row.get("WeatherNote", "Weather")),
-    ]
-    tiles = []
-    for i, p in enumerate(pitches):
-        usage = primary_usage if i == 0 else max(6, primary_usage - (i * 10) - (i * 2))
-        score = clip(base_pitch_score - i * 8 + (4 if p == str(row.get("Primary Pitch", "")).upper() else 0), 25, 99)
-        tiles.append(_pitch_tile_html(p, score, usage, pitch_notes[i % len(pitch_notes)][:46]))
-
-    def bvp_cell(label, batter_val, pitcher_val, suffix=""):
-        b = safe_float(batter_val, 0.0)
-        p = safe_float(pitcher_val, 0.0)
-        return (
-            '<div class="bf-bvp-cell">'
-            f'<div class="bf-bvp-label">{escape(label)}</div>'
-            f'<div class="bf-bvp-values"><span class="bf-green-txt">{b:.1f}{suffix}</span> <span class="bf-red-txt">{p:.1f}{suffix}</span></div>'
-            '</div>'
-        )
-
-    bvp_cells = "".join([
-        bvp_cell("BARREL%", barrel, pitch_barrel, "%"),
-        bvp_cell("EXIT VELO", ev, max(80, ev - 3.5)),
-        bvp_cell("HARD HIT%", hard_hit, pitch_hh, "%"),
-        bvp_cell("CONTACT%", contact, clip(100-k_proxy, 55, 88), "%"),
-        bvp_cell("FB%", fb, clip(30 + pitch_hr9 * 7, 20, 55), "%"),
-        bvp_cell("GB%", gb, clip(32 + (1.4 - pitch_hr9) * 8, 20, 55), "%"),
-        bvp_cell("LD%", ld, 17, "%"),
-        bvp_cell("LAUNCH", launch, 16.2),
-        bvp_cell("MAX EV", max_ev, max_ev - 5),
-        bvp_cell("PULL%", pull, 43, "%"),
-        bvp_cell("OPPO%", oppo, 22, "%"),
-        bvp_cell("AVG", safe_float(row.get("xwOBA", 0.0), 0.0), opp_avg),
-    ])
-
-    why = _display_value(row.get("Ranking Reasons", row.get("Why", "")))
-    why2 = _display_value(row.get("Why", ""))
-    actual_hr = safe_int(row.get("Actual HR Today"), 0)
-    hit_banner = f'<div class="bf-card-foot"><span class="bf-green-txt">HR HIT TODAY: {actual_hr}</span></div>' if actual_hr > 0 else ""
-
-    return f'''
-<div class="bf-match-card">
-  <div class="bf-match-topline">
-    <div class="bf-cell-head"><div class="bf-head-label">PLAYER</div><div class="bf-head-main">#{escape(str(rank))} {escape(player)} <span class="bf-hand-badge">{escape(bats)}</span></div><div class="bf-quick-sub">{escape(team)} • {escape(game)}</div></div>
-    <div class="bf-cell-head"><div class="bf-head-label">VS PITCHER</div><div class="bf-head-main">{escape(pitcher)} <span class="bf-hand-badge">{escape(throws)}</span></div></div>
-    <div class="bf-score-box"><div class="lab">OVR</div><div class="num {ovr_cls}">{overall_score:.0f}</div></div>
-    <div class="bf-score-box"><div class="lab">HR</div><div class="num {hr_cls}">{hr_score:.0f}</div></div>
-    <div class="bf-score-box"><div class="lab">K</div><div class="num {k_cls}">{k_score:.0f}</div></div>
-  </div>
-  {hit_banner}
-  <div class="bf-card-body">
-    <div class="bf-side-panel">
-      <div class="bf-section-title">MATCHUP SCORES</div>
-      <div class="bf-score-line"><span>Overall</span><span class="bf-pill-num {ovr_cls}">{overall_score:.0f}</span></div>
-      <div class="bf-score-line"><span>HR Power</span><span class="bf-pill-num {hr_cls}">{hr_score:.0f}</span></div>
-      <div class="bf-score-line"><span>K Risk</span><span class="bf-pill-num {k_cls}">{k_score:.0f}</span></div>
-      <div class="bf-section-title" style="margin-top:14px;">OPPOSING PITCHER</div>
-      <div class="bf-pitcher-stat"><span>{escape(pitcher)}</span><span class="bf-hand-badge">{escape(throws)}</span></div>
-      <div class="bf-pitcher-stat"><span>ERA</span><span class="bf-pill-num {_score_color_class(era_proxy, 3.75, 4.75, True)}">{era_proxy:.2f}</span></div>
-      <div class="bf-pitcher-stat"><span>K%</span><span class="bf-pill-num {_score_color_class(k_proxy, 22, 18)}">{k_proxy:.0f}%</span></div>
-      <div class="bf-pitcher-stat"><span>OPP AVG</span><span class="bf-pill-num {_score_color_class(opp_avg, .235, .270, True)}">{opp_avg:.3f}</span></div>
-      <div class="bf-pitcher-stat"><span>HR/9</span><span class="bf-pill-num {_score_color_class(season_hr9, 1.25, .85)}">{season_hr9:.2f}</span></div>
-      <div class="bf-pitcher-stat"><span>STUFF</span><span class="bf-pill-num {_score_color_class(100-hr_attack_pct, 60, 35)}">{escape(stuff_label)}</span></div>
-    </div>
-    <div>
-      <div class="bf-section-title">X-ARSENAL · PITCH TYPE MATCHUP</div>
-      <div class="bf-arsenal-grid">{''.join(tiles)}</div>
-      <div class="bf-bvp-title">BATTER VS PITCHER · <span class="bf-green-txt">BATTER</span> / <span class="bf-red-txt">PITCHER</span></div>
-      <div class="bf-bvp-grid">{bvp_cells}</div>
-    </div>
-  </div>
-  <div class="bf-card-foot"><b>BF read:</b> {escape(why)}</div>
-  <div class="bf-card-foot"><b>Why:</b> {escape(why2)}</div>
-</div>'''
-
-
 def render_player_card(row: pd.Series, rank_override=None):
     rank = rank_override if rank_override is not None else row.get("Rank", "—")
     player = _display_value(row.get("Player"))
     team = _display_value(row.get("Team"))
     game = _display_value(row.get("Game"))
     pitcher = _display_value(row.get("Pitcher"))
+    bats_label = {"L": "LHB", "R": "RHB", "S": "SHB", "": "—"}.get(str(row.get("Bats", "")).upper(), str(row.get("Bats", "—")))
+    throws_label = {"L": "LHP", "R": "RHP", "": "—"}.get(str(row.get("Pitcher Throws", "")).upper(), str(row.get("Pitcher Throws", "—")))
+    tier = _display_value(row.get("HR Tier"))
+    lineup = _display_value(row.get("Lineup Spot"))
+    lineup_source = _display_value(row.get("Lineup Source"))
+    matchup = _display_value(row.get("Matchup Advantage"))
+    gb_rule = _display_value(row.get("GB Rule"))
+    recent = _display_value(row.get("Recent Trend"))
+    weather = _display_value(row.get("WeatherNote"))
+    pitch_mix = _display_value(row.get("Relevant Pitch Mix"))
+    pitch_mode = _display_value(row.get("Pitch Mix Mode"))
+    why = _display_value(row.get("Ranking Reasons", row.get("Why", "")))
+    why2 = _display_value(row.get("Why", ""))
+
     hr_prob = safe_float(row.get("HR Probability %"), 0.0)
     matchup_score = safe_float(row.get("Matchup Advantage Score"), 0.0)
-    hr_attack_pct = safe_float(row.get("HR Attackability %", _attackability_pct(row.get("HR Attackability Score", 0))), 0.0)
+    hr_attackability = safe_float(row.get("HR Attackability Score", 0.0), 0.0)
     authority_score = safe_float(row.get("Statcast Authority Score"), 0.0)
-    l10_bbe_quality = safe_float(row.get("L10 BBE Quality"), 0.0)
-    overall_score = clip((matchup_score * 1.25) + (hr_attack_pct * .18) + (hr_prob * .65), 0, 99)
-    hr_score = clip(max(hr_prob * 3.55, authority_score * 2.1, l10_bbe_quality), 0, 99)
-    k_score = clip(100 - max(0, safe_float(row.get("GroundBall%"), 0) - 35) * 1.3 + max(0, safe_float(row.get("AIR%"), 0) - 50) * .35, 0, 99)
+    barrel = safe_float(row.get("Barrel%"), 0.0)
+    hard_hit = safe_float(row.get("HardHit%"), 0.0)
+    air_pct = safe_float(row.get("AIR%"), 0.0)
+    ground_ball = safe_float(row.get("GroundBall%"), 0.0)
+    xslg = safe_float(row.get("xSLG"), 0.0)
     actual_hr = safe_int(row.get("Actual HR Today"), 0)
-    hit = f" · HR HIT {actual_hr}" if actual_hr > 0 else ""
 
-    quick_html = f'''
-<div class="bf-quick-row">
-  <div><div class="bf-quick-player">#{escape(str(rank))} {escape(player)}</div><div class="bf-quick-sub">{escape(team)} • {escape(game)}</div></div>
-  <div><div class="bf-quick-player">vs {escape(pitcher)}</div><div class="bf-quick-sub">HR {hr_prob:.1f}%{escape(hit)}</div></div>
-  <div class="bf-mini-score"><b>OVR</b><span>{overall_score:.0f}</span></div>
-  <div class="bf-mini-score"><b>HR</b><span>{hr_score:.0f}</span></div>
-  <div class="bf-mini-score"><b>K</b><span>{k_score:.0f}</span></div>
-</div>'''
-    st.markdown(quick_html, unsafe_allow_html=True)
-    with st.expander(f"Open matchup card — {player} vs {pitcher}", expanded=False):
-        st.markdown(_match_card_html(row, rank_override=rank), unsafe_allow_html=True)
+    st.markdown(f"**#{rank} {player}** `{bats_label}`  \n`{team}` • {game}")
+    st.caption(f"vs {pitcher} `{throws_label}`")
+
+    chip_row = "".join([
+        _chip_html(tier, _tier_color(tier)),
+        _chip_html(f"LU {lineup}", "gray"),
+        _chip_html(lineup_source, "gray"),
+        _chip_html(f"Matchup {matchup}", _matchup_color(matchup)),
+        _chip_html(f"GB {gb_rule}", _gb_color(ground_ball)),
+    ])
+    st.markdown(f'<div class="bf-mini-row">{chip_row}</div>', unsafe_allow_html=True)
+
+    hr_signal, hr_color = _signal_from_value(hr_prob, good_at=14, warn_at=9)
+    matchup_signal, matchup_color = _signal_from_value(matchup_score, good_at=55, warn_at=38)
+    attack_signal, attack_color = _signal_from_value(hr_attackability, good_at=24, warn_at=13)
+    authority_signal, authority_color = _signal_from_value(authority_score, good_at=30, warn_at=17)
+
+    st.markdown(
+        '<div class="bf-signal-line">'
+        f'<strong>HR</strong> {hr_signal} {_value_span(f"{hr_prob:.1f}%", hr_color)} · '
+        f'<strong>Matchup</strong> {matchup_signal} {_value_span(f"{matchup_score:.1f}", matchup_color)} · '
+        f'<strong>HR Attack</strong> {attack_signal} {_value_span(f"{hr_attackability:.1f}", attack_color)} · '
+        f'<strong>Auth</strong> {authority_signal} {_value_span(f"{authority_score:.1f}", authority_color)}'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+    if actual_hr > 0:
+        st.success(f"HR HIT TODAY: {actual_hr}")
+
+    with st.expander("Bars + matchup details", expanded=False):
+        st.markdown(_signal_bar_html("HR Probability", hr_prob, 28, "%", good_at=14, warn_at=9), unsafe_allow_html=True)
+        st.markdown(_signal_bar_html("Matchup Score", matchup_score, 75, good_at=55, warn_at=38), unsafe_allow_html=True)
+        st.markdown(_signal_bar_html("HR Attackability", hr_attackability, 45, good_at=24, warn_at=13), unsafe_allow_html=True)
+        st.markdown(_signal_bar_html("Statcast Authority", authority_score, 55, good_at=30, warn_at=17), unsafe_allow_html=True)
+        st.markdown(_signal_bar_html("Barrel", barrel, 20, "%", good_at=11, warn_at=8), unsafe_allow_html=True)
+        st.markdown(_signal_bar_html("Hard Hit", hard_hit, 60, "%", good_at=42, warn_at=35), unsafe_allow_html=True)
+        st.markdown(_signal_bar_html("Air Ball", air_pct, 75, "%", good_at=55, warn_at=48), unsafe_allow_html=True)
+        st.markdown(_signal_bar_html("Ground Ball Risk", ground_ball, 60, "%", good_at=44, warn_at=50, lower_is_better=True), unsafe_allow_html=True)
+
+        st.caption(f"Pitch Mix: {pitch_mode} • {pitch_mix} | xSLG: {xslg:.3f} | Trend: {recent}")
+        st.caption(f"Weather: {weather}")
+
+        arsenal_rows = []
+        for pitch_data in load_arsenal_from_row(row):
+            batter_stats = pitch_data.get("batter", {}) if isinstance(pitch_data.get("batter", {}), dict) else {}
+            pitcher_stats = pitch_data.get("pitcher", {}) if isinstance(pitch_data.get("pitcher", {}), dict) else {}
+            arsenal_rows.append({
+                "Pitch": pitch_data.get("name") or PITCH_TYPE_NAMES.get(str(pitch_data.get("code", "")).upper(), pitch_data.get("code", "")),
+                "Usage %": pitch_data.get("usage"),
+                "Pitcher Contact Allowed %": pitcher_stats.get("contact_pct"),
+                "Pitcher Whiff %": pitcher_stats.get("whiff_pct"),
+                "Pitcher SLG Allowed": pitcher_stats.get("slg"),
+                "Pitcher ISO Allowed": pitcher_stats.get("iso"),
+                "Pitcher BBE": pitcher_stats.get("bbe"),
+                "Batter Contact %": batter_stats.get("contact_pct"),
+                "Batter SLG": batter_stats.get("slg"),
+                "Batter ISO": batter_stats.get("iso"),
+                "Batter BBE": batter_stats.get("bbe"),
+                "BF Pitch Score": pitch_data.get("score"),
+                "Note": pitch_data.get("note", ""),
+            })
+        if arsenal_rows:
+            st.caption("Verified Statcast arsenal — only real pitcher pitch types and true usage are shown. Batter pitch-contact columns fill on Deep L10 Refresh.")
+            st.dataframe(pd.DataFrame(arsenal_rows), use_container_width=True, hide_index=True)
+        else:
+            st.caption("No verified Statcast pitch-type arsenal available — BF Data is not inventing pitch types.")
+
+        st.write(f"Why: {why}")
+        if why2 and why2 != why:
+            st.caption(why2)
+
+    st.divider()
 
 
 def render_card_grid(df: pd.DataFrame, max_cards: int = 24, columns: int = 3, title: str | None = None):
@@ -4667,11 +5140,27 @@ def render_card_grid(df: pd.DataFrame, max_cards: int = 24, columns: int = 3, ti
     if title:
         st.markdown(f"### {title}")
 
-    st.markdown('<div class="bf-quick-list">', unsafe_allow_html=True)
-    for i, (_, row) in enumerate(view.iterrows()):
-        rank = row.get("Rank", i + 1)
-        render_player_card(row, rank_override=rank)
-    st.markdown('</div>', unsafe_allow_html=True)
+    try:
+        columns = int(columns)
+    except Exception:
+        columns = 3
+
+    # Desktop keeps the fast side-by-side scan. We render by ROWS (1-4, 5-8, ...),
+    # not by Streamlit's default column stacking, so phones keep true rank order.
+    columns = max(1, min(columns, 4))
+    if columns == 1:
+        for i, (_, row) in enumerate(view.iterrows()):
+            rank = row.get("Rank", i + 1)
+            render_player_card(row, rank_override=rank)
+        return
+
+    for start_idx in range(0, len(view), columns):
+        row_slice = view.iloc[start_idx:start_idx + columns]
+        cols = st.columns(columns)
+        for offset, (_, row) in enumerate(row_slice.iterrows()):
+            with cols[offset]:
+                rank = row.get("Rank", start_idx + offset + 1)
+                render_player_card(row, rank_override=rank)
 
 c1, c2, c3, c4 = st.columns([1, 1, 1, 2])
 with c1:
