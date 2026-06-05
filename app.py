@@ -88,6 +88,12 @@ AUTO_REFRESH_SECONDS = 120
 # Use Deep L10 Refresh only when you intentionally want the slower research pass.
 DEFAULT_DEEP_L10_BBE = False
 
+# Speed control: true batter-vs-pitch Statcast CSV calls are very heavy when run
+# for every candidate on the slate. Keep default load fast by using verified
+# pitcher arsenal only; use Deep Arsenal Refresh when you want batter pitch-type
+# splits added to the card.
+DEFAULT_TRUE_BATTER_PITCH_SPLITS = False
+
 
 if "last_refresh_time" not in st.session_state:
     st.session_state.last_refresh_time = time.time()
@@ -1967,7 +1973,7 @@ def fetch_savant_pitch_detail_csv(player_id: int, player_type: str, season: int)
             "https://baseballsavant.mlb.com/statcast_search/csv",
             params=params,
             headers={"User-Agent": "Mozilla/5.0"},
-            timeout=10,
+            timeout=6,
         )
         resp.raise_for_status()
         raw = resp.text
@@ -2120,7 +2126,7 @@ def _pitch_edge_score(batter_stats: dict | None, pitcher_stats: dict | None, usa
     return round(score, 1), note
 
 
-def build_true_arsenal_matchups(player_id: int, pitcher_id, batter_hand: str, pitcher_hand: str) -> dict:
+def build_true_arsenal_matchups(player_id: int, pitcher_id, batter_hand: str, pitcher_hand: str, include_batter_splits: bool = False) -> dict:
     try:
         batter_id_int = int(player_id)
         pitcher_id_int = int(pitcher_id)
@@ -2128,12 +2134,20 @@ def build_true_arsenal_matchups(player_id: int, pitcher_id, batter_hand: str, pi
         return {"verified": False, "pitches": [], "mix": {}, "primary_pitch": None, "primary_usage": 0.0, "mode": "NO VERIFIED ARSENAL", "label": "No verified arsenal", "score": 0.0, "reason": "No verified Statcast pitch-type data"}
 
     pitcher_df = fetch_savant_pitch_detail_csv(pitcher_id_int, "pitcher", CURRENT_SEASON)
-    batter_df = fetch_savant_pitch_detail_csv(batter_id_int, "batter", CURRENT_SEASON)
     if pitcher_df.empty:
         return {"verified": False, "pitches": [], "mix": {}, "primary_pitch": None, "primary_usage": 0.0, "mode": "NO VERIFIED ARSENAL", "label": "No verified arsenal", "score": 0.0, "reason": "No verified Statcast pitch-type data"}
 
     pitcher_summary = summarize_pitch_type_df(filter_pitcher_rows_vs_batter_hand(pitcher_df, batter_hand))
-    batter_summary = summarize_pitch_type_df(filter_batter_rows_vs_pitcher_hand(batter_df, pitcher_hand))
+
+    # IMPORTANT SPEED FIX:
+    # Pulling full Baseball Savant CSV for every batter is what made the board
+    # crawl. The default board now verifies the PITCHER'S real arsenal/usage
+    # only and does not invent pitch types. Batter-vs-pitch splits are optional
+    # through Deep Arsenal Refresh, so normal updates stay fast.
+    batter_summary = {}
+    if include_batter_splits:
+        batter_df = fetch_savant_pitch_detail_csv(batter_id_int, "batter", CURRENT_SEASON)
+        batter_summary = summarize_pitch_type_df(filter_batter_rows_vs_pitcher_hand(batter_df, pitcher_hand))
     if not pitcher_summary:
         return {"verified": False, "pitches": [], "mix": {}, "primary_pitch": None, "primary_usage": 0.0, "mode": "NO VERIFIED ARSENAL", "label": "No verified arsenal", "score": 0.0, "reason": "No verified Statcast pitch-type data"}
 
@@ -2144,6 +2158,8 @@ def build_true_arsenal_matchups(player_id: int, pitcher_id, batter_hand: str, pi
             continue
         bstats = batter_summary.get(code, {})
         score, note = _pitch_edge_score(bstats, pstats, usage)
+        if not include_batter_splits:
+            note = "Verified pitcher arsenal; deep batter pitch splits off"
         rows.append({"code": code, "name": PITCH_TYPE_NAMES.get(code, code), "usage": usage, "score": score, "note": note, "pitcher": pstats, "batter": bstats})
 
     rows = sorted(rows, key=lambda x: safe_float(x.get("usage"), 0.0), reverse=True)
@@ -3067,6 +3083,7 @@ def build_hitter_metrics(
         pitcher_id=opp_pitcher_id,
         batter_hand=calc_bats,
         pitcher_hand=calc_pitcher_throws,
+        include_batter_splits=bool(st.session_state.get("deep_arsenal_splits", DEFAULT_TRUE_BATTER_PITCH_SPLITS)),
     )
     pitch_mix_example = true_arsenal.get("mix", {}) if isinstance(true_arsenal, dict) else {}
     pitch_mix_mode = true_arsenal.get("mode", "NO VERIFIED ARSENAL")
@@ -4751,7 +4768,7 @@ def render_player_card(row: pd.Series, rank_override=None):
                 "Note": pitch_data.get("note", ""),
             })
         if arsenal_rows:
-            st.caption("Verified Statcast arsenal — only real pitcher pitch types are shown.")
+            st.caption("Verified Statcast pitcher arsenal — only real pitcher pitch types are shown. Use Deep Arsenal Refresh for batter pitch-type splits.")
             st.dataframe(pd.DataFrame(arsenal_rows), use_container_width=True, hide_index=True)
         else:
             st.caption("No verified Statcast pitch-type arsenal available — BF Data is not inventing pitch types.")
@@ -4799,11 +4816,19 @@ with c1:
     if st.button("Update Board", use_container_width=True):
         st.session_state.manual_refresh_trigger = True
         st.session_state.deep_l10_bbe = False
+        st.session_state.deep_arsenal_splits = False
         st.cache_data.clear()
         st.rerun()
     if st.button("Deep L10 Refresh", use_container_width=True):
         st.session_state.manual_refresh_trigger = True
         st.session_state.deep_l10_bbe = True
+        st.session_state.deep_arsenal_splits = False
+        st.cache_data.clear()
+        st.rerun()
+    if st.button("Deep Arsenal Refresh", use_container_width=True):
+        st.session_state.manual_refresh_trigger = True
+        st.session_state.deep_l10_bbe = False
+        st.session_state.deep_arsenal_splits = True
         st.cache_data.clear()
         st.rerun()
 
