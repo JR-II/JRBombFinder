@@ -4398,6 +4398,21 @@ def render_bar(label: str, value, max_value: float = 100.0, suffix: str = "", fi
 
 
 
+
+def _attackability_pct(value) -> float:
+    """Convert BF Data HR Attackability Score into a 0-100 display scale.
+
+    The engine stores HR Attackability Score on roughly a 0-45 scale.
+    The matchup card needs a percentage-like value for OVR/STUFF display.
+    """
+    val = safe_float(value, 0.0)
+    if val <= 0:
+        return 0.0
+    if val <= 45:
+        return round(clip((val / 45.0) * 100.0, 0.0, 100.0), 1)
+    return round(clip(val, 0.0, 100.0), 1)
+
+
 def _score_color_class(value, good=70, warn=50, lower_is_better=False):
     val = safe_float(value, 0.0)
     if lower_is_better:
