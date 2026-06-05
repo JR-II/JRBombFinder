@@ -869,6 +869,36 @@ def get_true_pitcher_hand(pitcher_id, hand_map: dict) -> str:
     return normalize_hand_code((hand_map.get(pid) or {}).get("throw"), "")
 
 
+@st.cache_data(ttl=21600)
+def lookup_mlb_person_id_by_name(name: str):
+    """Resolve a player/pitcher name to MLBAM ID for real Statcast arsenal pulls.
+
+    This is only a fallback for older saved snapshots or rows that do not carry
+    Player ID / Pitcher ID. It prevents the card from reusing stale/fake arsenal
+    tiles when the ID was missing.
+    """
+    clean = str(name or "").strip()
+    if not clean or clean in {"—", "Starter Pending"}:
+        return None
+    try:
+        resp = requests.get(
+            "https://statsapi.mlb.com/api/v1/people/search",
+            params={"names": clean},
+            timeout=12,
+        )
+        resp.raise_for_status()
+        people = (resp.json() or {}).get("people", []) or []
+        if not people:
+            return None
+        target = normalize_name(clean)
+        for person in people:
+            if normalize_name(person.get("fullName", "")) == target:
+                return person.get("id")
+        return people[0].get("id")
+    except Exception:
+        return None
+
+
 def estimate_handedness_from_name(name: str, role: str = "batter") -> str:
     # Kept only as a final emergency fallback for missing MLB IDs.
     # Normal app flow now uses MLB person batSide/pitchHand, not name guessing.
@@ -3634,6 +3664,8 @@ def build_hitter_metrics(
     }))
 
     return {
+        "Player ID": player_id,
+        "Pitcher ID": opp_pitcher_id,
         "Player": player_name,
         "Team": team,
         "Bats": bats,
@@ -4822,27 +4854,74 @@ def _pitch_full_name(code):
         "SL": "SLIDER",
         "CH": "CHANGEUP",
         "CU": "CURVEBALL",
-        "KC": "CURVEBALL",
+        "KC": "KNUCKLE CURVE",
         "FC": "CUTTER",
         "FS": "SPLITTER",
         "ST": "SWEEPER",
+        "SV": "SLURVE",
+        "CS": "SLOW CURVE",
+        "FO": "FORKBALL",
+        "EP": "EEPHUS",
+        "KN": "KNUCKLEBALL",
         "MIX": "MIX",
     }.get(c, c if c else "—")
 
 
-def _parse_relevant_pitches(row: pd.Series):
-    raw_tiles = row.get("True Pitch Arsenal", "")
-    try:
-        tiles = json.loads(raw_tiles) if isinstance(raw_tiles, str) and raw_tiles.strip() else []
-    except Exception:
-        tiles = []
-    if isinstance(tiles, list) and tiles:
-        return tiles
+def _row_id_value(row: pd.Series, candidates: list[str]):
+    for col in candidates:
+        if col in row.index:
+            val = row.get(col)
+            try:
+                if pd.notna(val) and str(val).strip() not in {"", "nan", "None", "—"}:
+                    return val
+            except Exception:
+                if val:
+                    return val
+    return None
 
-    raw = _display_value(row.get("Relevant Pitch Mix", row.get("Primary Pitch", "")), "")
-    parts = [p.strip().upper() for p in re.split(r"\+|,|/", raw) if p.strip() and p.strip().upper() not in {"MIX", "—", "NONE"}]
-    # Real-only: do not append fake FF/SL/CH/CU/SI fallback pitches.
-    return [{"pitch": p, "usage": safe_float(row.get("Primary Pitch Usage"), 0.0) if i == 0 else 0.0, "score": 0, "note": "Verified pitch data unavailable"} for i, p in enumerate(parts[:5])]
+
+def _parse_relevant_pitches(row: pd.Series):
+    """Return real, row-specific pitcher arsenal tiles only.
+
+    The card should never borrow stale JSON from another player/pitcher or fill
+    with generic FF/SL/CH/CU/SI fallbacks. It first resolves the actual pitcher
+    ID for this row, then pulls that pitcher's Statcast arsenal.
+    """
+    pitcher_id = _row_id_value(row, [
+        "Pitcher ID", "pitcher_id", "opp_pitcher_id", "Opp Pitcher ID", "Probable Pitcher ID"
+    ])
+    batter_id = _row_id_value(row, [
+        "Player ID", "player_id", "Batter ID", "batter_id", "MLBAM ID"
+    ])
+
+    if pitcher_id is None:
+        pitcher_id = lookup_mlb_person_id_by_name(row.get("Pitcher", ""))
+    if batter_id is None:
+        batter_id = lookup_mlb_person_id_by_name(row.get("Player", ""))
+
+    # Always prefer a live, row-specific arsenal. One cached call per pitcher.
+    live_tiles = build_matchup_arsenal_tiles(
+        pitcher_id,
+        batter_id,
+        0.0,
+        0.0,
+        include_batter=bool(st.session_state.get("deep_l10_bbe", False)),
+    )
+    if live_tiles:
+        return live_tiles
+
+    # Only trust saved JSON if we could not resolve a pitcher ID at all.
+    # This avoids showing the same stale arsenal across multiple pitchers.
+    if pitcher_id is None:
+        raw_tiles = row.get("True Pitch Arsenal", "")
+        try:
+            tiles = json.loads(raw_tiles) if isinstance(raw_tiles, str) and raw_tiles.strip() else []
+        except Exception:
+            tiles = []
+        if isinstance(tiles, list) and tiles:
+            return tiles
+
+    return []
 
 def _pitch_tile_html(name, score, usage, note):
     color_cls = _score_color_class(score, 75, 52)
