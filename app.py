@@ -264,6 +264,77 @@ hr { margin-top: .38rem !important; margin-bottom: .38rem !important; }
     }
 }
 
+
+/* BF DATA REAL-STATS FIT PATCH: no clipping, responsive BVP, readable real arsenal tiles */
+.bf-match-card{
+    max-width:100% !important;
+    overflow-x:auto !important;
+    overflow-y:visible !important;
+}
+.bf-card-body{
+    min-width:0 !important;
+}
+.bf-card-body > div,
+.bf-side-panel,
+.bf-arsenal-grid,
+.bf-bvp-grid{
+    min-width:0 !important;
+}
+.bf-arsenal-grid{
+    grid-template-columns:repeat(3,minmax(0,1fr)) !important;
+    gap:6px !important;
+}
+.bf-pitch-tile{
+    min-width:0 !important;
+    min-height:72px !important;
+    padding:7px 8px !important;
+    overflow:visible !important;
+}
+.bf-pitch-name{
+    font-size:.58rem !important;
+    line-height:1.05 !important;
+    overflow-wrap:anywhere !important;
+}
+.bf-pitch-score{
+    font-size:1.03rem !important;
+    margin-top:4px !important;
+    white-space:nowrap !important;
+}
+.bf-usage-label{
+    font-size:.46rem !important;
+    margin-top:4px !important;
+}
+.bf-pitch-note{
+    font-size:.48rem !important;
+    line-height:1.08 !important;
+    margin-top:3px !important;
+    overflow-wrap:anywhere !important;
+}
+.bf-bvp-grid{
+    grid-template-columns:repeat(auto-fit,minmax(86px,1fr)) !important;
+    gap:5px !important;
+}
+.bf-bvp-cell{
+    min-width:0 !important;
+    padding:6px 7px !important;
+    overflow:visible !important;
+}
+.bf-bvp-label, .bf-bvp-values{
+    overflow-wrap:anywhere !important;
+}
+@media(max-width:900px){
+    .bf-arsenal-grid{grid-template-columns:repeat(3,minmax(0,1fr)) !important;}
+    .bf-bvp-grid{grid-template-columns:repeat(3,minmax(0,1fr)) !important;}
+}
+@media(max-width:640px){
+    .bf-arsenal-grid{grid-template-columns:repeat(2,minmax(0,1fr)) !important;}
+    .bf-bvp-grid{grid-template-columns:repeat(2,minmax(0,1fr)) !important;}
+}
+@media(max-width:390px){
+    .bf-arsenal-grid{grid-template-columns:1fr !important;}
+    .bf-bvp-grid{grid-template-columns:1fr 1fr !important;}
+}
+
 </style>
 <div class="bf-hero">
     <div class="bf-kicker">BF DATA PRO LAB</div>
@@ -4855,14 +4926,16 @@ def _pitch_full_name(code):
         "CH": "CHANGEUP",
         "CU": "CURVEBALL",
         "KC": "KNUCKLE CURVE",
+        "EP": "EEPHUS",
         "FC": "CUTTER",
         "FS": "SPLITTER",
         "ST": "SWEEPER",
         "SV": "SLURVE",
         "CS": "SLOW CURVE",
-        "FO": "FORKBALL",
-        "EP": "EEPHUS",
         "KN": "KNUCKLEBALL",
+        "FO": "FORKBALL",
+        "PO": "PITCHOUT",
+        "SC": "SCREWBALL",
         "MIX": "MIX",
     }.get(c, c if c else "—")
 
@@ -4883,9 +4956,8 @@ def _row_id_value(row: pd.Series, candidates: list[str]):
 def _parse_relevant_pitches(row: pd.Series):
     """Return real, row-specific pitcher arsenal tiles only.
 
-    The card should never borrow stale JSON from another player/pitcher or fill
-    with generic FF/SL/CH/CU/SI fallbacks. It first resolves the actual pitcher
-    ID for this row, then pulls that pitcher's Statcast arsenal.
+    No saved stale JSON and no generic fallback pitch mix. If we cannot resolve
+    the exact pitcher, BF Data shows no verified arsenal instead of inventing it.
     """
     pitcher_id = _row_id_value(row, [
         "Pitcher ID", "pitcher_id", "opp_pitcher_id", "Opp Pitcher ID", "Probable Pitcher ID"
@@ -4899,41 +4971,62 @@ def _parse_relevant_pitches(row: pd.Series):
     if batter_id is None:
         batter_id = lookup_mlb_person_id_by_name(row.get("Player", ""))
 
-    # Always prefer a live, row-specific arsenal. One cached call per pitcher.
-    live_tiles = build_matchup_arsenal_tiles(
+    if pitcher_id is None:
+        return []
+
+    # Open matchup cards are research cards, so show the real pitcher arsenal and
+    # true batter-vs-pitch contact when the batter can be resolved. This is cached
+    # by player ID and does not change the platform layout/tracker/ranking.
+    return build_matchup_arsenal_tiles(
         pitcher_id,
         batter_id,
         0.0,
         0.0,
-        include_batter=bool(st.session_state.get("deep_l10_bbe", False)),
+        include_batter=batter_id is not None,
     )
-    if live_tiles:
-        return live_tiles
 
-    # Only trust saved JSON if we could not resolve a pitcher ID at all.
-    # This avoids showing the same stale arsenal across multiple pitchers.
-    if pitcher_id is None:
-        raw_tiles = row.get("True Pitch Arsenal", "")
-        try:
-            tiles = json.loads(raw_tiles) if isinstance(raw_tiles, str) and raw_tiles.strip() else []
-        except Exception:
-            tiles = []
-        if isinstance(tiles, list) and tiles:
-            return tiles
 
-    return []
+def _fmt_pct_value(value):
+    if value is None:
+        return "—"
+    try:
+        if pd.isna(value):
+            return "—"
+    except Exception:
+        pass
+    try:
+        return f"{float(value):.1f}%"
+    except Exception:
+        return "—"
+
+
+def _fmt_num_value(value, digits=3):
+    if value is None:
+        return "—"
+    try:
+        if pd.isna(value):
+            return "—"
+    except Exception:
+        pass
+    try:
+        return f"{float(value):.{digits}f}"
+    except Exception:
+        return "—"
+
 
 def _pitch_tile_html(name, score, usage, note):
-    color_cls = _score_color_class(score, 75, 52)
+    # The big number is TRUE pitcher usage, not a fictional grade.
+    usage_val = safe_float(usage, 0.0)
+    color_cls = _score_color_class(usage_val, 25, 10)
     txt_color = "bf-green-txt" if color_cls == "bf-num-green" else ("bf-yellow-txt" if color_cls == "bf-num-yellow" else "bf-red-txt")
-    use_width = max(4, min(100, safe_float(usage, 0)))
+    use_width = max(2, min(100, usage_val))
     return (
         '<div class="bf-pitch-tile">'
         f'<div class="bf-pitch-name">{escape(_pitch_full_name(name))}</div>'
-        f'<div class="bf-pitch-score {txt_color}">{safe_float(score, 0):.0f}</div>'
-        '<div class="bf-usage-label">USAGE</div>'
+        f'<div class="bf-pitch-score {txt_color}">{usage_val:.1f}%</div>'
+        '<div class="bf-usage-label">PITCH MIX</div>'
         f'<div class="bf-usage-track"><div class="bf-usage-fill" style="width:{use_width:.1f}%"></div></div>'
-        f'<div class="bf-pitch-note">Usage {safe_float(usage,0):.0f}% · {escape(str(note))}</div>'
+        f'<div class="bf-pitch-note">{escape(str(note))}</div>'
         '</div>'
     )
 
@@ -4989,9 +5082,21 @@ def _match_card_html(row: pd.Series, rank_override=None):
         if isinstance(item, dict):
             p = item.get("pitch", "")
             usage = safe_float(item.get("usage"), 0.0)
-            score = safe_float(item.get("score"), 0.0)
-            note = item.get("note") or f"B Contact {item.get('batter_contact_pct', '—')}% / P Contact {item.get('pitcher_contact_pct', '—')}%"
-            tiles.append(_pitch_tile_html(p, score, usage, str(note)[:64]))
+            p_contact = _fmt_pct_value(item.get("pitcher_contact_pct"))
+            p_whiff = _fmt_pct_value(item.get("pitcher_whiff_pct"))
+            p_hh = _fmt_pct_value(item.get("pitcher_hardhit_allowed_pct"))
+            p_brl = _fmt_pct_value(item.get("pitcher_barrel_allowed_pct"))
+            b_contact = _fmt_pct_value(item.get("batter_contact_pct"))
+            b_xslg = _fmt_num_value(item.get("batter_xslg"), 3)
+            p_xslg = _fmt_num_value(item.get("pitcher_xslg_allowed"), 3)
+            note_bits = [f"P Con {p_contact}", f"P Whiff {p_whiff}", f"P HH {p_hh}", f"P Brl {p_brl}"]
+            if b_contact != "—" or b_xslg != "—":
+                note_bits.append(f"B Con {b_contact}")
+                note_bits.append(f"B xSLG {b_xslg}")
+            if p_xslg != "—":
+                note_bits.append(f"P xSLG {p_xslg}")
+            note = " · ".join(note_bits)
+            tiles.append(_pitch_tile_html(p, usage, usage, note))
         else:
             tiles.append(_pitch_tile_html(item, 0, 0, "Verified pitch data unavailable"))
     if not tiles:
