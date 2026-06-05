@@ -913,9 +913,15 @@ def build_pitch_mix_profile(pitcher_name: str, pitcher_id, *args, **kwargs) -> d
     return arsenal.get("mix", {}) if arsenal.get("found") else {}
 
 
-def build_matchup_arsenal_tiles(pitcher_id, batter_id, pitch_matchup_score: float, authority_score: float) -> list[dict]:
+def build_matchup_arsenal_tiles(pitcher_id, batter_id, pitch_matchup_score: float, authority_score: float, include_batter: bool = False) -> list[dict]:
+    """Build truthful pitch tiles without slowing the whole board.
+
+    Normal fast board load uses TRUE pitcher pitch types/usage/contact only.
+    Batter-vs-pitch Statcast CSV pulls are intentionally reserved for Deep L10
+    Refresh because doing one CSV pull per hitter is what made the app crawl.
+    """
     pitcher_arsenal = fetch_true_pitcher_arsenal(pitcher_id)
-    batter_arsenal = fetch_true_batter_pitch_arsenal(batter_id)
+    batter_arsenal = fetch_true_batter_pitch_arsenal(batter_id) if include_batter else {"found": False, "by_pitch": {}}
     if not pitcher_arsenal.get("found"):
         return []
     batter_by_pitch = batter_arsenal.get("by_pitch", {}) if batter_arsenal.get("found") else {}
@@ -957,7 +963,7 @@ def build_matchup_arsenal_tiles(pitcher_id, batter_id, pitch_matchup_score: floa
             "batter_barrel_pct": batter_barrel,
             "batter_xslg": batter_xslg,
             "note": (
-                f"B Contact {batter_contact if batter_contact is not None else '—'}% / "
+                f"B Contact {batter_contact if batter_contact is not None else 'Deep'}% / "
                 f"P Contact {pitcher_contact if pitcher_contact is not None else '—'}%"
             ),
         })
@@ -3027,7 +3033,7 @@ def build_hitter_metrics(
     bullpen_fatigue_boost = bullpen_fatigue_score * 1.8
 
     pitch_mix_example = build_pitch_mix_profile(opp_pitcher, opp_pitcher_id)
-    arsenal_tiles = build_matchup_arsenal_tiles(opp_pitcher_id, player_id, 0.0, 0.0)
+    arsenal_tiles = build_matchup_arsenal_tiles(opp_pitcher_id, player_id, 0.0, 0.0, include_batter=deep_bbe)
     pitch_context = compute_relevant_pitch_matchup(
         pitch_mix_example,
         bats,
@@ -4899,7 +4905,6 @@ with c1:
     if st.button("Update Board", use_container_width=True):
         st.session_state.manual_refresh_trigger = True
         st.session_state.deep_l10_bbe = False
-        st.cache_data.clear()
         st.rerun()
     if st.button("Deep L10 Refresh", use_container_width=True):
         st.session_state.manual_refresh_trigger = True
