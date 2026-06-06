@@ -336,14 +336,41 @@ hr { margin-top: .38rem !important; margin-bottom: .38rem !important; }
 }
 
 
-/* BF DATA FINAL VISIBILITY PATCH: keep open matchup cards readable without touching data/scoring. */
-.bf-match-card, .bf-match-card *{box-sizing:border-box;}
-.bf-match-card{max-width:100% !important; overflow-x:auto !important; overflow-y:visible !important;}
-.bf-card-body,.bf-card-body>div,.bf-side-panel,.bf-arsenal-grid,.bf-bvp-grid{min-width:0 !important;}
-.bf-pitch-tile,.bf-bvp-cell{min-width:0 !important; overflow:visible !important;}
-.bf-pitch-name,.bf-pitch-note,.bf-bvp-label,.bf-bvp-values{overflow-wrap:anywhere !important; word-break:normal !important;}
-.bf-bvp-grid{grid-template-columns:repeat(auto-fit,minmax(82px,1fr)) !important;}
-@media(max-width:640px){.bf-bvp-grid{grid-template-columns:repeat(2,minmax(0,1fr)) !important;}.bf-pitch-note{font-size:.46rem !important;}}
+
+/* BF FINAL FAST/VISIBLE-ONLY PATCH: open matchup cards fit, no cutoff. */
+.bf-match-card, .bf-match-card *{ box-sizing:border-box !important; }
+.bf-match-card{ width:100% !important; max-width:100% !important; overflow:visible !important; }
+.bf-match-topline{ min-width:0 !important; grid-template-columns:minmax(130px,1.1fr) minmax(130px,1fr) minmax(46px,.33fr) minmax(46px,.33fr) minmax(46px,.33fr) !important; }
+.bf-card-body{ width:100% !important; min-width:0 !important; grid-template-columns:minmax(160px,210px) minmax(0,1fr) !important; gap:10px !important; }
+.bf-card-body > div, .bf-side-panel, .bf-arsenal-grid, .bf-bvp-grid{ min-width:0 !important; max-width:100% !important; }
+.bf-head-main, .bf-pitch-name, .bf-pitch-note, .bf-bvp-label, .bf-bvp-values, .bf-card-foot{ overflow-wrap:anywhere !important; word-break:normal !important; }
+.bf-arsenal-grid{ grid-template-columns:repeat(auto-fit,minmax(86px,1fr)) !important; gap:5px !important; }
+.bf-pitch-tile{ min-width:0 !important; min-height:64px !important; padding:6px 7px !important; overflow:visible !important; }
+.bf-pitch-name{ font-size:.52rem !important; line-height:1.05 !important; }
+.bf-pitch-score{ font-size:.92rem !important; line-height:1 !important; margin-top:3px !important; white-space:nowrap !important; }
+.bf-usage-label{ font-size:.44rem !important; margin-top:3px !important; }
+.bf-usage-track{ height:4px !important; margin-top:3px !important; }
+.bf-pitch-note{ font-size:.44rem !important; line-height:1.08 !important; margin-top:3px !important; }
+.bf-bvp-grid{ grid-template-columns:repeat(auto-fit,minmax(72px,1fr)) !important; gap:5px !important; }
+.bf-bvp-cell{ min-width:0 !important; padding:6px !important; overflow:visible !important; }
+@media(max-width:900px){
+  .bf-card-body{ grid-template-columns:1fr !important; gap:7px !important; padding:7px !important; }
+  .bf-side-panel{ border-right:0 !important; border-bottom:1px solid rgba(255,255,255,.08) !important; padding-right:0 !important; padding-bottom:7px !important; }
+  .bf-match-topline{ grid-template-columns:1fr 1fr 44px 44px 44px !important; }
+  .bf-cell-head{ padding:7px 6px !important; }
+}
+@media(max-width:520px){
+  .bf-match-topline{ grid-template-columns:1fr 1fr 38px 38px 38px !important; }
+  .bf-head-label{ font-size:.43rem !important; }
+  .bf-head-main{ font-size:.68rem !important; }
+  .bf-score-box .lab{ font-size:.42rem !important; }
+  .bf-score-box .num{ font-size:.68rem !important; padding:3px 4px !important; min-width:24px !important; }
+  .bf-arsenal-grid{ grid-template-columns:repeat(2,minmax(0,1fr)) !important; }
+  .bf-bvp-grid{ grid-template-columns:repeat(2,minmax(0,1fr)) !important; }
+}
+@media(max-width:360px){
+  .bf-arsenal-grid{ grid-template-columns:1fr !important; }
+}
 
 </style>
 <div class="bf-hero">
@@ -656,7 +683,7 @@ def read_html_best_table(urls: list[str], must_have_any: list[str]) -> pd.DataFr
     headers = {"User-Agent": "Mozilla/5.0"}
     for url in urls:
         try:
-            html = requests.get(url, headers=headers, timeout=30).text
+            html = requests.get(url, headers=headers, timeout=8).text
             tables = pd.read_html(html)
         except Exception:
             continue
@@ -925,7 +952,7 @@ def fetch_people_hand_map(person_ids_tuple: tuple) -> dict:
             resp = requests.get(
                 "https://statsapi.mlb.com/api/v1/people",
                 params={"personIds": ",".join(chunk)},
-                timeout=20,
+                timeout=8,
             )
             resp.raise_for_status()
             out.update(extract_people_hand_maps(resp.json()))
@@ -959,7 +986,7 @@ def fetch_mlb_people_directory() -> dict:
             resp = requests.get(
                 "https://statsapi.mlb.com/api/v1/sports/1/players",
                 params={"season": season},
-                timeout=25,
+                timeout=8,
             )
             resp.raise_for_status()
             for person in (resp.json() or {}).get("people", []) or []:
@@ -1058,6 +1085,9 @@ def _statcast_date_range(days_back: int = 730):
 
 
 def _read_statcast_csv(params: dict, timeout: int = 18) -> pd.DataFrame:
+    # BF SPEED-ONLY PATCH: never let a single Statcast CSV request stall the whole app.
+    # Data logic is unchanged; this only caps the network wait time.
+    timeout = min(int(timeout or 6), 6)
     """Read Baseball Savant Statcast CSV with the full filter payload.
 
     Baseball Savant often returns an empty page when the short/minimal query is
@@ -1142,7 +1172,7 @@ def fetch_true_pitcher_arsenal(pitcher_id, days_back: int = 730, cache_version: 
     ]
     df = pd.DataFrame()
     for params in variants:
-        df = _read_statcast_csv(params, timeout=18)
+        df = _read_statcast_csv(params, timeout=6)
         if not df.empty and "pitch_type" in df.columns:
             break
     if df.empty or "pitch_type" not in df.columns:
@@ -1209,7 +1239,7 @@ def fetch_true_batter_pitch_arsenal(batter_id, days_back: int = 730) -> dict:
         "min_pitches": "0",
         "min_results": "0",
     }
-    df = _read_statcast_csv(params, timeout=9)
+    df = _read_statcast_csv(params, timeout=6)
     if df.empty or "pitch_type" not in df.columns:
         return empty
     df = df[df["pitch_type"].notna()].copy()
@@ -1861,7 +1891,7 @@ def get_previous_team_game_pk(team_id: int):
             "https://statsapi.mlb.com/api/v1/schedule"
             f"?sportId=1&teamId={team_id}&startDate={start_range}&endDate={end_range}"
         )
-        resp = requests.get(url, timeout=20)
+        resp = requests.get(url, timeout=8)
         resp.raise_for_status()
         payload = resp.json()
     except Exception:
@@ -1976,7 +2006,7 @@ def fetch_schedule_payload():
         "https://statsapi.mlb.com/api/v1/schedule"
         f"?sportId=1&date={today_str()}&hydrate=probablePitcher"
     )
-    resp = requests.get(url, timeout=20)
+    resp = requests.get(url, timeout=8)
     resp.raise_for_status()
     return resp.json()
 
@@ -1985,7 +2015,7 @@ def fetch_schedule_payload():
 def get_team_probable_pitcher(team_id: int):
     url = f"https://statsapi.mlb.com/api/v1/teams/{team_id}?hydrate=probablePitcher"
     try:
-        resp = requests.get(url, timeout=20)
+        resp = requests.get(url, timeout=8)
         resp.raise_for_status()
         data = resp.json()
         teams = data.get("teams", [])
@@ -2069,7 +2099,7 @@ def get_today_schedule():
 def fetch_boxscore(game_pk: int):
     url = f"https://statsapi.mlb.com/api/v1/game/{game_pk}/boxscore"
     try:
-        resp = requests.get(url, timeout=20)
+        resp = requests.get(url, timeout=8)
         resp.raise_for_status()
         return resp.json()
     except Exception:
@@ -2080,7 +2110,7 @@ def fetch_boxscore(game_pk: int):
 def get_team_hitters(team_id: int):
     url = f"https://statsapi.mlb.com/api/v1/teams/{team_id}/roster?rosterType=active"
     try:
-        resp = requests.get(url, timeout=20)
+        resp = requests.get(url, timeout=8)
         resp.raise_for_status()
         data = resp.json()
 
@@ -2113,7 +2143,7 @@ def fetch_people_stats(person_ids_tuple: tuple, group: str):
             "hydrate": f"stats(group=[{group}],type=[season,gameLog],season={CURRENT_SEASON})"
         }
         try:
-            resp = requests.get("https://statsapi.mlb.com/api/v1/people", params=params, timeout=30)
+            resp = requests.get("https://statsapi.mlb.com/api/v1/people", params=params, timeout=10)
             resp.raise_for_status()
             data = resp.json()
         except Exception:
@@ -4387,7 +4417,7 @@ def get_boxscore_homers(game_pk: int):
     homer_map = {}
 
     try:
-        resp = requests.get(url, timeout=20)
+        resp = requests.get(url, timeout=8)
         resp.raise_for_status()
         data = resp.json()
     except Exception:
@@ -5065,37 +5095,35 @@ def _row_id_value(row: pd.Series, candidates: list[str]):
 
 
 def _parse_relevant_pitches(row: pd.Series):
-    """Return real, row-specific pitcher arsenal tiles without slowing page load.
+    """Return real, row-specific pitcher arsenal tiles only.
 
-    Speed-only rule: use the already-built row JSON first. That prevents every
-    collapsed Streamlit expander from re-querying Statcast while the page loads.
-    If a row has no saved JSON, fall back to a pitcher-only pull. No fictional
-    pitch mix is created.
+    No saved stale JSON and no generic fallback pitch mix. If we cannot resolve
+    the exact pitcher, BF Data shows no verified arsenal instead of inventing it.
     """
-    raw_tiles = row.get("True Pitch Arsenal", None)
-    if raw_tiles is not None:
-        try:
-            if pd.notna(raw_tiles):
-                parsed = json.loads(str(raw_tiles))
-                if isinstance(parsed, list) and parsed:
-                    return parsed
-        except Exception:
-            pass
-
     pitcher_id = _row_id_value(row, [
         "Pitcher ID", "pitcher_id", "opp_pitcher_id", "Opp Pitcher ID", "Probable Pitcher ID"
     ])
+    batter_id = _row_id_value(row, [
+        "Player ID", "player_id", "Batter ID", "batter_id", "MLBAM ID"
+    ])
+
     if pitcher_id is None:
         pitcher_id = lookup_mlb_person_id_by_name(row.get("Pitcher", ""))
+    if batter_id is None:
+        batter_id = lookup_mlb_person_id_by_name(row.get("Player", ""))
+
     if pitcher_id is None:
         return []
 
+    # Open matchup cards are research cards, so show the real pitcher arsenal and
+    # true batter-vs-pitch contact when the batter can be resolved. This is cached
+    # by player ID and does not change the platform layout/tracker/ranking.
     return build_matchup_arsenal_tiles(
         pitcher_id,
-        None,
+        batter_id,
         0.0,
         0.0,
-        include_batter=False,
+        include_batter=batter_id is not None,
     )
 
 
@@ -5354,9 +5382,17 @@ tracker = sync_tracker_with_board(tracked_df)
 combo_board = build_combo_board(locked_df_raw)
 combo_tracker = sync_combo_tracker_with_board(combo_board)
 
-# Always update results every run. Refresh/update should not be required for HR counts to move off zero.
-tracker = auto_update_tracker_results(tracker, schedule)
-combo_tracker = auto_update_combo_tracker_results(combo_tracker, schedule)
+# BF SPEED-ONLY PATCH: do not pull live boxscores/feed on every page render.
+# This preserves tracker behavior while preventing normal card opening/reruns from blocking load.
+_result_update_due = (
+    bool(st.session_state.get("manual_refresh_trigger", False))
+    or bool(st.session_state.get("force_tracker_refresh", False))
+    or (time.time() - float(st.session_state.get("last_result_update_time", 0.0)) > 75)
+)
+if _result_update_due:
+    tracker = auto_update_tracker_results(tracker, schedule)
+    combo_tracker = auto_update_combo_tracker_results(combo_tracker, schedule)
+    st.session_state.last_result_update_time = time.time()
 st.session_state.manual_refresh_trigger = False
 
 # Display-only live result column.
