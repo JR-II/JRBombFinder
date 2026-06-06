@@ -135,6 +135,206 @@ hr { margin-top: .38rem !important; margin-bottom: .38rem !important; }
     hr { margin-top: .25rem !important; margin-bottom: .25rem !important; }
 }
 
+
+/* BF DATA FIT-ONLY PATCH: matchup arsenal readability.
+   Data, scoring, tracker, ranking, and platform logic untouched. */
+.bf-match-card{
+    max-width:100%;
+    overflow:hidden;
+}
+.bf-card-body{
+    min-width:0;
+}
+.bf-card-body > div,
+.bf-side-panel,
+.bf-arsenal-grid,
+.bf-bvp-grid{
+    min-width:0;
+}
+.bf-arsenal-grid{
+    grid-template-columns:repeat(3,minmax(0,1fr)) !important;
+    gap:6px !important;
+}
+.bf-pitch-tile{
+    min-width:0 !important;
+    min-height:78px !important;
+    padding:7px 8px !important;
+    overflow:hidden !important;
+}
+.bf-pitch-name{
+    font-size:.58rem !important;
+    line-height:1.05 !important;
+    overflow-wrap:anywhere !important;
+}
+.bf-pitch-score{
+    font-size:1.08rem !important;
+    margin-top:4px !important;
+}
+.bf-usage-label{
+    font-size:.48rem !important;
+    margin-top:4px !important;
+}
+.bf-usage-track{
+    height:4px !important;
+    margin-top:3px !important;
+}
+.bf-pitch-note{
+    font-size:.50rem !important;
+    line-height:1.08 !important;
+    margin-top:3px !important;
+    overflow-wrap:anywhere !important;
+}
+@media(max-width: 1100px){
+    .bf-card-body{
+        grid-template-columns:180px 1fr !important;
+        gap:10px !important;
+        padding:9px !important;
+    }
+    .bf-side-panel{
+        padding-right:9px !important;
+    }
+    .bf-arsenal-grid{
+        grid-template-columns:repeat(3,minmax(0,1fr)) !important;
+        gap:5px !important;
+    }
+    .bf-pitch-tile{
+        padding:6px 7px !important;
+        min-height:72px !important;
+    }
+    .bf-pitch-note{
+        font-size:.48rem !important;
+    }
+}
+@media(max-width: 900px){
+    .bf-card-body{
+        grid-template-columns:1fr !important;
+        gap:8px !important;
+        padding:8px !important;
+    }
+    .bf-side-panel{
+        border-right:0 !important;
+        border-bottom:1px solid rgba(255,255,255,.08) !important;
+        padding-right:0 !important;
+        padding-bottom:7px !important;
+    }
+    .bf-arsenal-grid{
+        grid-template-columns:repeat(3,minmax(0,1fr)) !important;
+        gap:5px !important;
+    }
+    .bf-pitch-tile{
+        padding:6px !important;
+        min-height:68px !important;
+    }
+    .bf-pitch-name{
+        font-size:.52rem !important;
+    }
+    .bf-pitch-score{
+        font-size:.98rem !important;
+    }
+    .bf-pitch-note{
+        font-size:.46rem !important;
+        line-height:1.05 !important;
+    }
+}
+@media(max-width: 640px){
+    .bf-match-topline{
+        grid-template-columns:1fr 1fr 42px 42px 42px !important;
+    }
+    .bf-arsenal-grid{
+        grid-template-columns:repeat(2,minmax(0,1fr)) !important;
+        gap:5px !important;
+    }
+    .bf-pitch-tile{
+        min-height:auto !important;
+        padding:6px !important;
+    }
+    .bf-pitch-score{
+        font-size:.92rem !important;
+    }
+    .bf-pitch-note{
+        font-size:.44rem !important;
+    }
+}
+@media(max-width: 390px){
+    .bf-arsenal-grid{
+        grid-template-columns:1fr !important;
+    }
+    .bf-pitch-note{
+        font-size:.50rem !important;
+    }
+}
+
+
+/* BF DATA REAL-STATS FIT PATCH: no clipping, responsive BVP, readable real arsenal tiles */
+.bf-match-card{
+    max-width:100% !important;
+    overflow-x:auto !important;
+    overflow-y:visible !important;
+}
+.bf-card-body{
+    min-width:0 !important;
+}
+.bf-card-body > div,
+.bf-side-panel,
+.bf-arsenal-grid,
+.bf-bvp-grid{
+    min-width:0 !important;
+}
+.bf-arsenal-grid{
+    grid-template-columns:repeat(3,minmax(0,1fr)) !important;
+    gap:6px !important;
+}
+.bf-pitch-tile{
+    min-width:0 !important;
+    min-height:72px !important;
+    padding:7px 8px !important;
+    overflow:visible !important;
+}
+.bf-pitch-name{
+    font-size:.58rem !important;
+    line-height:1.05 !important;
+    overflow-wrap:anywhere !important;
+}
+.bf-pitch-score{
+    font-size:1.03rem !important;
+    margin-top:4px !important;
+    white-space:nowrap !important;
+}
+.bf-usage-label{
+    font-size:.46rem !important;
+    margin-top:4px !important;
+}
+.bf-pitch-note{
+    font-size:.48rem !important;
+    line-height:1.08 !important;
+    margin-top:3px !important;
+    overflow-wrap:anywhere !important;
+}
+.bf-bvp-grid{
+    grid-template-columns:repeat(auto-fit,minmax(86px,1fr)) !important;
+    gap:5px !important;
+}
+.bf-bvp-cell{
+    min-width:0 !important;
+    padding:6px 7px !important;
+    overflow:visible !important;
+}
+.bf-bvp-label, .bf-bvp-values{
+    overflow-wrap:anywhere !important;
+}
+@media(max-width:900px){
+    .bf-arsenal-grid{grid-template-columns:repeat(3,minmax(0,1fr)) !important;}
+    .bf-bvp-grid{grid-template-columns:repeat(3,minmax(0,1fr)) !important;}
+}
+@media(max-width:640px){
+    .bf-arsenal-grid{grid-template-columns:repeat(2,minmax(0,1fr)) !important;}
+    .bf-bvp-grid{grid-template-columns:repeat(2,minmax(0,1fr)) !important;}
+}
+@media(max-width:390px){
+    .bf-arsenal-grid{grid-template-columns:1fr !important;}
+    .bf-bvp-grid{grid-template-columns:1fr 1fr !important;}
+}
+
 </style>
 <div class="bf-hero">
     <div class="bf-kicker">BF DATA PRO LAB</div>
@@ -740,6 +940,68 @@ def get_true_pitcher_hand(pitcher_id, hand_map: dict) -> str:
     return normalize_hand_code((hand_map.get(pid) or {}).get("throw"), "")
 
 
+@st.cache_data(ttl=21600)
+def fetch_mlb_people_directory() -> dict:
+    """Name -> MLBAM ID directory from MLB Stats API for current/prior seasons."""
+    directory = {}
+    for season in [CURRENT_SEASON, CURRENT_SEASON - 1, CURRENT_SEASON - 2]:
+        try:
+            resp = requests.get(
+                "https://statsapi.mlb.com/api/v1/sports/1/players",
+                params={"season": season},
+                timeout=25,
+            )
+            resp.raise_for_status()
+            for person in (resp.json() or {}).get("people", []) or []:
+                pid = person.get("id")
+                full = person.get("fullName")
+                if pid and full:
+                    directory.setdefault(normalize_name(full), int(pid))
+                    # Useful for accent/name inconsistencies.
+                    directory.setdefault(normalize_name(str(full).encode("ascii", "ignore").decode("ascii")), int(pid))
+        except Exception:
+            continue
+    return directory
+
+
+@st.cache_data(ttl=21600)
+def lookup_mlb_person_id_by_name(name: str):
+    """Resolve a player/pitcher name to MLBAM ID without guessing."""
+    clean = str(name or "").strip()
+    if not clean or clean in {"—", "Starter Pending"}:
+        return None
+
+    target = normalize_name(clean)
+    directory = fetch_mlb_people_directory()
+    if target in directory:
+        return directory[target]
+
+    ascii_target = normalize_name(clean.encode("ascii", "ignore").decode("ascii"))
+    if ascii_target in directory:
+        return directory[ascii_target]
+
+    try:
+        resp = requests.get(
+            "https://statsapi.mlb.com/api/v1/people/search",
+            params={"names": clean},
+            timeout=12,
+        )
+        resp.raise_for_status()
+        people = (resp.json() or {}).get("people", []) or []
+        if people:
+            for person in people:
+                if normalize_name(person.get("fullName", "")) == target:
+                    return person.get("id")
+            return people[0].get("id")
+    except Exception:
+        pass
+
+    # Last exact-ish directory pass: only accept unique contains match, never guess.
+    matches = [pid for n, pid in directory.items() if target and (target == n or target in n or n in target)]
+    matches = list(dict.fromkeys(matches))
+    return matches[0] if len(matches) == 1 else None
+
+
 def estimate_handedness_from_name(name: str, role: str = "batter") -> str:
     # Kept only as a final emergency fallback for missing MLB IDs.
     # Normal app flow now uses MLB person batSide/pitchHand, not name guessing.
@@ -777,62 +1039,117 @@ def _barrel_like(row) -> bool:
     return ev is not None and la is not None and ev >= 98.0 and 8.0 <= la <= 50.0
 
 
-def _statcast_date_range(days_back: int = 365):
-    end_dt = datetime.now(ZoneInfo("America/New_York"))
+def _statcast_date_range(days_back: int = 730):
+    # True pitch mix needs enough history. Do NOT clamp to only this season;
+    # that caused many starters/relievers to return no arsenal early in the year.
+    end_dt = datetime.now(ZoneInfo("America/New_York")) + timedelta(days=1)
     start_dt = end_dt - timedelta(days=int(days_back))
-    season_start = datetime(CURRENT_SEASON, 3, 1, tzinfo=ZoneInfo("America/New_York"))
-    if start_dt < season_start:
-        start_dt = season_start
     return start_dt.strftime("%Y-%m-%d"), end_dt.strftime("%Y-%m-%d")
 
 
-def _read_statcast_csv(params: dict, timeout: int = 9) -> pd.DataFrame:
+def _read_statcast_csv(params: dict, timeout: int = 18) -> pd.DataFrame:
+    """Read Baseball Savant Statcast CSV with the full filter payload.
+
+    Baseball Savant often returns an empty page when the short/minimal query is
+    used.  This wrapper keeps the query truthful but supplies the same neutral
+    filter fields Savant's own CSV export uses. No estimated or fictional pitch
+    mix is created here.
+    """
+    base_params = {
+        "all": "true",
+        "hfPT": "",
+        "hfAB": "",
+        "hfGT": "R|",
+        "hfPR": "",
+        "hfZ": "",
+        "stadium": "",
+        "hfBBT": "",
+        "hfNewZones": "",
+        "hfPull": "",
+        "hfC": "",
+        "hfSea": "",
+        "hfSit": "",
+        "hfOuts": "",
+        "opponent": "",
+        "pitcher_throws": "",
+        "batter_stands": "",
+        "hfSA": "",
+        "type": "details",
+        "min_pitches": "0",
+        "min_results": "0",
+        "group_by": "name",
+        "sort_col": "pitches",
+        "sort_order": "desc",
+    }
+    q = dict(base_params)
+    q.update({k: v for k, v in (params or {}).items() if v is not None})
     try:
         resp = requests.get(
             "https://baseballsavant.mlb.com/statcast_search/csv",
-            params=params,
-            headers={"User-Agent": "Mozilla/5.0"},
+            params=q,
+            headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "Accept": "text/csv,application/csv,text/plain,*/*",
+            },
             timeout=timeout,
         )
         resp.raise_for_status()
-        raw = resp.text
-        if not raw or "pitch_type" not in raw:
+        raw = resp.text or ""
+        if "pitch_type" not in raw:
             return pd.DataFrame()
-        return pd.read_csv(StringIO(raw))
+        df = pd.read_csv(StringIO(raw), low_memory=False)
+        return df if "pitch_type" in df.columns else pd.DataFrame()
     except Exception:
         return pd.DataFrame()
 
 
 @st.cache_data(ttl=21600)
-def fetch_true_pitcher_arsenal(pitcher_id, days_back: int = 365) -> dict:
+def fetch_true_pitcher_arsenal(pitcher_id, days_back: int = 730, cache_version: str = "bf-real-arsenal-v8") -> dict:
     empty = {"found": False, "mix": {}, "tiles": []}
     try:
         pid = int(pitcher_id)
     except Exception:
         return empty
+
     start_date, end_date = _statcast_date_range(days_back)
-    params = {
+    base = {
         "all": "true",
         "player_type": "pitcher",
-        "pitcher": str(pid),
         "game_date_gt": start_date,
         "game_date_lt": end_date,
+        "hfSea": f"{CURRENT_SEASON}|{CURRENT_SEASON - 1}|{CURRENT_SEASON - 2}|",
         "type": "details",
         "min_pitches": "0",
         "min_results": "0",
     }
-    df = _read_statcast_csv(params, timeout=9)
+    # Savant CSV has changed filter names over time. Try all truth-preserving
+    # pitcher ID filters, then verify the returned rows belong to this pitcher.
+    variants = [
+        {**base, "pitcher": str(pid)},
+        {**base, "pitchers_lookup[]": str(pid)},
+        {**base, "pitcher_lookup[]": str(pid)},
+        {**base, "player_lookup[]": str(pid)},
+    ]
+    df = pd.DataFrame()
+    for params in variants:
+        df = _read_statcast_csv(params, timeout=18)
+        if not df.empty and "pitch_type" in df.columns:
+            break
     if df.empty or "pitch_type" not in df.columns:
         return empty
+
+    if "pitcher" in df.columns:
+        df = df[pd.to_numeric(df["pitcher"], errors="coerce") == int(pid)].copy()
     df = df[df["pitch_type"].notna()].copy()
     if df.empty:
         return empty
+
     total = len(df)
     tiles = []
     for pitch, sub in df.groupby("pitch_type"):
         count = len(sub)
         usage = round(count / total * 100, 1) if total else 0.0
-        if usage < 1.0 and count < 5:
+        if usage < 0.5 and count < 3:
             continue
         swings = int(sub.apply(_is_swing, axis=1).sum())
         whiffs = int(sub.apply(_is_whiff, axis=1).sum())
@@ -842,17 +1159,20 @@ def fetch_true_pitcher_arsenal(pitcher_id, days_back: int = 365) -> dict:
         barrels = int(bbe.apply(_barrel_like, axis=1).sum()) if not bbe.empty else 0
         slg_allowed = safe_float(pd.to_numeric(sub.get("estimated_slg_using_speedangle"), errors="coerce").dropna().mean(), 0.0) if "estimated_slg_using_speedangle" in sub.columns else 0.0
         woba_allowed = safe_float(pd.to_numeric(sub.get("estimated_woba_using_speedangle"), errors="coerce").dropna().mean(), 0.0) if "estimated_woba_using_speedangle" in sub.columns else 0.0
+        contact_pct = round(contact / swings * 100, 1) if swings else None
+        whiff_pct = round(whiffs / swings * 100, 1) if swings else None
+        xslg_allowed = round(slg_allowed, 3) if slg_allowed else None
         tile = {
             "pitch": str(pitch),
             "usage": usage,
             "count": int(count),
             "swings": swings,
-            "contact_pct": round(contact / swings * 100, 1) if swings else None,
-            "whiff_pct": round(whiffs / swings * 100, 1) if swings else None,
+            "contact_pct": contact_pct,
+            "whiff_pct": whiff_pct,
             "bbe": int(len(bbe)),
             "hardhit_allowed_pct": round(hard / len(bbe) * 100, 1) if len(bbe) else None,
             "barrel_allowed_pct": round(barrels / len(bbe) * 100, 1) if len(bbe) else None,
-            "xslg_allowed": round(slg_allowed, 3) if slg_allowed else None,
+            "xslg_allowed": xslg_allowed,
             "xwoba_allowed": round(woba_allowed, 3) if woba_allowed else None,
         }
         tiles.append(tile)
@@ -861,7 +1181,7 @@ def fetch_true_pitcher_arsenal(pitcher_id, days_back: int = 365) -> dict:
 
 
 @st.cache_data(ttl=21600)
-def fetch_true_batter_pitch_arsenal(batter_id, days_back: int = 365) -> dict:
+def fetch_true_batter_pitch_arsenal(batter_id, days_back: int = 730) -> dict:
     empty = {"found": False, "by_pitch": {}}
     try:
         pid = int(batter_id)
@@ -874,6 +1194,7 @@ def fetch_true_batter_pitch_arsenal(batter_id, days_back: int = 365) -> dict:
         "batter": str(pid),
         "game_date_gt": start_date,
         "game_date_lt": end_date,
+        "hfSea": f"{CURRENT_SEASON}|{CURRENT_SEASON - 1}|",
         "type": "details",
         "min_pitches": "0",
         "min_results": "0",
@@ -909,6 +1230,8 @@ def fetch_true_batter_pitch_arsenal(batter_id, days_back: int = 365) -> dict:
 
 def build_pitch_mix_profile(pitcher_name: str, pitcher_id, *args, **kwargs) -> dict:
     # Real-only pitcher pitch mix. No fictional fallback pitches.
+    if pitcher_id is None or (isinstance(pitcher_id, float) and pd.isna(pitcher_id)):
+        pitcher_id = lookup_mlb_person_id_by_name(pitcher_name)
     arsenal = fetch_true_pitcher_arsenal(pitcher_id)
     return arsenal.get("mix", {}) if arsenal.get("found") else {}
 
@@ -1705,6 +2028,11 @@ def get_today_schedule():
             game_state = status.get("abstractGameState", "Preview")
             detailed_state = status.get("detailedState", "Scheduled")
 
+            away_pitcher_name = resolve_pitcher_name(away_id, away_block)
+            home_pitcher_name = resolve_pitcher_name(home_id, home_block)
+            away_pitcher_id = ((away_block.get("probablePitcher") or {}).get("id")) or lookup_mlb_person_id_by_name(away_pitcher_name)
+            home_pitcher_id = ((home_block.get("probablePitcher") or {}).get("id")) or lookup_mlb_person_id_by_name(home_pitcher_name)
+
             games.append({
                 "game_pk": game["gamePk"],
                 "game_key": f"{team_abbr(away)} @ {team_abbr(home)}",
@@ -1712,10 +2040,10 @@ def get_today_schedule():
                 "home_team": home,
                 "away_team_id": away_id,
                 "home_team_id": home_id,
-                "away_pitcher": resolve_pitcher_name(away_id, away_block),
-                "home_pitcher": resolve_pitcher_name(home_id, home_block),
-                "away_pitcher_id": ((away_block.get("probablePitcher") or {}).get("id")),
-                "home_pitcher_id": ((home_block.get("probablePitcher") or {}).get("id")),
+                "away_pitcher": away_pitcher_name,
+                "home_pitcher": home_pitcher_name,
+                "away_pitcher_id": away_pitcher_id,
+                "home_pitcher_id": home_pitcher_id,
                 "venue": game.get("venue", {}).get("name", "Unknown"),
                 "game_time": game.get("gameDate", ""),
                 "away_confirmed_count": away_confirmed,
@@ -2965,6 +3293,9 @@ def build_hitter_metrics(
     bullpen_arms_prev: int = 0,
     deep_bbe: bool = False,
 ):
+    if opp_pitcher_id is None or (isinstance(opp_pitcher_id, float) and pd.isna(opp_pitcher_id)):
+        opp_pitcher_id = lookup_mlb_person_id_by_name(opp_pitcher)
+
     live_hitter = compute_hitter_live_metrics_from_map(player_id, hitter_stats_map, use_true_bbe=deep_bbe)
     live_pitcher = compute_pitcher_live_metrics_from_map(
         opp_pitcher_id,
@@ -3505,6 +3836,8 @@ def build_hitter_metrics(
     }))
 
     return {
+        "Player ID": player_id,
+        "Pitcher ID": opp_pitcher_id,
         "Player": player_name,
         "Team": team,
         "Bats": bats,
@@ -4693,39 +5026,108 @@ def _pitch_full_name(code):
         "SL": "SLIDER",
         "CH": "CHANGEUP",
         "CU": "CURVEBALL",
-        "KC": "CURVEBALL",
+        "KC": "KNUCKLE CURVE",
+        "EP": "EEPHUS",
         "FC": "CUTTER",
         "FS": "SPLITTER",
         "ST": "SWEEPER",
+        "SV": "SLURVE",
+        "CS": "SLOW CURVE",
+        "KN": "KNUCKLEBALL",
+        "FO": "FORKBALL",
+        "PO": "PITCHOUT",
+        "SC": "SCREWBALL",
         "MIX": "MIX",
     }.get(c, c if c else "—")
 
 
-def _parse_relevant_pitches(row: pd.Series):
-    raw_tiles = row.get("True Pitch Arsenal", "")
-    try:
-        tiles = json.loads(raw_tiles) if isinstance(raw_tiles, str) and raw_tiles.strip() else []
-    except Exception:
-        tiles = []
-    if isinstance(tiles, list) and tiles:
-        return tiles
+def _row_id_value(row: pd.Series, candidates: list[str]):
+    for col in candidates:
+        if col in row.index:
+            val = row.get(col)
+            try:
+                if pd.notna(val) and str(val).strip() not in {"", "nan", "None", "—"}:
+                    return val
+            except Exception:
+                if val:
+                    return val
+    return None
 
-    raw = _display_value(row.get("Relevant Pitch Mix", row.get("Primary Pitch", "")), "")
-    parts = [p.strip().upper() for p in re.split(r"\+|,|/", raw) if p.strip() and p.strip().upper() not in {"MIX", "—", "NONE"}]
-    # Real-only: do not append fake FF/SL/CH/CU/SI fallback pitches.
-    return [{"pitch": p, "usage": safe_float(row.get("Primary Pitch Usage"), 0.0) if i == 0 else 0.0, "score": 0, "note": "Verified pitch data unavailable"} for i, p in enumerate(parts[:5])]
+
+def _parse_relevant_pitches(row: pd.Series):
+    """Return real, row-specific pitcher arsenal tiles only.
+
+    No saved stale JSON and no generic fallback pitch mix. If we cannot resolve
+    the exact pitcher, BF Data shows no verified arsenal instead of inventing it.
+    """
+    pitcher_id = _row_id_value(row, [
+        "Pitcher ID", "pitcher_id", "opp_pitcher_id", "Opp Pitcher ID", "Probable Pitcher ID"
+    ])
+    batter_id = _row_id_value(row, [
+        "Player ID", "player_id", "Batter ID", "batter_id", "MLBAM ID"
+    ])
+
+    if pitcher_id is None:
+        pitcher_id = lookup_mlb_person_id_by_name(row.get("Pitcher", ""))
+    if batter_id is None:
+        batter_id = lookup_mlb_person_id_by_name(row.get("Player", ""))
+
+    if pitcher_id is None:
+        return []
+
+    # Open matchup cards are research cards, so show the real pitcher arsenal and
+    # true batter-vs-pitch contact when the batter can be resolved. This is cached
+    # by player ID and does not change the platform layout/tracker/ranking.
+    return build_matchup_arsenal_tiles(
+        pitcher_id,
+        batter_id,
+        0.0,
+        0.0,
+        include_batter=batter_id is not None,
+    )
+
+
+def _fmt_pct_value(value):
+    if value is None:
+        return "—"
+    try:
+        if pd.isna(value):
+            return "—"
+    except Exception:
+        pass
+    try:
+        return f"{float(value):.1f}%"
+    except Exception:
+        return "—"
+
+
+def _fmt_num_value(value, digits=3):
+    if value is None:
+        return "—"
+    try:
+        if pd.isna(value):
+            return "—"
+    except Exception:
+        pass
+    try:
+        return f"{float(value):.{digits}f}"
+    except Exception:
+        return "—"
+
 
 def _pitch_tile_html(name, score, usage, note):
-    color_cls = _score_color_class(score, 75, 52)
+    # The big number is TRUE pitcher usage, not a fictional grade.
+    usage_val = safe_float(usage, 0.0)
+    color_cls = _score_color_class(usage_val, 25, 10)
     txt_color = "bf-green-txt" if color_cls == "bf-num-green" else ("bf-yellow-txt" if color_cls == "bf-num-yellow" else "bf-red-txt")
-    use_width = max(4, min(100, safe_float(usage, 0)))
+    use_width = max(2, min(100, usage_val))
     return (
         '<div class="bf-pitch-tile">'
         f'<div class="bf-pitch-name">{escape(_pitch_full_name(name))}</div>'
-        f'<div class="bf-pitch-score {txt_color}">{safe_float(score, 0):.0f}</div>'
-        '<div class="bf-usage-label">USAGE</div>'
+        f'<div class="bf-pitch-score {txt_color}">{usage_val:.1f}%</div>'
+        '<div class="bf-usage-label">PITCH MIX</div>'
         f'<div class="bf-usage-track"><div class="bf-usage-fill" style="width:{use_width:.1f}%"></div></div>'
-        f'<div class="bf-pitch-note">Usage {safe_float(usage,0):.0f}% · {escape(str(note))}</div>'
+        f'<div class="bf-pitch-note">{escape(str(note))}</div>'
         '</div>'
     )
 
@@ -4781,9 +5183,21 @@ def _match_card_html(row: pd.Series, rank_override=None):
         if isinstance(item, dict):
             p = item.get("pitch", "")
             usage = safe_float(item.get("usage"), 0.0)
-            score = safe_float(item.get("score"), 0.0)
-            note = item.get("note") or f"B Contact {item.get('batter_contact_pct', '—')}% / P Contact {item.get('pitcher_contact_pct', '—')}%"
-            tiles.append(_pitch_tile_html(p, score, usage, str(note)[:64]))
+            p_contact = _fmt_pct_value(item.get("pitcher_contact_pct"))
+            p_whiff = _fmt_pct_value(item.get("pitcher_whiff_pct"))
+            p_hh = _fmt_pct_value(item.get("pitcher_hardhit_allowed_pct"))
+            p_brl = _fmt_pct_value(item.get("pitcher_barrel_allowed_pct"))
+            b_contact = _fmt_pct_value(item.get("batter_contact_pct"))
+            b_xslg = _fmt_num_value(item.get("batter_xslg"), 3)
+            p_xslg = _fmt_num_value(item.get("pitcher_xslg_allowed"), 3)
+            note_bits = [f"P Con {p_contact}", f"P Whiff {p_whiff}", f"P HH {p_hh}", f"P Brl {p_brl}"]
+            if b_contact != "—" or b_xslg != "—":
+                note_bits.append(f"B Con {b_contact}")
+                note_bits.append(f"B xSLG {b_xslg}")
+            if p_xslg != "—":
+                note_bits.append(f"P xSLG {p_xslg}")
+            note = " · ".join(note_bits)
+            tiles.append(_pitch_tile_html(p, usage, usage, note))
         else:
             tiles.append(_pitch_tile_html(item, 0, 0, "Verified pitch data unavailable"))
     if not tiles:
