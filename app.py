@@ -941,16 +941,45 @@ def get_true_pitcher_hand(pitcher_id, hand_map: dict) -> str:
 
 
 @st.cache_data(ttl=21600)
-def lookup_mlb_person_id_by_name(name: str):
-    """Resolve a player/pitcher name to MLBAM ID for real Statcast arsenal pulls.
+def fetch_mlb_people_directory() -> dict:
+    """Name -> MLBAM ID directory from MLB Stats API for current/prior seasons."""
+    directory = {}
+    for season in [CURRENT_SEASON, CURRENT_SEASON - 1, CURRENT_SEASON - 2]:
+        try:
+            resp = requests.get(
+                "https://statsapi.mlb.com/api/v1/sports/1/players",
+                params={"season": season},
+                timeout=25,
+            )
+            resp.raise_for_status()
+            for person in (resp.json() or {}).get("people", []) or []:
+                pid = person.get("id")
+                full = person.get("fullName")
+                if pid and full:
+                    directory.setdefault(normalize_name(full), int(pid))
+                    # Useful for accent/name inconsistencies.
+                    directory.setdefault(normalize_name(str(full).encode("ascii", "ignore").decode("ascii")), int(pid))
+        except Exception:
+            continue
+    return directory
 
-    This is only a fallback for older saved snapshots or rows that do not carry
-    Player ID / Pitcher ID. It prevents the card from reusing stale/fake arsenal
-    tiles when the ID was missing.
-    """
+
+@st.cache_data(ttl=21600)
+def lookup_mlb_person_id_by_name(name: str):
+    """Resolve a player/pitcher name to MLBAM ID without guessing."""
     clean = str(name or "").strip()
     if not clean or clean in {"—", "Starter Pending"}:
         return None
+
+    target = normalize_name(clean)
+    directory = fetch_mlb_people_directory()
+    if target in directory:
+        return directory[target]
+
+    ascii_target = normalize_name(clean.encode("ascii", "ignore").decode("ascii"))
+    if ascii_target in directory:
+        return directory[ascii_target]
+
     try:
         resp = requests.get(
             "https://statsapi.mlb.com/api/v1/people/search",
@@ -959,15 +988,18 @@ def lookup_mlb_person_id_by_name(name: str):
         )
         resp.raise_for_status()
         people = (resp.json() or {}).get("people", []) or []
-        if not people:
-            return None
-        target = normalize_name(clean)
-        for person in people:
-            if normalize_name(person.get("fullName", "")) == target:
-                return person.get("id")
-        return people[0].get("id")
+        if people:
+            for person in people:
+                if normalize_name(person.get("fullName", "")) == target:
+                    return person.get("id")
+            return people[0].get("id")
     except Exception:
-        return None
+        pass
+
+    # Last exact-ish directory pass: only accept unique contains match, never guess.
+    matches = [pid for n, pid in directory.items() if target and (target == n or target in n or n in target)]
+    matches = list(dict.fromkeys(matches))
+    return matches[0] if len(matches) == 1 else None
 
 
 def estimate_handedness_from_name(name: str, role: str = "batter") -> str:
@@ -1008,35 +1040,65 @@ def _barrel_like(row) -> bool:
 
 
 def _statcast_date_range(days_back: int = 730):
-    # True research window: last two years, not only current season.
-    # Do not clamp to season start; that was causing many pitchers to show
-    # NO VERIFIED ARSENAL early in the year or after low-volume samples.
-    end_dt = datetime.now(ZoneInfo("America/New_York"))
+    # True pitch mix needs enough history. Do NOT clamp to only this season;
+    # that caused many starters/relievers to return no arsenal early in the year.
+    end_dt = datetime.now(ZoneInfo("America/New_York")) + timedelta(days=1)
     start_dt = end_dt - timedelta(days=int(days_back))
     return start_dt.strftime("%Y-%m-%d"), end_dt.strftime("%Y-%m-%d")
 
 
-def _read_statcast_csv(params: dict, timeout: int = 14) -> pd.DataFrame:
-    clean_params = {k: v for k, v in (params or {}).items() if v is not None}
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Accept": "text/csv,text/plain,*/*",
-        "Referer": "https://baseballsavant.mlb.com/statcast_search",
+def _read_statcast_csv(params: dict, timeout: int = 18) -> pd.DataFrame:
+    """Read Baseball Savant Statcast CSV with the full filter payload.
+
+    Baseball Savant often returns an empty page when the short/minimal query is
+    used.  This wrapper keeps the query truthful but supplies the same neutral
+    filter fields Savant's own CSV export uses. No estimated or fictional pitch
+    mix is created here.
+    """
+    base_params = {
+        "all": "true",
+        "hfPT": "",
+        "hfAB": "",
+        "hfGT": "R|",
+        "hfPR": "",
+        "hfZ": "",
+        "stadium": "",
+        "hfBBT": "",
+        "hfNewZones": "",
+        "hfPull": "",
+        "hfC": "",
+        "hfSea": "",
+        "hfSit": "",
+        "hfOuts": "",
+        "opponent": "",
+        "pitcher_throws": "",
+        "batter_stands": "",
+        "hfSA": "",
+        "type": "details",
+        "min_pitches": "0",
+        "min_results": "0",
+        "group_by": "name",
+        "sort_col": "pitches",
+        "sort_order": "desc",
     }
+    q = dict(base_params)
+    q.update({k: v for k, v in (params or {}).items() if v is not None})
     try:
         resp = requests.get(
             "https://baseballsavant.mlb.com/statcast_search/csv",
-            params=clean_params,
-            headers=headers,
+            params=q,
+            headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "Accept": "text/csv,application/csv,text/plain,*/*",
+            },
             timeout=timeout,
         )
         resp.raise_for_status()
         raw = resp.text or ""
-        if not raw.strip() or "pitch_type" not in raw.lower():
+        if "pitch_type" not in raw:
             return pd.DataFrame()
-        df = pd.read_csv(StringIO(raw))
-        df.columns = [str(c).strip().lstrip("\ufeff") for c in df.columns]
-        return df
+        df = pd.read_csv(StringIO(raw), low_memory=False)
+        return df if "pitch_type" in df.columns else pd.DataFrame()
     except Exception:
         return pd.DataFrame()
 
@@ -1045,7 +1107,7 @@ def _read_statcast_csv(params: dict, timeout: int = 14) -> pd.DataFrame:
 def fetch_true_pitcher_arsenal(pitcher_id, days_back: int = 730) -> dict:
     empty = {"found": False, "mix": {}, "tiles": []}
     try:
-        pid = int(float(pitcher_id))
+        pid = int(pitcher_id)
     except Exception:
         return empty
     start_date, end_date = _statcast_date_range(days_back)
@@ -1055,6 +1117,7 @@ def fetch_true_pitcher_arsenal(pitcher_id, days_back: int = 730) -> dict:
         "pitcher": str(pid),
         "game_date_gt": start_date,
         "game_date_lt": end_date,
+        "hfSea": f"{CURRENT_SEASON}|{CURRENT_SEASON - 1}|",
         "type": "details",
         "min_pitches": "0",
         "min_results": "0",
@@ -1102,7 +1165,7 @@ def fetch_true_pitcher_arsenal(pitcher_id, days_back: int = 730) -> dict:
 def fetch_true_batter_pitch_arsenal(batter_id, days_back: int = 730) -> dict:
     empty = {"found": False, "by_pitch": {}}
     try:
-        pid = int(float(batter_id))
+        pid = int(batter_id)
     except Exception:
         return empty
     start_date, end_date = _statcast_date_range(days_back)
@@ -1112,6 +1175,7 @@ def fetch_true_batter_pitch_arsenal(batter_id, days_back: int = 730) -> dict:
         "batter": str(pid),
         "game_date_gt": start_date,
         "game_date_lt": end_date,
+        "hfSea": f"{CURRENT_SEASON}|{CURRENT_SEASON - 1}|",
         "type": "details",
         "min_pitches": "0",
         "min_results": "0",
@@ -3204,19 +3268,8 @@ def build_hitter_metrics(
     deep_bbe: bool = False,
 ):
     live_hitter = compute_hitter_live_metrics_from_map(player_id, hitter_stats_map, use_true_bbe=deep_bbe)
-
-    # Resolve the true MLBAM pitcher ID before any pitcher hand, stats, or arsenal work.
-    # Some schedule rows carry the pitcher name but not the ID; using the unresolved
-    # value is what caused repeated NO VERIFIED ARSENAL cards.
-    resolved_pitcher_id = opp_pitcher_id
-    try:
-        if resolved_pitcher_id is None or pd.isna(resolved_pitcher_id) or str(resolved_pitcher_id).strip() in {"", "nan", "None", "—"}:
-            resolved_pitcher_id = lookup_mlb_person_id_by_name(opp_pitcher)
-    except Exception:
-        resolved_pitcher_id = lookup_mlb_person_id_by_name(opp_pitcher)
-
     live_pitcher = compute_pitcher_live_metrics_from_map(
-        resolved_pitcher_id,
+        opp_pitcher_id,
         opp_pitcher,
         pitcher_stats_map,
     )
@@ -3265,20 +3318,7 @@ def build_hitter_metrics(
     display_spot = display_lineup_spot(lineup_spot)
     hand_map = hand_map or {}
     bats = get_true_batter_hand(player_id, hand_map)
-    pitcher_throws = get_true_pitcher_hand(resolved_pitcher_id, hand_map)
-
-    # If the ID was resolved by name after the original people hydrate call, fetch
-    # only that missing hand from MLB. No name guessing.
-    if not pitcher_throws and resolved_pitcher_id is not None:
-        try:
-            pitcher_throws = get_true_pitcher_hand(resolved_pitcher_id, fetch_people_hand_map((int(float(resolved_pitcher_id)),)))
-        except Exception:
-            pitcher_throws = ""
-    if not bats and player_id is not None:
-        try:
-            bats = get_true_batter_hand(player_id, fetch_people_hand_map((int(float(player_id)),)))
-        except Exception:
-            bats = ""
+    pitcher_throws = get_true_pitcher_hand(opp_pitcher_id, hand_map)
 
     if live_pitcher is None:
         pitch_hr9 = stable_float(f"{opp_pitcher}-hr9", 0.7, 1.9)
@@ -3294,10 +3334,8 @@ def build_hitter_metrics(
     weather_score_boost = weather_boost * 1.6
     bullpen_fatigue_boost = bullpen_fatigue_score * 1.8
 
-    pitch_mix_example = build_pitch_mix_profile(opp_pitcher, resolved_pitcher_id)
-    # Use real 2-year pitcher arsenal on normal load. Batter-vs-pitch contact is
-    # added on Deep L10 Refresh to avoid slowing the main board.
-    arsenal_tiles = build_matchup_arsenal_tiles(resolved_pitcher_id, player_id, 0.0, 0.0, include_batter=deep_bbe)
+    pitch_mix_example = build_pitch_mix_profile(opp_pitcher, opp_pitcher_id)
+    arsenal_tiles = build_matchup_arsenal_tiles(opp_pitcher_id, player_id, 0.0, 0.0, include_batter=deep_bbe)
     pitch_context = compute_relevant_pitch_matchup(
         pitch_mix_example,
         bats,
@@ -3770,7 +3808,7 @@ def build_hitter_metrics(
 
     return {
         "Player ID": player_id,
-        "Pitcher ID": resolved_pitcher_id,
+        "Pitcher ID": opp_pitcher_id,
         "Player": player_name,
         "Team": team,
         "Bats": bats,
@@ -5134,7 +5172,7 @@ def _match_card_html(row: pd.Series, rank_override=None):
         else:
             tiles.append(_pitch_tile_html(item, 0, 0, "Verified pitch data unavailable"))
     if not tiles:
-        tiles.append('<div class="bf-pitch-tile"><div class="bf-pitch-name">NO VERIFIED ARSENAL</div><div class="bf-pitch-note">No verified Statcast pitch mix returned for this pitcher ID. BF Data will not invent pitches.</div></div>')
+        tiles.append('<div class="bf-pitch-tile"><div class="bf-pitch-name">NO VERIFIED ARSENAL</div><div class="bf-pitch-note">No pitch-type data returned. BF Data will not invent pitches.</div></div>')
 
     def bvp_cell(label, batter_val, pitcher_val, suffix=""):
         b = safe_float(batter_val, 0.0)
