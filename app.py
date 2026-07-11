@@ -4293,39 +4293,109 @@ def get_top12_hybrid(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def get_team_game_view(df: pd.DataFrame, game_key: str, team: str, game_pk=None):
-    """Return one team's candidates for one specific MLB game.
+    """Return unique qualified hitters for one team in one specific game.
 
-    Uses game_pk for doubleheader separation while avoiding redundant full
-    dataframe sorting during every board render.
+    Doubleheaders are separated by MLB game_pk. Inside that game, a hitter can
+    appear only once. Removed duplicates never consume a ranking slot; the board
+    continues to the next-highest qualified hitter. If fewer than four unique
+    hitters qualify, only those qualified hitters are shown.
     """
-    mask = (df["Game"] == game_key) & (df["Team"] == team)
+    if df is None or df.empty:
+        empty = pd.DataFrame()
+        return empty, empty
+
+    mask = (
+        df["Game"].astype(str).eq(str(game_key))
+        & df["Team"].astype(str).eq(str(team))
+    )
+
     if game_pk is not None and "game_pk" in df.columns:
-        mask &= pd.to_numeric(df["game_pk"], errors="coerce").eq(safe_int(game_pk, -1))
+        requested_game_pk = safe_int(game_pk, -1)
+        row_game_pks = pd.to_numeric(df["game_pk"], errors="coerce").fillna(-1).astype(int)
+        mask &= row_game_pks.eq(requested_game_pk)
 
     team_df = df.loc[mask].copy()
     if team_df.empty:
         return team_df, team_df
 
-    # The daily dataset is already ranked. Deduplicate once without re-sorting it.
-    player_keys = team_df["Player"].astype(str).map(normalize_name)
-    team_df = team_df.loc[~player_keys.duplicated(keep="first")].copy()
+    # Rank this game's rows first so that, if the same hitter somehow entered
+    # the dataset more than once, the strongest version is the one preserved.
+    team_df = sort_for_hr(team_df).reset_index(drop=True)
 
-    hr_pool = get_research_shortlist_pool(team_df)
-    if not hr_pool.empty:
-        hr_keys = hr_pool["Player"].astype(str).map(normalize_name)
-        hr_pool = hr_pool.loc[~hr_keys.duplicated(keep="first")].head(4).copy()
-        hr_pool = add_rank_column(hr_pool.reset_index(drop=True))
+    # Prefer the stable MLB player ID. Fall back to normalized name only when an
+    # ID is unavailable. This prevents spelling, accents, or refresh artifacts
+    # from allowing the same hitter to occupy multiple slots.
+    if "Player ID" in team_df.columns:
+        player_ids = pd.to_numeric(team_df["Player ID"], errors="coerce")
+        name_keys = team_df["Player"].astype(str).map(normalize_name)
+        team_df["_bf_unique_player"] = [
+            f"id:{int(pid)}" if pd.notna(pid) else f"name:{name}"
+            for pid, name in zip(player_ids, name_keys)
+        ]
+    else:
+        team_df["_bf_unique_player"] = (
+            "name:" + team_df["Player"].astype(str).map(normalize_name)
+        )
 
+    team_df = (
+        team_df
+        .drop_duplicates(subset=["_bf_unique_player"], keep="first")
+        .drop(columns=["_bf_unique_player"])
+        .reset_index(drop=True)
+    )
+
+    # Apply the existing BF qualification standards to this game only.
+    qualified = get_research_shortlist_pool(team_df)
+
+    # Backfill naturally with the next-highest unique qualified hitter. Do not
+    # force four cards when fewer than four hitters genuinely qualify.
+    selected_rows = []
+    used_players = set()
+
+    if qualified is not None and not qualified.empty:
+        qualified = sort_for_hr(qualified).reset_index(drop=True)
+
+        for _, row in qualified.iterrows():
+            raw_pid = row.get("Player ID", pd.NA)
+            try:
+                player_key = f"id:{int(raw_pid)}" if pd.notna(raw_pid) else ""
+            except Exception:
+                player_key = ""
+
+            if not player_key:
+                player_key = f"name:{normalize_name(row.get('Player', ''))}"
+
+            if player_key in used_players:
+                continue
+
+            selected_rows.append(row)
+            used_players.add(player_key)
+
+            if len(selected_rows) >= 4:
+                break
+
+    if selected_rows:
+        hr_pool = pd.DataFrame(selected_rows).reset_index(drop=True)
+        hr_pool = add_rank_column(hr_pool)
+    else:
+        hr_pool = team_df.iloc[0:0].copy()
+
+    # HRR remains game-specific and unique as well.
     hrr = (
         team_df.sort_values(
             by=["HRR Score", "LineDrive%", "HardHit%", "GroundBall%"],
             ascending=[False, False, False, True]
         )
-        .drop_duplicates(subset=["Player"], keep="first")
+        .drop_duplicates(
+            subset=["Player ID"] if "Player ID" in team_df.columns else ["Player"],
+            keep="first"
+        )
         .head(5)
+        .reset_index(drop=True)
     )
 
     return hr_pool, hrr
+
 
 
 def build_visible_tracker_pool(df: pd.DataFrame, schedule: list[dict]) -> pd.DataFrame:
