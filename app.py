@@ -4295,40 +4295,33 @@ def get_top12_hybrid(df: pd.DataFrame) -> pd.DataFrame:
 def get_team_game_view(df: pd.DataFrame, game_key: str, team: str, game_pk=None):
     """Return one team's candidates for one specific MLB game.
 
-    Doubleheaders share the same away/home matchup label, so Game alone is not
-    a safe identifier. game_pk keeps the early and late games fully separate.
+    Uses game_pk for doubleheader separation while avoiding redundant full
+    dataframe sorting during every board render.
     """
-    team_df = df[(df["Game"] == game_key) & (df["Team"] == team)].copy()
+    mask = (df["Game"] == game_key) & (df["Team"] == team)
+    if game_pk is not None and "game_pk" in df.columns:
+        mask &= pd.to_numeric(df["game_pk"], errors="coerce").eq(safe_int(game_pk, -1))
 
-    if game_pk is not None and "game_pk" in team_df.columns:
-        game_pk_num = pd.to_numeric(team_df["game_pk"], errors="coerce")
-        team_df = team_df[game_pk_num == safe_int(game_pk, -1)].copy()
-
+    team_df = df.loc[mask].copy()
     if team_df.empty:
         return team_df, team_df
 
-    # One player can occupy only one HR-card slot inside this specific game.
-    team_df["_player_key"] = team_df["Player"].astype(str).map(normalize_name)
-    team_df = sort_for_hr(team_df)
-    team_df = team_df.drop_duplicates(subset=["_player_key", "Team"], keep="first").drop(columns=["_player_key"])
+    # The daily dataset is already ranked. Deduplicate once without re-sorting it.
+    player_keys = team_df["Player"].astype(str).map(normalize_name)
+    team_df = team_df.loc[~player_keys.duplicated(keep="first")].copy()
 
     hr_pool = get_research_shortlist_pool(team_df)
     if not hr_pool.empty:
-        hr_pool["_player_key"] = hr_pool["Player"].astype(str).map(normalize_name)
-        hr_pool = (
-            sort_for_hr(hr_pool)
-            .drop_duplicates(subset=["_player_key", "Team"], keep="first")
-            .drop(columns=["_player_key"])
-            .head(4)
-        )
-        hr_pool = add_rank_column(hr_pool)
+        hr_keys = hr_pool["Player"].astype(str).map(normalize_name)
+        hr_pool = hr_pool.loc[~hr_keys.duplicated(keep="first")].head(4).copy()
+        hr_pool = add_rank_column(hr_pool.reset_index(drop=True))
 
     hrr = (
         team_df.sort_values(
             by=["HRR Score", "LineDrive%", "HardHit%", "GroundBall%"],
             ascending=[False, False, False, True]
         )
-        .drop_duplicates(subset=["Player", "Team"], keep="first")
+        .drop_duplicates(subset=["Player"], keep="first")
         .head(5)
     )
 
@@ -4354,7 +4347,7 @@ def build_visible_tracker_pool(df: pd.DataFrame, schedule: list[dict]) -> pd.Dat
     for game in schedule:
         gdf = df[
             (df["Game"] == game["game_key"])
-            & (pd.to_numeric(df.get("game_pk"), errors="coerce") == safe_int(game.get("game_pk"), -1))
+            & (df["game_pk"] == game.get("game_pk"))
         ].copy()
         if gdf.empty:
             continue
@@ -5697,7 +5690,7 @@ for idx, game in enumerate(schedule, start=8):
 
         gdf = locked_df[
             (locked_df["Game"] == game["game_key"])
-            & (pd.to_numeric(locked_df.get("game_pk"), errors="coerce") == safe_int(game.get("game_pk"), -1))
+            & (locked_df["game_pk"] == game.get("game_pk"))
         ].copy()
         away_team = team_abbr(game["away_team"])
         home_team = team_abbr(game["home_team"])
