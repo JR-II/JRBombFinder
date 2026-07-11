@@ -70,6 +70,11 @@ hr { margin-top: .38rem !important; margin-bottom: .38rem !important; }
 .bf-mini-score { text-align:center; border-radius:8px; padding:4px 5px; background:#111823; border:1px solid rgba(255,255,255,.09); }
 .bf-mini-score b { display:block; color:#6da2ff; font-size:.58rem; letter-spacing:.08em; }
 .bf-mini-score span { display:block; font-weight:950; font-size:.9rem; }
+
+.bf-reason-strip { grid-column:1 / -1; display:flex; flex-wrap:wrap; gap:5px; margin-top:-1px; padding-top:3px; border-top:1px solid rgba(255,255,255,.06); }
+.bf-reason-chip { display:inline-flex; align-items:center; gap:4px; border:1px solid rgba(255,255,255,.09); background:#101722; border-radius:999px; padding:2px 6px; color:#cbd5e5; font-size:.58rem; font-weight:850; white-space:nowrap; }
+.bf-reason-chip b { color:#6da2ff; font-size:.52rem; letter-spacing:.05em; }
+.bf-reason-chip strong { color:#f6f8fc; font-size:.61rem; }
 .bf-match-card { border:1px solid #263040; border-radius:14px; overflow:hidden; background:#080d14; margin:6px 0 10px 0; box-shadow:0 0 0 1px rgba(0,0,0,.35) inset; }
 .bf-match-topline { display:grid; grid-template-columns:minmax(180px,1.2fr) minmax(170px,1fr) 70px 70px 70px; gap:0; align-items:stretch; background:#141b28; border-bottom:1px solid #2b3547; }
 .bf-cell-head { padding:10px 12px; border-right:1px solid rgba(255,255,255,.08); }
@@ -110,6 +115,10 @@ hr { margin-top: .38rem !important; margin-bottom: .38rem !important; }
   .bf-mini-score { padding:3px; }
   .bf-mini-score b { font-size:.48rem; }
   .bf-mini-score span { font-size:.74rem; }
+  .bf-reason-strip { gap:4px; padding-top:2px; }
+  .bf-reason-chip { font-size:.50rem; padding:2px 5px; }
+  .bf-reason-chip b { font-size:.45rem; }
+  .bf-reason-chip strong { font-size:.53rem; }
   .bf-match-topline { grid-template-columns:1fr 1fr 50px 50px 50px; }
   .bf-cell-head { padding:8px 7px; }
   .bf-head-label { font-size:.5rem; }
@@ -5281,6 +5290,28 @@ def _match_card_html(row: pd.Series, rank_override=None):
 </div>'''
 
 
+def _compact_reason_breakdown(row: pd.Series) -> str:
+    """Display-only comparison chips. Does not alter scoring or rankings."""
+    pitch_fit = clip(safe_float(row.get("Pitch Matchup Score"), 0.0) * 10.0 + 40.0, 0, 99)
+    barrel_edge = clip(safe_float(row.get("Barrel%"), 0.0) * 5.5 + max(0.0, safe_float(row.get("HardHit%"), 0.0) - 35.0), 0, 99)
+    pitcher_edge = clip(_attackability_pct(row.get("HR Attackability Score", 0)), 0, 99)
+    trend_map = {"HOT": 92, "LIVE": 78, "NEUTRAL": 60, "COLD": 38}
+    recent_form = trend_map.get(str(row.get("Recent Trend", "NEUTRAL")).upper(), 60)
+    weather_raw = safe_float(row.get("WeatherBoost"), 0.0)
+    weather_label = f"{weather_raw:+.1f}"
+    chips = [
+        ("PITCH", f"{pitch_fit:.0f}"),
+        ("BARREL", f"{barrel_edge:.0f}"),
+        ("PITCHER", f"{pitcher_edge:.0f}"),
+        ("FORM", f"{recent_form:.0f}"),
+        ("WX", weather_label),
+    ]
+    return '<div class="bf-reason-strip">' + ''.join(
+        f'<span class="bf-reason-chip"><b>{escape(label)}</b><strong>{escape(value)}</strong></span>'
+        for label, value in chips
+    ) + '</div>'
+
+
 def render_player_card(row: pd.Series, rank_override=None):
     rank = rank_override if rank_override is not None else row.get("Rank", "—")
     player = _display_value(row.get("Player"))
@@ -5305,6 +5336,7 @@ def render_player_card(row: pd.Series, rank_override=None):
   <div class="bf-mini-score"><b>OVR</b><span>{overall_score:.0f}</span></div>
   <div class="bf-mini-score"><b>HR</b><span>{hr_score:.0f}</span></div>
   <div class="bf-mini-score"><b>K</b><span>{k_score:.0f}</span></div>
+  {_compact_reason_breakdown(row)}
 </div>'''
     st.markdown(quick_html, unsafe_allow_html=True)
     with st.expander(f"Open matchup card — {player} vs {pitcher}", expanded=False):
