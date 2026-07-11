@@ -410,7 +410,7 @@ def save_daily_board_snapshot(board_df: pd.DataFrame, snapshot_date: str):
     if clean_board.empty:
         return
 
-    key_cols = [c for c in ["Tracker Source", "Player", "Team", "Game"] if c in clean_board.columns]
+    key_cols = [c for c in ["Tracker Source", "Player", "Team", "Game", "game_pk"] if c in clean_board.columns]
     if len(key_cols) < 4:
         clean_board.to_csv(board_path, index=False)
         return
@@ -4320,7 +4320,98 @@ def get_top12_hybrid(df: pd.DataFrame) -> pd.DataFrame:
     return add_rank_column(top12)
 
 
-def get_team_game_view(df: pd.DataFrame, game_key: str, team: str, game_pk=None):
+
+def _stable_player_key(row) -> str:
+    """Stable player identity used by all per-game/doubleheader dedupe rules."""
+    raw_pid = row.get("Player ID", pd.NA)
+    try:
+        if pd.notna(raw_pid):
+            return f"id:{int(raw_pid)}"
+    except Exception:
+        pass
+    return f"name:{normalize_name(row.get('Player', ''))}"
+
+
+def build_doubleheader_assignment_map(df: pd.DataFrame, schedule: list[dict]) -> dict:
+    """Assign a hitter to only one game in a same-day doubleheader.
+
+    Each MLB game_pk remains independent. When the same hitter qualifies in both
+    games of the same team matchup, he is assigned only to the game where his
+    matchup score is strongest. The other game backfills with its next-highest
+    unique qualified hitter. Normal one-game series are unchanged.
+    """
+    assignments = {}
+    if df is None or df.empty:
+        return assignments
+
+    matchup_groups = {}
+    for game in schedule:
+        matchup_groups.setdefault(str(game.get("game_key", "")), []).append(game)
+
+    for game_key, games in matchup_groups.items():
+        game_pks = [safe_int(g.get("game_pk"), -1) for g in games]
+        teams = set()
+        for g in games:
+            teams.add(team_abbr(g.get("away_team", "")))
+            teams.add(team_abbr(g.get("home_team", "")))
+
+        # A single game needs no cross-game restriction.
+        if len(set(game_pks)) <= 1:
+            continue
+
+        for team in teams:
+            group = df[
+                df["Game"].astype(str).eq(str(game_key))
+                & df["Team"].astype(str).eq(str(team))
+                & pd.to_numeric(df["game_pk"], errors="coerce").fillna(-1).astype(int).isin(game_pks)
+            ].copy()
+            if group.empty:
+                continue
+
+            group = sort_for_hr(group).reset_index(drop=True)
+            group["_bf_player_key"] = group.apply(_stable_player_key, axis=1)
+
+            # Keep the strongest game-specific version of each hitter across the doubleheader.
+            best_rows = group.drop_duplicates(subset=["_bf_player_key"], keep="first")
+            for _, row in best_rows.iterrows():
+                assignment_key = (safe_int(row.get("game_pk"), -1), str(team))
+                assignments.setdefault(assignment_key, set()).add(row["_bf_player_key"])
+
+    return assignments
+
+
+def get_saved_game_hr_board(snapshot_date: str, game_pk, team: str, schedule: list[dict], assignment_map: dict | None = None) -> pd.DataFrame:
+    """Return the frozen per-game prediction board for one game/team."""
+    snap = load_daily_board_snapshot(snapshot_date)
+    if snap is None or snap.empty or "Tracker Source" not in snap.columns:
+        return pd.DataFrame()
+    section = snap[snap["Tracker Source"].astype(str).str.strip().str.upper().eq("GAME_HR")].copy()
+    if section.empty:
+        return section
+    if "game_pk" in section.columns:
+        section = section[
+            pd.to_numeric(section["game_pk"], errors="coerce").fillna(-1).astype(int).eq(safe_int(game_pk, -1))
+        ]
+    section = section[section["Team"].astype(str).eq(str(team))].copy()
+    if section.empty:
+        return section
+    section["_bf_player_key"] = section.apply(_stable_player_key, axis=1)
+    if assignment_map:
+        allowed = assignment_map.get((safe_int(game_pk, -1), str(team)))
+        if allowed is not None:
+            section = section[section["_bf_player_key"].isin(allowed)].copy()
+            if section.empty:
+                return section
+    section = section.drop_duplicates(subset=["_bf_player_key"], keep="first").drop(columns=["_bf_player_key"])
+    section = add_live_homer_counts_to_board(section, schedule)
+    if "Rank" in section.columns:
+        section = section.drop(columns=["Rank"])
+    section = section.reset_index(drop=True)
+    section.insert(0, "Rank", range(1, len(section) + 1))
+    return dedupe_columns(section.head(4))
+
+
+def get_team_game_view(df: pd.DataFrame, game_key: str, team: str, game_pk=None, assignment_map: dict | None = None):
     """Return unique qualified hitters for one team in one specific game.
 
     Doubleheaders are separated by MLB game_pk. Inside that game, a hitter can
@@ -4345,6 +4436,15 @@ def get_team_game_view(df: pd.DataFrame, game_key: str, team: str, game_pk=None)
     team_df = df.loc[mask].copy()
     if team_df.empty:
         return team_df, team_df
+
+    # Doubleheader rule: a hitter may be assigned to only one game in the pair.
+    if assignment_map and game_pk is not None:
+        allowed = assignment_map.get((safe_int(game_pk, -1), str(team)))
+        if allowed is not None:
+            team_df["_bf_assignment_key"] = team_df.apply(_stable_player_key, axis=1)
+            team_df = team_df[team_df["_bf_assignment_key"].isin(allowed)].drop(columns=["_bf_assignment_key"])
+            if team_df.empty:
+                return team_df, team_df
 
     # Rank this game's rows first so that, if the same hitter somehow entered
     # the dataset more than once, the strongest version is the one preserved.
@@ -4426,7 +4526,7 @@ def get_team_game_view(df: pd.DataFrame, game_key: str, team: str, game_pk=None)
 
 
 
-def build_visible_tracker_pool(df: pd.DataFrame, schedule: list[dict]) -> pd.DataFrame:
+def build_visible_tracker_pool(df: pd.DataFrame, schedule: list[dict], assignment_map: dict | None = None) -> pd.DataFrame:
     visible_frames = []
 
     core_board = get_research_shortlist_pool(df).copy()
@@ -4453,13 +4553,13 @@ def build_visible_tracker_pool(df: pd.DataFrame, schedule: list[dict]) -> pd.Dat
         away_team = team_abbr(game["away_team"])
         home_team = team_abbr(game["home_team"])
 
-        away_hr, _ = get_team_game_view(gdf, game["game_key"], away_team, game.get("game_pk"))
+        away_hr, _ = get_team_game_view(gdf, game["game_key"], away_team, game.get("game_pk"), assignment_map)
         if not away_hr.empty:
             away_hr = away_hr.copy()
             away_hr["Tracker Source"] = "GAME_HR"
             visible_frames.append(away_hr)
 
-        home_hr, _ = get_team_game_view(gdf, game["game_key"], home_team, game.get("game_pk"))
+        home_hr, _ = get_team_game_view(gdf, game["game_key"], home_team, game.get("game_pk"), assignment_map)
         if not home_hr.empty:
             home_hr = home_hr.copy()
             home_hr["Tracker Source"] = "GAME_HR"
@@ -5506,7 +5606,8 @@ lineup_mode = get_lineup_mode(schedule) if schedule else "PROJECTED"
 
 # Build and save the prediction/tracker pool BEFORE adding live results.
 # This prevents post-HR result data from rewriting the prediction board.
-tracked_df = build_visible_tracker_pool(locked_df_raw, schedule)
+doubleheader_assignment_map = build_doubleheader_assignment_map(locked_df_raw, schedule)
+tracked_df = build_visible_tracker_pool(locked_df_raw, schedule, doubleheader_assignment_map)
 save_daily_board_snapshot(tracked_df, today_str())
 
 tracker = sync_tracker_with_board(tracked_df)
@@ -5802,7 +5903,9 @@ for idx, game in enumerate(schedule, start=8):
             st.markdown(f"### {away_team}")
             away_source = gdf[gdf["Team"] == away_team]["Lineup Source"].iloc[0] if not gdf[gdf["Team"] == away_team].empty else "N/A"
             st.caption(f"Confirmed hitters: {game.get('away_confirmed_count', 0)}/9 | Pool status: {away_source}")
-            team_hr, team_hrr = get_team_game_view(gdf, game["game_key"], away_team, game.get("game_pk"))
+            live_team_hr, team_hrr = get_team_game_view(gdf, game["game_key"], away_team, game.get("game_pk"), doubleheader_assignment_map)
+            saved_team_hr = get_saved_game_hr_board(today_str(), game.get("game_pk"), away_team, schedule, doubleheader_assignment_map)
+            team_hr = saved_team_hr if not saved_team_hr.empty else live_team_hr
             if not team_hr.empty:
                 st.markdown("**Best HR hitters**")
                 render_card_grid(team_hr, max_cards=4, columns=1)
@@ -5837,7 +5940,9 @@ for idx, game in enumerate(schedule, start=8):
             st.markdown(f"### {home_team}")
             home_source = gdf[gdf["Team"] == home_team]["Lineup Source"].iloc[0] if not gdf[gdf["Team"] == home_team].empty else "N/A"
             st.caption(f"Confirmed hitters: {game.get('home_confirmed_count', 0)}/9 | Pool status: {home_source}")
-            team_hr, team_hrr = get_team_game_view(gdf, game["game_key"], home_team, game.get("game_pk"))
+            live_team_hr, team_hrr = get_team_game_view(gdf, game["game_key"], home_team, game.get("game_pk"), doubleheader_assignment_map)
+            saved_team_hr = get_saved_game_hr_board(today_str(), game.get("game_pk"), home_team, schedule, doubleheader_assignment_map)
+            team_hr = saved_team_hr if not saved_team_hr.empty else live_team_hr
             if not team_hr.empty:
                 st.markdown("**Best HR hitters**")
                 render_card_grid(team_hr, max_cards=4, columns=1)
