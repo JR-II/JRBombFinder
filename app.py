@@ -718,7 +718,11 @@ def dedupe_tracker_rows(df: pd.DataFrame) -> pd.DataFrame:
     work = work.sort_values(["_hr_count_num", "_result_num", "_updated_sort"], ascending=[False, False, False])
 
     deduped = work.drop_duplicates(
-        subset=["date", "_player_key", "team", "game", "tracker_source"],
+        subset=[
+            "date", "_player_key", "team", "game",
+            *(["game_pk"] if "game_pk" in work.columns else []),
+            "tracker_source"
+        ],
         keep="first"
     ).copy()
 
@@ -4288,20 +4292,45 @@ def get_top12_hybrid(df: pd.DataFrame) -> pd.DataFrame:
     return add_rank_column(top12)
 
 
-def get_team_game_view(df: pd.DataFrame, game_key: str, team: str):
+def get_team_game_view(df: pd.DataFrame, game_key: str, team: str, game_pk=None):
+    """Return one team's candidates for one specific MLB game.
+
+    Doubleheaders share the same away/home matchup label, so Game alone is not
+    a safe identifier. game_pk keeps the early and late games fully separate.
+    """
     team_df = df[(df["Game"] == game_key) & (df["Team"] == team)].copy()
+
+    if game_pk is not None and "game_pk" in team_df.columns:
+        game_pk_num = pd.to_numeric(team_df["game_pk"], errors="coerce")
+        team_df = team_df[game_pk_num == safe_int(game_pk, -1)].copy()
+
     if team_df.empty:
         return team_df, team_df
 
+    # One player can occupy only one HR-card slot inside this specific game.
+    team_df["_player_key"] = team_df["Player"].astype(str).map(normalize_name)
+    team_df = sort_for_hr(team_df)
+    team_df = team_df.drop_duplicates(subset=["_player_key", "Team"], keep="first").drop(columns=["_player_key"])
+
     hr_pool = get_research_shortlist_pool(team_df)
-    hr_pool = sort_for_hr(hr_pool).head(4)
     if not hr_pool.empty:
+        hr_pool["_player_key"] = hr_pool["Player"].astype(str).map(normalize_name)
+        hr_pool = (
+            sort_for_hr(hr_pool)
+            .drop_duplicates(subset=["_player_key", "Team"], keep="first")
+            .drop(columns=["_player_key"])
+            .head(4)
+        )
         hr_pool = add_rank_column(hr_pool)
 
-    hrr = team_df.sort_values(
-        by=["HRR Score", "LineDrive%", "HardHit%", "GroundBall%"],
-        ascending=[False, False, False, True]
-    ).head(5)
+    hrr = (
+        team_df.sort_values(
+            by=["HRR Score", "LineDrive%", "HardHit%", "GroundBall%"],
+            ascending=[False, False, False, True]
+        )
+        .drop_duplicates(subset=["Player", "Team"], keep="first")
+        .head(5)
+    )
 
     return hr_pool, hrr
 
@@ -4323,20 +4352,23 @@ def build_visible_tracker_pool(df: pd.DataFrame, schedule: list[dict]) -> pd.Dat
     # Match tracker entries to the actual per-game HR boards the user sees.
     # If BF Data surfaces a hitter in a visible per-game HR table, that hitter must be tracked.
     for game in schedule:
-        gdf = df[df["Game"] == game["game_key"]].copy()
+        gdf = df[
+            (df["Game"] == game["game_key"])
+            & (pd.to_numeric(df.get("game_pk"), errors="coerce") == safe_int(game.get("game_pk"), -1))
+        ].copy()
         if gdf.empty:
             continue
 
         away_team = team_abbr(game["away_team"])
         home_team = team_abbr(game["home_team"])
 
-        away_hr, _ = get_team_game_view(gdf, game["game_key"], away_team)
+        away_hr, _ = get_team_game_view(gdf, game["game_key"], away_team, game.get("game_pk"))
         if not away_hr.empty:
             away_hr = away_hr.copy()
             away_hr["Tracker Source"] = "GAME_HR"
             visible_frames.append(away_hr)
 
-        home_hr, _ = get_team_game_view(gdf, game["game_key"], home_team)
+        home_hr, _ = get_team_game_view(gdf, game["game_key"], home_team, game.get("game_pk"))
         if not home_hr.empty:
             home_hr = home_hr.copy()
             home_hr["Tracker Source"] = "GAME_HR"
@@ -4346,7 +4378,10 @@ def build_visible_tracker_pool(df: pd.DataFrame, schedule: list[dict]) -> pd.Dat
         return pd.DataFrame(columns=df.columns.tolist() + ["Tracker Source"])
 
     visible_df = pd.concat(visible_frames, ignore_index=True)
-    visible_df = visible_df.drop_duplicates(subset=["Player", "Team", "Game", "Tracker Source"]).reset_index(drop=True)
+    visible_dedupe_cols = ["Player", "Team", "Game", "Tracker Source"]
+    if "game_pk" in visible_df.columns:
+        visible_dedupe_cols.insert(3, "game_pk")
+    visible_df = visible_df.drop_duplicates(subset=visible_dedupe_cols).reset_index(drop=True)
     visible_df = sort_for_hr(visible_df)
     return visible_df
 
@@ -4494,11 +4529,13 @@ def sync_tracker_with_board(tracked_df: pd.DataFrame):
     if not tracker.empty:
         today_existing = tracker[tracker["date"].astype(str) == date_key].copy()
         if not today_existing.empty:
+            existing_game_pk = pd.to_numeric(today_existing.get("game_pk"), errors="coerce").fillna(-1).astype(int)
             existing_keys = set(zip(
                 today_existing["date"].astype(str),
                 today_existing["player"].astype(str).map(normalize_name),
                 today_existing["team"].astype(str),
                 today_existing["game"].astype(str),
+                existing_game_pk,
                 today_existing["tracker_source"].astype(str),
             ))
 
@@ -4506,7 +4543,14 @@ def sync_tracker_with_board(tracked_df: pd.DataFrame):
     for _, row in tracked_df.iterrows():
         source = str(row.get("Tracker Source", "CORE_BOARD"))
         player_name = str(row["Player"])
-        key = (str(date_key), normalize_name(player_name), str(row["Team"]), str(row["Game"]), source)
+        key = (
+            str(date_key),
+            normalize_name(player_name),
+            str(row["Team"]),
+            str(row["Game"]),
+            safe_int(row.get("game_pk"), -1),
+            source,
+        )
         if key in existing_keys:
             continue
 
@@ -5651,7 +5695,10 @@ for idx, game in enumerate(schedule, start=8):
             f"Home starter: {game['home_pitcher']}"
         )
 
-        gdf = locked_df[locked_df["Game"] == game["game_key"]].copy()
+        gdf = locked_df[
+            (locked_df["Game"] == game["game_key"])
+            & (pd.to_numeric(locked_df.get("game_pk"), errors="coerce") == safe_int(game.get("game_pk"), -1))
+        ].copy()
         away_team = team_abbr(game["away_team"])
         home_team = team_abbr(game["home_team"])
 
@@ -5661,7 +5708,7 @@ for idx, game in enumerate(schedule, start=8):
             st.markdown(f"### {away_team}")
             away_source = gdf[gdf["Team"] == away_team]["Lineup Source"].iloc[0] if not gdf[gdf["Team"] == away_team].empty else "N/A"
             st.caption(f"Confirmed hitters: {game.get('away_confirmed_count', 0)}/9 | Pool status: {away_source}")
-            team_hr, team_hrr = get_team_game_view(gdf, game["game_key"], away_team)
+            team_hr, team_hrr = get_team_game_view(gdf, game["game_key"], away_team, game.get("game_pk"))
             if not team_hr.empty:
                 st.markdown("**Best HR hitters**")
                 render_card_grid(team_hr, max_cards=4, columns=1)
@@ -5696,7 +5743,7 @@ for idx, game in enumerate(schedule, start=8):
             st.markdown(f"### {home_team}")
             home_source = gdf[gdf["Team"] == home_team]["Lineup Source"].iloc[0] if not gdf[gdf["Team"] == home_team].empty else "N/A"
             st.caption(f"Confirmed hitters: {game.get('home_confirmed_count', 0)}/9 | Pool status: {home_source}")
-            team_hr, team_hrr = get_team_game_view(gdf, game["game_key"], home_team)
+            team_hr, team_hrr = get_team_game_view(gdf, game["game_key"], home_team, game.get("game_pk"))
             if not team_hr.empty:
                 st.markdown("**Best HR hitters**")
                 render_card_grid(team_hr, max_cards=4, columns=1)
