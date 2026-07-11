@@ -12,6 +12,7 @@ import time
 import tempfile
 import json
 from io import StringIO
+from concurrent.futures import ThreadPoolExecutor, as_completed
 st.set_page_config(page_title="BF Data", layout="wide")
 
 st.markdown("""
@@ -4026,7 +4027,21 @@ def sort_for_hr(df: pd.DataFrame) -> pd.DataFrame:
     ])
 
 
-@st.cache_data(ttl=900)
+def _prefetch_cached_calls(call_specs: list[tuple], max_workers: int = 12):
+    """Warm independent cached network calls concurrently."""
+    if not call_specs:
+        return
+    workers = max(1, min(int(max_workers), len(call_specs)))
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = [executor.submit(fn, *args) for fn, args in call_specs]
+        for future in as_completed(futures):
+            try:
+                future.result()
+            except Exception:
+                pass
+
+
+@st.cache_data(ttl=1800)
 def build_daily_dataset(deep_bbe: bool = False):
     schedule = sort_schedule_rows(get_today_schedule())
     rows = []
@@ -4065,6 +4080,19 @@ def build_daily_dataset(deep_bbe: bool = False):
     hitter_stats_map = fetch_people_stats(tuple(all_hitter_ids), "hitting")
     pitcher_stats_map = fetch_people_stats(tuple(all_pitcher_ids), "pitching")
     hand_map = fetch_people_hand_map(tuple(list(all_hitter_ids) + list(all_pitcher_ids)))
+
+    # Cold-start speed: warm independent real-data calls concurrently instead
+    # of waiting for each pitcher/game one at a time. Existing calculations,
+    # cards, and data sources remain unchanged.
+    prefetch_specs = []
+    for pitcher_id in sorted(all_pitcher_ids):
+        prefetch_specs.append((fetch_true_pitcher_arsenal, (pitcher_id,)))
+    for game in schedule:
+        home_abbr = team_abbr(game["home_team"])
+        prefetch_specs.append((fetch_weather_for_park, (home_abbr,)))
+        prefetch_specs.append((fetch_bullpen_fatigue_for_team, (game["home_team_id"],)))
+        prefetch_specs.append((fetch_bullpen_fatigue_for_team, (game["away_team_id"],)))
+    _prefetch_cached_calls(prefetch_specs, max_workers=12)
 
     for game in schedule:
         away_abbr = team_abbr(game["away_team"])
@@ -4534,7 +4562,7 @@ def get_player_hr_count_from_map(homer_map: dict, player_name: str) -> int:
 
 
 def add_live_homer_counts_to_board(df: pd.DataFrame, schedule: list[dict]) -> pd.DataFrame:
-    """Display-only result column. This must NEVER be used to rank or rewrite predictions."""
+    """Display-only result column; skip result calls before first pitch."""
     if df.empty:
         return df.copy()
     out = df.copy()
@@ -4542,17 +4570,19 @@ def add_live_homer_counts_to_board(df: pd.DataFrame, schedule: list[dict]) -> pd
     if "game_pk" not in out.columns or "Player" not in out.columns:
         return out
     for game in schedule:
+        if str(game.get("game_state", "Preview")) == "Preview":
+            continue
         game_pk = game.get("game_pk")
         if game_pk is None:
             continue
-        homer_map = get_boxscore_homers(game_pk)
         mask = pd.to_numeric(out["game_pk"], errors="coerce") == safe_int(game_pk, -1)
-        if mask.any():
-            out.loc[mask, "Actual HR Today"] = out.loc[mask, "Player"].apply(
-                lambda p: get_player_hr_count_from_map(homer_map, p)
-            )
+        if not mask.any():
+            continue
+        homer_map = get_boxscore_homers(game_pk)
+        out.loc[mask, "Actual HR Today"] = out.loc[mask, "Player"].apply(
+            lambda p: get_player_hr_count_from_map(homer_map, p)
+        )
     return out
-
 
 
 def get_locked_section_snapshot(source_key: str, fallback_df: pd.DataFrame, schedule: list[dict], limit: int | None = None) -> pd.DataFrame:
@@ -4668,9 +4698,9 @@ def auto_update_tracker_results(tracker: pd.DataFrame, schedule: list[dict]):
         if not rows_mask.any():
             continue
 
-        # Always read boxscore + live play feed. Schedule states can lag, and boxscore
-        # alone can temporarily miss multi-HR totals.
-        homer_map = get_boxscore_homers(game_pk)
+        # Pregame games cannot have result data, so avoid unnecessary network
+        # calls. Live/final games retain the same boxscore + play-feed tracking.
+        homer_map = {} if game_state == "Preview" else get_boxscore_homers(game_pk)
 
         for idx in tracker.index[rows_mask]:
             player = tracker.at[idx, "player"]
@@ -4842,8 +4872,9 @@ def auto_update_combo_tracker_results(combo_tracker: pd.DataFrame, schedule: lis
     homer_maps = {}
     schedule_states = {}
     for game in schedule:
-        homer_maps[game["game_pk"]] = get_boxscore_homers(game["game_pk"])
-        schedule_states[game["game_key"]] = (game.get("game_state", "Preview"), game.get("detailed_state", "Scheduled"))
+        game_state = game.get("game_state", "Preview")
+        homer_maps[game["game_pk"]] = {} if game_state == "Preview" else get_boxscore_homers(game["game_pk"])
+        schedule_states[game["game_key"]] = (game_state, game.get("detailed_state", "Scheduled"))
 
     for idx in combo_tracker.index[today_mask]:
         legs = [x.strip() for x in str(combo_tracker.at[idx, "legs"]).split("|") if x.strip()]
