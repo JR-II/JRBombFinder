@@ -782,62 +782,63 @@ def get_locked_board_for_date(date_key: str) -> pd.DataFrame:
 
 
 def ensure_daily_board_lock(live_df: pd.DataFrame, schedule: list[dict]) -> pd.DataFrame:
-    """Keep projected teams live, but freeze teams once their lineup confirms.
-    Manual pregame refresh may rebuild confirmed-team locks before first pitch.
+    """Freeze confirmed teams independently for each MLB game_pk.
+
+    Doubleheaders must never share locks merely because the team matchup text is
+    identical. Every lock identity is (game_pk, team), with Game retained only
+    as a display label.
     """
     if live_df.empty:
         return live_df.copy()
 
     date_key = today_str()
     locks = load_board_locks()
+    if "game_pk" not in locks.columns:
+        locks["game_pk"] = pd.NA
 
     if not locks.empty and "lock_scope" in locks.columns:
         locks_today = locks[locks["date"].astype(str) == str(date_key)].copy()
     else:
         locks_today = pd.DataFrame(columns=list(live_df.columns) + ["lock_created_at", "lock_scope"])
 
-    confirmed_team_keys = set()
+    confirmed_keys = set()
     pregame_confirmed_keys = set()
     for game in schedule:
-        game_key = game["game_key"]
+        game_pk = safe_int(game.get("game_pk"), -1)
+        game_state = str(game.get("game_state", "Preview"))
         away_team = team_abbr(game["away_team"])
         home_team = team_abbr(game["home_team"])
-        game_state = str(game.get("game_state", "Preview"))
-
         if game.get("away_confirmed_count", 0) >= 9:
-            confirmed_team_keys.add((game_key, away_team))
+            confirmed_keys.add((game_pk, away_team))
             if game_state == "Preview":
-                pregame_confirmed_keys.add((game_key, away_team))
+                pregame_confirmed_keys.add((game_pk, away_team))
         if game.get("home_confirmed_count", 0) >= 9:
-            confirmed_team_keys.add((game_key, home_team))
+            confirmed_keys.add((game_pk, home_team))
             if game_state == "Preview":
-                pregame_confirmed_keys.add((game_key, home_team))
+                pregame_confirmed_keys.add((game_pk, home_team))
 
     rebuild_confirmed = bool(st.session_state.get("manual_refresh_trigger", False))
 
-    if rebuild_confirmed and not locks_today.empty and {"Game", "Team"}.issubset(locks_today.columns):
-        drop_mask_today = locks_today.apply(
-            lambda r: (r.get("Game"), r.get("Team")) in pregame_confirmed_keys,
-            axis=1
-        )
-        locks_today = locks_today[~drop_mask_today].copy()
+    def _row_lock_key(r):
+        return (safe_int(r.get("game_pk"), -1), str(r.get("Team", "")))
 
-        if not locks.empty and {"Game", "Team", "date"}.issubset(locks.columns):
-            drop_mask_all = (
-                (locks["date"].astype(str) == str(date_key))
-                & locks.apply(lambda r: (r.get("Game"), r.get("Team")) in pregame_confirmed_keys, axis=1)
-            )
-            locks = locks[~drop_mask_all].copy()
+    if rebuild_confirmed and not locks_today.empty:
+        locks_today = locks_today[~locks_today.apply(lambda r: _row_lock_key(r) in pregame_confirmed_keys, axis=1)].copy()
+        if not locks.empty:
+            date_mask = locks["date"].astype(str).eq(str(date_key))
+            drop_mask = date_mask & locks.apply(lambda r: _row_lock_key(r) in pregame_confirmed_keys, axis=1)
+            locks = locks[~drop_mask].copy()
 
     existing_locked_keys = set()
-    if not locks_today.empty and {"Game", "Team"}.issubset(locks_today.columns):
-        existing_locked_keys = set(zip(locks_today["Game"], locks_today["Team"]))
+    if not locks_today.empty:
+        existing_locked_keys = {_row_lock_key(r) for _, r in locks_today.iterrows()}
 
     new_lock_frames = []
-    for game_key, team in confirmed_team_keys:
-        if (game_key, team) in existing_locked_keys:
+    for game_pk, team in confirmed_keys:
+        if (game_pk, team) in existing_locked_keys:
             continue
-        team_rows = live_df[(live_df["Game"] == game_key) & (live_df["Team"] == team)].copy()
+        row_pks = pd.to_numeric(live_df.get("game_pk"), errors="coerce").fillna(-1).astype(int)
+        team_rows = live_df[row_pks.eq(game_pk) & live_df["Team"].astype(str).eq(team)].copy()
         if team_rows.empty:
             continue
         team_rows["lock_created_at"] = now_et_string()
@@ -847,35 +848,33 @@ def ensure_daily_board_lock(live_df: pd.DataFrame, schedule: list[dict]) -> pd.D
     if new_lock_frames:
         append_df = pd.concat(new_lock_frames, ignore_index=True)
         locks = pd.concat([locks, append_df], ignore_index=True)
-        save_board_locks(locks)
         locks_today = pd.concat([locks_today, append_df], ignore_index=True)
+        save_board_locks(locks)
     elif rebuild_confirmed:
         save_board_locks(locks)
 
     output_frames = []
     used_locked_keys = set()
-    if not locks_today.empty and {"Game", "Team"}.issubset(locks_today.columns):
-        for game_key, team in confirmed_team_keys:
-            locked_rows = locks_today[(locks_today["Game"] == game_key) & (locks_today["Team"] == team)].copy()
+    if not locks_today.empty:
+        lock_pks = pd.to_numeric(locks_today.get("game_pk"), errors="coerce").fillna(-1).astype(int)
+        for game_pk, team in confirmed_keys:
+            locked_rows = locks_today[lock_pks.eq(game_pk) & locks_today["Team"].astype(str).eq(team)].copy()
             if not locked_rows.empty:
                 output_frames.append(locked_rows)
-                used_locked_keys.add((game_key, team))
+                used_locked_keys.add((game_pk, team))
 
     live_rows = []
     for _, row in live_df.iterrows():
-        key = (row["Game"], row["Team"])
-        if key in confirmed_team_keys and key in used_locked_keys:
+        key = (safe_int(row.get("game_pk"), -1), str(row.get("Team", "")))
+        if key in confirmed_keys and key in used_locked_keys:
             continue
         live_rows.append(row)
-
     if live_rows:
         output_frames.append(pd.DataFrame(live_rows))
 
     if not output_frames:
         return live_df.copy().reset_index(drop=True)
-
-    result = pd.concat(output_frames, ignore_index=True)
-    return result.reset_index(drop=True)
+    return pd.concat(output_frames, ignore_index=True).reset_index(drop=True)
 
 
 def isolate_primary_pitch(pitch_mix: dict):
@@ -4381,29 +4380,45 @@ def build_doubleheader_assignment_map(df: pd.DataFrame, schedule: list[dict]) ->
 
 
 def get_saved_game_hr_board(snapshot_date: str, game_pk, team: str, schedule: list[dict], assignment_map: dict | None = None) -> pd.DataFrame:
-    """Return the frozen per-game prediction board for one game/team."""
+    """Return one frozen board for one exact game_pk/team only.
+
+    Stale rows from another game of a doubleheader are rejected by both game_pk
+    and the expected opposing starter. Pregame result badges are always zero.
+    """
     snap = load_daily_board_snapshot(snapshot_date)
     if snap is None or snap.empty or "Tracker Source" not in snap.columns:
         return pd.DataFrame()
     section = snap[snap["Tracker Source"].astype(str).str.strip().str.upper().eq("GAME_HR")].copy()
-    if section.empty:
-        return section
-    if "game_pk" in section.columns:
-        section = section[
-            pd.to_numeric(section["game_pk"], errors="coerce").fillna(-1).astype(int).eq(safe_int(game_pk, -1))
-        ]
+    if section.empty or "game_pk" not in section.columns:
+        return pd.DataFrame()
+
+    requested_pk = safe_int(game_pk, -1)
+    section = section[pd.to_numeric(section["game_pk"], errors="coerce").fillna(-1).astype(int).eq(requested_pk)]
     section = section[section["Team"].astype(str).eq(str(team))].copy()
     if section.empty:
         return section
+
+    game = next((g for g in schedule if safe_int(g.get("game_pk"), -1) == requested_pk), None)
+    if game is not None and "Pitcher" in section.columns:
+        away_team = team_abbr(game.get("away_team", ""))
+        expected_pitcher = game.get("home_pitcher") if str(team) == away_team else game.get("away_pitcher")
+        if expected_pitcher and expected_pitcher != "Starter Pending":
+            section = section[section["Pitcher"].astype(str).map(normalize_name).eq(normalize_name(expected_pitcher))].copy()
+    if section.empty:
+        return section
+
     section["_bf_player_key"] = section.apply(_stable_player_key, axis=1)
     if assignment_map:
-        allowed = assignment_map.get((safe_int(game_pk, -1), str(team)))
+        allowed = assignment_map.get((requested_pk, str(team)))
         if allowed is not None:
             section = section[section["_bf_player_key"].isin(allowed)].copy()
-            if section.empty:
-                return section
     section = section.drop_duplicates(subset=["_bf_player_key"], keep="first").drop(columns=["_bf_player_key"])
-    section = add_live_homer_counts_to_board(section, schedule)
+
+    # Never carry a result from Game 1 into a pregame Game 2 card.
+    section["Actual HR Today"] = 0
+    if game is not None and str(game.get("game_state", "Preview")) != "Preview":
+        section = add_live_homer_counts_to_board(section, [game])
+
     if "Rank" in section.columns:
         section = section.drop(columns=["Rank"])
     section = section.reset_index(drop=True)
@@ -4791,10 +4806,8 @@ def auto_update_tracker_results(tracker: pd.DataFrame, schedule: list[dict]):
         game_state = game.get("game_state", "Preview")
         detailed_state = game.get("detailed_state", "Scheduled")
 
+        # Exact game_pk only. Team matchup text is not unique on doubleheader days.
         rows_mask = today_mask & (tracker_game_pk_num == safe_int(game_pk, -1))
-        if not rows_mask.any():
-            # Fallback by game key so older rows with bad/missing game_pk still update.
-            rows_mask = today_mask & (tracker["game"].astype(str) == str(game.get("game_key", "")))
         if not rows_mask.any():
             continue
 
@@ -4806,7 +4819,13 @@ def auto_update_tracker_results(tracker: pd.DataFrame, schedule: list[dict]):
             player = tracker.at[idx, "player"]
             hr_count = get_player_hr_count_from_map(homer_map, player)
             old_hr = safe_int(tracker.at[idx, "hr_count"], 0)
-            hr_count = max(int(hr_count), old_hr)
+            if game_state == "Preview":
+                # A game that has not started cannot inherit a homer from another game.
+                hr_count = 0
+                tracker.at[idx, "result"] = pd.NA
+                tracker.at[idx, "result_state"] = "PREGAME"
+            else:
+                hr_count = max(int(hr_count), old_hr)
             tracker.at[idx, "hr_count"] = int(hr_count)
 
             if hr_count > 0:
