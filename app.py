@@ -5604,6 +5604,290 @@ def render_card_grid(df: pd.DataFrame, max_cards: int = 24, columns: int = 3, ti
         render_player_card(row, rank_override=rank)
     st.markdown('</div>', unsafe_allow_html=True)
 
+
+@st.cache_data(ttl=1800)
+def fetch_schedule_for_date(date_key: str) -> list[dict]:
+    """Return the MLB schedule for any date without altering today's official board."""
+    try:
+        resp = requests.get(
+            "https://statsapi.mlb.com/api/v1/schedule",
+            params={"sportId": 1, "date": date_key, "hydrate": "probablePitcher"},
+            timeout=18,
+        )
+        resp.raise_for_status()
+        payload = resp.json()
+    except Exception:
+        return []
+
+    games = []
+    for date_block in payload.get("dates", []) or []:
+        for game in date_block.get("games", []) or []:
+            away_block = ((game.get("teams") or {}).get("away") or {})
+            home_block = ((game.get("teams") or {}).get("home") or {})
+            away_team = (away_block.get("team") or {})
+            home_team = (home_block.get("team") or {})
+            if not away_team or not home_team:
+                continue
+            away_probable = away_block.get("probablePitcher") or {}
+            home_probable = home_block.get("probablePitcher") or {}
+            status = game.get("status") or {}
+            games.append({
+                "date": date_key,
+                "game_pk": game.get("gamePk"),
+                "game_key": f"{team_abbr(away_team.get('name', 'Away'))} @ {team_abbr(home_team.get('name', 'Home'))}",
+                "away_team": away_team.get("name", "Away"),
+                "home_team": home_team.get("name", "Home"),
+                "away_team_id": away_team.get("id"),
+                "home_team_id": home_team.get("id"),
+                "away_pitcher": away_probable.get("fullName") or "Starter Pending",
+                "home_pitcher": home_probable.get("fullName") or "Starter Pending",
+                "away_pitcher_id": away_probable.get("id"),
+                "home_pitcher_id": home_probable.get("id"),
+                "venue": (game.get("venue") or {}).get("name", "TBD"),
+                "game_time": game.get("gameDate", ""),
+                "game_state": status.get("abstractGameState", "Preview"),
+                "detailed_state": status.get("detailedState", "Scheduled"),
+                "away_confirmed_count": 0,
+                "home_confirmed_count": 0,
+            })
+    return sort_schedule_rows(games)
+
+
+@st.cache_data(ttl=1800)
+def find_next_scheduled_slate(start_date_key: str, max_days: int = 14):
+    """Find the next calendar date that actually has MLB games."""
+    try:
+        start_dt = datetime.strptime(start_date_key, "%Y-%m-%d").replace(tzinfo=ZoneInfo("America/New_York"))
+    except Exception:
+        start_dt = datetime.now(ZoneInfo("America/New_York"))
+    for offset in range(1, max_days + 1):
+        date_key = (start_dt + timedelta(days=offset)).strftime("%Y-%m-%d")
+        slate = fetch_schedule_for_date(date_key)
+        if slate:
+            return date_key, slate
+    return None, []
+
+
+def _next_slate_hitter_score(player_id: int, player_name: str, stats_map: dict, savant_map: dict) -> dict | None:
+    metrics = compute_hitter_live_metrics_from_map(player_id, stats_map, use_true_bbe=False)
+    if metrics is None:
+        return None
+    season = (stats_map.get(player_id, {}) or {}).get("season", {}) or {}
+    season_hr = safe_int(season.get("homeRuns", 0))
+    season_ab = safe_int(season.get("atBats", 0))
+    season_slg = safe_float(season.get("sluggingPercentage", 0.0), 0.0)
+    sav = savant_map.get(normalize_name(player_name), {}) or {}
+    barrel = safe_float(sav.get("Savant_Barrel%"), metrics.get("Barrel%", 0.0))
+    hard_hit = safe_float(sav.get("Savant_HardHit%"), metrics.get("HardHit%", 0.0))
+    ev = safe_float(sav.get("Savant_EV"), metrics.get("EV", 0.0))
+    xslg = safe_float(sav.get("Savant_xSLG"), season_slg)
+    air = safe_float(sav.get("Savant_AIR%"), 100.0 - safe_float(sav.get("Savant_GB%"), metrics.get("GroundBall%", 45.0)))
+    gb = safe_float(sav.get("Savant_GB%"), metrics.get("GroundBall%", 45.0))
+    hr_rate = (season_hr / season_ab * 100.0) if season_ab else 0.0
+    score = (
+        barrel * 3.4 + hard_hit * 1.05 + max(0.0, ev - 86.0) * 2.1
+        + xslg * 80.0 + air * 0.45 + hr_rate * 4.0
+        + metrics.get("recent_hr", 0) * 6.0 + metrics.get("recent_xbh", 0) * 1.8
+        - max(0.0, gb - 48.0) * 1.4
+    )
+    return {
+        "Player": player_name,
+        "Player ID": player_id,
+        "Early BF Score": round(score, 1),
+        "Season HR": season_hr,
+        "Recent HR": metrics.get("recent_hr", 0),
+        "Recent ISO": round(metrics.get("recent_iso", 0.0), 3),
+        "EV": round(ev, 1),
+        "Barrel%": round(barrel, 1),
+        "HardHit%": round(hard_hit, 1),
+        "AIR%": round(air, 1),
+        "GroundBall%": round(gb, 1),
+        "xSLG": round(xslg, 3),
+    }
+
+
+@st.cache_data(ttl=3600, max_entries=2)
+def build_next_slate_preview(next_date_key: str, schedule_tuple: tuple) -> pd.DataFrame:
+    """Resource-safe projected next-slate board. It is never locked or tracked."""
+    schedule_rows = [dict(x) for x in schedule_tuple]
+    team_ids = sorted({
+        safe_int(g.get(side), 0)
+        for g in schedule_rows
+        for side in ("away_team_id", "home_team_id")
+        if safe_int(g.get(side), 0) > 0
+    })
+    roster_map = {}
+    # Keep concurrency intentionally small for Streamlit Community Cloud.
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        future_map = {executor.submit(get_team_hitters, tid): tid for tid in team_ids}
+        for future in as_completed(future_map):
+            tid = future_map[future]
+            try:
+                roster_map[tid] = future.result() or []
+            except Exception:
+                roster_map[tid] = []
+
+    all_ids = []
+    for hitters in roster_map.values():
+        all_ids.extend([h.get("player_id") for h in hitters[:14] if h.get("player_id")])
+    stats_map = fetch_people_stats(tuple(dict.fromkeys(all_ids)), "hitting")
+    savant_map = fetch_savant_batter_map(CURRENT_SEASON)
+
+    rows = []
+    for game in schedule_rows:
+        for side, team_id_key, team_name_key, opp_pitcher_key in [
+            ("Away", "away_team_id", "away_team", "home_pitcher"),
+            ("Home", "home_team_id", "home_team", "away_pitcher"),
+        ]:
+            tid = safe_int(game.get(team_id_key), 0)
+            team_name = game.get(team_name_key, "")
+            scored = []
+            for hitter in roster_map.get(tid, [])[:14]:
+                row = _next_slate_hitter_score(
+                    safe_int(hitter.get("player_id"), 0),
+                    hitter.get("player_name", ""),
+                    stats_map,
+                    savant_map,
+                )
+                if row:
+                    scored.append(row)
+            scored = sorted(scored, key=lambda r: r["Early BF Score"], reverse=True)[:5]
+            for rank, row in enumerate(scored, 1):
+                rows.append({
+                    "Date": next_date_key,
+                    "Game": game.get("game_key", ""),
+                    "Game Time": format_game_time_et(game.get("game_time", "")),
+                    "Venue": game.get("venue", "TBD"),
+                    "Team": team_abbr(team_name),
+                    "Side": side,
+                    "Opponent Pitcher": game.get(opp_pitcher_key, "Starter Pending"),
+                    "Pitcher Status": "PROBABLE" if game.get(opp_pitcher_key) not in {"", None, "Starter Pending"} else "PENDING",
+                    "Lineup Status": "PROJECTED",
+                    "Team Rank": rank,
+                    **row,
+                })
+    if not rows:
+        return pd.DataFrame()
+    out = pd.DataFrame(rows)
+    out = out.sort_values(["Early BF Score", "Game", "Team Rank"], ascending=[False, True, True]).reset_index(drop=True)
+    out.insert(0, "Slate Rank", range(1, len(out) + 1))
+    return out
+
+
+def render_off_day_mode(tracker: pd.DataFrame):
+    next_date_key, next_schedule = find_next_scheduled_slate(today_str(), max_days=14)
+    st.markdown("""
+    <div style="border:1px solid rgba(255,209,102,.45);background:rgba(255,209,102,.08);
+                border-radius:14px;padding:14px 16px;margin:8px 0 12px 0;">
+      <div style="font-size:.72rem;font-weight:900;letter-spacing:.12em;color:#ffd166;">MLB OFF-DAY MODE</div>
+      <div style="font-size:1.25rem;font-weight:950;margin-top:4px;">No official MLB games are scheduled today.</div>
+      <div style="color:#b9bec8;margin-top:5px;">BF Data remains available and automatically points to the next scheduled MLB slate.</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    tab_names = ["Next Slate Preview", "Previous Slate Review", "Homerun Tracker", "HR Combo History", "Lineup Watch"]
+    off_tabs = st.tabs(tab_names)
+
+    with off_tabs[0]:
+        if not next_schedule or not next_date_key:
+            st.warning("No MLB slate was found within the next 14 days.")
+        else:
+            next_dt = datetime.strptime(next_date_key, "%Y-%m-%d")
+            st.subheader(f"Next Slate Preview — {next_dt.strftime('%A, %B %-d')}")
+            st.caption("Early research only • projected lineups • probable pitchers may change • never locked or tracked.")
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Next Slate Games", len(next_schedule))
+            m2.metric("Days Away", (next_dt.date() - datetime.now(ZoneInfo("America/New_York")).date()).days)
+            probable_count = sum(
+                int(g.get("away_pitcher") != "Starter Pending") + int(g.get("home_pitcher") != "Starter Pending")
+                for g in next_schedule
+            )
+            m3.metric("Probable Pitchers Posted", f"{probable_count}/{len(next_schedule)*2}")
+
+            schedule_view = pd.DataFrame([{
+                "Time": format_game_time_et(g.get("game_time", "")),
+                "Game": g.get("game_key", ""),
+                "Venue": g.get("venue", "TBD"),
+                "Away Starter": g.get("away_pitcher", "Starter Pending"),
+                "Home Starter": g.get("home_pitcher", "Starter Pending"),
+            } for g in next_schedule])
+            st.dataframe(schedule_view, use_container_width=True, hide_index=True)
+
+            if st.button("Generate Next Slate Predictions", type="primary", use_container_width=True):
+                st.session_state["build_next_slate_preview"] = next_date_key
+            if st.session_state.get("build_next_slate_preview") == next_date_key:
+                with st.spinner("Building resource-safe next-slate predictions..."):
+                    preview_df = build_next_slate_preview(next_date_key, tuple(tuple(sorted(g.items())) for g in next_schedule))
+                if preview_df.empty:
+                    st.info("The next slate is scheduled, but there is not enough projected hitter data yet.")
+                else:
+                    st.markdown("### Early BF Targets")
+                    st.caption("Use this as a watchlist. Finalize only after starters, lineups, weather, and roof status are official.")
+                    display_existing_columns(
+                        preview_df.head(30),
+                        ["Slate Rank", "Player", "Team", "Game", "Game Time", "Opponent Pitcher",
+                         "Pitcher Status", "Lineup Status", "Early BF Score", "Season HR", "Recent HR",
+                         "EV", "Barrel%", "HardHit%", "AIR%", "GroundBall%", "xSLG"],
+                    )
+
+    with off_tabs[1]:
+        st.subheader("Previous Slate Review")
+        dates = [d for d in available_tracker_dates(tracker) if d != today_str()]
+        if not dates:
+            st.info("No previous board snapshots are available yet.")
+        else:
+            selected_date = st.selectbox("Select previous slate", dates, key="offday_previous_slate")
+            previous_board = load_daily_board_snapshot(selected_date)
+            if previous_board.empty:
+                st.info("No saved prediction board exists for that date.")
+            else:
+                display_existing_columns(
+                    previous_board,
+                    ["Tracker Source", "Player", "Team", "Game", "Pitcher", "HR Probability %",
+                     "HR Tier", "Lineup Source", "Matchup Advantage", "Ranking Reasons"],
+                )
+
+    with off_tabs[2]:
+        st.subheader("Homerun Tracker")
+        summary = summarize_tracker(tracker)
+        a, b, c = st.columns(3)
+        a.metric("All Predictions", summary.get("all_total", 0))
+        b.metric("Correct HR", summary.get("all_hits", 0))
+        c.metric("Hit Rate", f"{summary.get('all_pct', 0.0):.1f}%")
+        if tracker is None or tracker.empty:
+            st.info("No tracker history is available.")
+        else:
+            display_existing_columns(
+                tracker.sort_values(["date", "updated_at"], ascending=[False, False]),
+                ["date", "player", "team", "game", "tracker_source", "result_state", "hr_count", "updated_at"],
+            )
+
+    with off_tabs[3]:
+        st.subheader("HR Combo History")
+        combo_history = load_combo_tracker()
+        if combo_history.empty:
+            st.info("No combo history is available.")
+        else:
+            display_existing_columns(
+                combo_history.sort_values(["date", "updated_at"], ascending=[False, False]),
+                ["date", "combo_label", "combo_size", "games", "result_state", "legs_hit", "total_legs", "updated_at"],
+            )
+
+    with off_tabs[4]:
+        st.subheader("Lineup Watch")
+        if not next_schedule:
+            st.info("No upcoming slate is available.")
+        else:
+            st.info("Official lineups are not posted yet. BF Data will only label a lineup CONFIRMED when MLB supplies all nine batting-order positions.")
+            lineup_rows = []
+            for g in next_schedule:
+                lineup_rows.extend([
+                    {"Game": g["game_key"], "Team": team_abbr(g["away_team"]), "Starter": g["home_pitcher"], "Lineup": "PROJECTED"},
+                    {"Game": g["game_key"], "Team": team_abbr(g["home_team"]), "Starter": g["away_pitcher"], "Lineup": "PROJECTED"},
+                ])
+            st.dataframe(pd.DataFrame(lineup_rows), use_container_width=True, hide_index=True)
+
+
 c1, c2, c3, c4 = st.columns([1, 1, 1, 2])
 with c1:
     if st.button("Update Board", use_container_width=True):
@@ -5662,7 +5946,7 @@ with c4:
         st.caption(f"Projected teams live • update rebuilds pregame confirmed locks • last refresh: {datetime.now().strftime('%Y-%m-%d %I:%M %p')}")
 
 if locked_df.empty:
-    st.warning("No games or hitter data loaded.")
+    render_off_day_mode(tracker)
     st.stop()
 
 base_tabs = ["JR HR Board", "Top 12", "Top HR Targets", "Pitchers to Attack", "HR Combos", "Hits + Runs + RBIs", "Batter Breakdown", "Homerun Tracker"]
