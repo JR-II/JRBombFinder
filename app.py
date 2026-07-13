@@ -5604,8 +5604,6 @@ def render_card_grid(df: pd.DataFrame, max_cards: int = 24, columns: int = 3, ti
         render_player_card(row, rank_override=rank)
     st.markdown('</div>', unsafe_allow_html=True)
 
-
-@st.cache_data(ttl=1800)
 def fetch_schedule_for_date(date_key: str) -> list[dict]:
     """Return the MLB schedule for any date without altering today's official board."""
     try:
@@ -5779,7 +5777,7 @@ def render_off_day_mode(tracker: pd.DataFrame):
     st.markdown("""
     <div style="border:1px solid rgba(255,209,102,.45);background:rgba(255,209,102,.08);
                 border-radius:14px;padding:14px 16px;margin:8px 0 12px 0;">
-      <div style="font-size:.72rem;font-weight:900;letter-spacing:.12em;color:#ffd166;">MLB OFF-DAY MODE</div>
+      <div style="font-size:.72rem;font-weight:900;letter-spacing:.12em;color:#ffd166;">MLB OFF-DAY MODE · NEXT-SLATE ENABLED</div>
       <div style="font-size:1.25rem;font-weight:950;margin-top:4px;">No official MLB games are scheduled today.</div>
       <div style="color:#b9bec8;margin-top:5px;">BF Data remains available and automatically points to the next scheduled MLB slate.</div>
     </div>
@@ -5886,6 +5884,7 @@ def render_off_day_mode(tracker: pd.DataFrame):
                     {"Game": g["game_key"], "Team": team_abbr(g["home_team"]), "Starter": g["away_pitcher"], "Lineup": "PROJECTED"},
                 ])
             st.dataframe(pd.DataFrame(lineup_rows), use_container_width=True, hide_index=True)
+
 
 
 c1, c2, c3, c4 = st.columns([1, 1, 1, 2])
