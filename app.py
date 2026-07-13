@@ -4045,6 +4045,11 @@ def build_daily_dataset(deep_bbe: bool = False):
     schedule = sort_schedule_rows(get_today_schedule())
     rows = []
 
+    # OFF-DAY FAST EXIT: do not load Savant, rosters, pitcher arsenals, weather,
+    # bullpens, or hitter stats when MLB has no games scheduled today.
+    if not schedule:
+        return pd.DataFrame(), []
+
     savant_batter_map = fetch_savant_batter_map(CURRENT_SEASON)
 
     candidate_map = {}
@@ -5777,7 +5782,7 @@ def render_off_day_mode(tracker: pd.DataFrame):
     st.markdown("""
     <div style="border:1px solid rgba(255,209,102,.45);background:rgba(255,209,102,.08);
                 border-radius:14px;padding:14px 16px;margin:8px 0 12px 0;">
-      <div style="font-size:.72rem;font-weight:900;letter-spacing:.12em;color:#ffd166;">MLB OFF-DAY MODE · NEXT-SLATE ENABLED</div>
+      <div style="font-size:.72rem;font-weight:900;letter-spacing:.12em;color:#ffd166;">MLB OFF-DAY MODE · NEXT-SLATE ENABLED · BUILD 3</div>
       <div style="font-size:1.25rem;font-weight:950;margin-top:4px;">No official MLB games are scheduled today.</div>
       <div style="color:#b9bec8;margin-top:5px;">BF Data remains available and automatically points to the next scheduled MLB slate.</div>
     </div>
@@ -5902,9 +5907,37 @@ with c1:
 
 deep_bbe_mode = bool(st.session_state.get("deep_l10_bbe", DEFAULT_DEEP_L10_BBE))
 live_df, schedule = build_daily_dataset(deep_bbe=deep_bbe_mode)
+schedule = sort_schedule_rows(schedule)
+lineup_mode = get_lineup_mode(schedule) if schedule else "OFF-DAY"
+
+# Header metrics must remain visible even when today's slate is empty.
+with c2:
+    st.metric("Games On Slate", len(schedule))
+with c3:
+    st.metric("Lineup Mode", lineup_mode)
+with c4:
+    if not schedule:
+        st.caption("MLB off-day detected • BF Data is switching to the next scheduled slate")
+    else:
+        st.caption(f"Projected teams live • update rebuilds pregame confirmed locks • last refresh: {datetime.now().strftime('%Y-%m-%d %I:%M %p')}")
+
+# IMPORTANT: handle a league off-day before locks, tracker sync, combos, or live
+# result calls. This guarantees the tabs remain visible even when today has zero
+# games and prevents the old empty-board warning from taking over the page.
+if not schedule:
+    tracker = load_tracker()
+    render_off_day_mode(tracker)
+    st.stop()
+
 locked_df_raw = ensure_daily_board_lock(live_df, schedule)
 
-lineup_mode = get_lineup_mode(schedule) if schedule else "PROJECTED"
+# A schedule can exist before enough hitter data is available. Keep the app
+# usable and show next-slate/review tools instead of collapsing the interface.
+if locked_df_raw is None or locked_df_raw.empty:
+    tracker = load_tracker()
+    st.warning("Today's games are scheduled, but hitter data is not ready yet. BF Data remains available below.")
+    render_off_day_mode(tracker)
+    st.stop()
 
 # Build and save the prediction/tracker pool BEFORE adding live results.
 # This prevents post-HR result data from rewriting the prediction board.
@@ -5931,22 +5964,13 @@ source_summary = summarize_tracker_sources(tracker)
 daily_summary = summarize_tracker_by_day(tracker)
 combo_summary = summarize_combo_tracker(combo_tracker)
 
-with c2:
-    st.metric("Games On Slate", len(schedule))
-with c3:
-    st.metric("Lineup Mode", lineup_mode)
+# Replace the generic caption with confirmed-lock detail once a real slate exists.
 with c4:
     confirmed_locked = 0
     if not locked_df.empty and "lock_scope" in locked_df.columns:
         confirmed_locked = int((locked_df["lock_scope"].astype(str) == "CONFIRMED_TEAM").sum())
     if confirmed_locked > 0:
-        st.caption(f"Projected teams stay live • confirmed teams pregame-rebuild on update • locked confirmed rows: {confirmed_locked}")
-    else:
-        st.caption(f"Projected teams live • update rebuilds pregame confirmed locks • last refresh: {datetime.now().strftime('%Y-%m-%d %I:%M %p')}")
-
-if locked_df.empty:
-    render_off_day_mode(tracker)
-    st.stop()
+        st.caption(f"Confirmed teams pregame-rebuild on update • locked confirmed rows: {confirmed_locked}")
 
 base_tabs = ["JR HR Board", "Top 12", "Top HR Targets", "Pitchers to Attack", "HR Combos", "Hits + Runs + RBIs", "Batter Breakdown", "Homerun Tracker"]
 schedule = sort_schedule_rows(schedule)
