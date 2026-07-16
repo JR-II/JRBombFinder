@@ -3680,19 +3680,38 @@ def compute_matchup_advantage_score(
 
 
 def get_best_hr_matchups(df: pd.DataFrame, limit: int = 25) -> pd.DataFrame:
-    if df.empty:
-        return df.copy()
+    """Rank HR matchups safely across full daily and partial preview schemas."""
+    if df is None or df.empty:
+        return pd.DataFrame() if df is None else df.copy()
 
-    board = df.copy()
+    board = dedupe_columns(df.copy())
+
     if "Matchup Advantage Score" not in board.columns:
-        board["Matchup Advantage Score"] = safe_numeric_series(board, "Model Rank Score", 0.0)
-    if "HR Attackability Score" not in board.columns:
-        board["HR Attackability Score"] = safe_numeric_series(board, "Pitcher_HR9_Last7", 0.0) * 10
-    if "HR Attackability Score" not in board.columns:
-        board["HR Attackability Score"] = board["HR Attackability Score"]
+        board["Matchup Advantage Score"] = safe_numeric_series(
+            board, "Model Rank Score", 0.0
+        )
 
-    eligible = board[board["HR Eligible"].astype(bool)].copy()
-    if eligible.empty:
+    if "HR Attackability Score" not in board.columns:
+        board["HR Attackability Score"] = (
+            safe_numeric_series(board, "Pitcher_HR9_Last7", 0.0) * 10
+        )
+
+    # Full current-day boards include HR Eligible. Tomorrow/early-preview
+    # frames may not, so never index the column blindly.
+    if "HR Eligible" in board.columns:
+        raw = board["HR Eligible"]
+        if pd.api.types.is_bool_dtype(raw):
+            eligible_mask = raw.fillna(False)
+        else:
+            normalized = raw.fillna("").astype(str).str.strip().str.lower()
+            eligible_mask = normalized.isin(
+                {"true", "1", "yes", "y", "eligible", "pass"}
+            )
+
+        eligible = board[eligible_mask].copy()
+        if eligible.empty:
+            eligible = board.copy()
+    else:
         eligible = board.copy()
 
     eligible["_global_score"] = (
@@ -3700,10 +3719,15 @@ def get_best_hr_matchups(df: pd.DataFrame, limit: int = 25) -> pd.DataFrame:
         + safe_numeric_series(eligible, "HR Attackability Score", 0.0) * 1.10
         + safe_numeric_series(eligible, "Statcast Authority Score", 0.0) * 0.85
         + safe_numeric_series(eligible, "Model Rank Score", 0.0) * 0.05
-        + safe_numeric_series(eligible, "HR Probability %", 0.0) * 1.4
+        + safe_numeric_series(eligible, "HR Probability %", 0.0) * 1.40
     )
 
-    eligible = eligible.sort_values("_global_score", ascending=False).drop(columns=["_global_score"]).head(limit)
+    eligible = (
+        eligible.sort_values("_global_score", ascending=False)
+        .drop(columns=["_global_score"])
+        .head(max(1, int(limit)))
+    )
+
     return add_rank_column(dedupe_columns(eligible.reset_index(drop=True)))
 
 
