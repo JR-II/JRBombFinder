@@ -2518,6 +2518,93 @@ def refresh_official_lineup_status(schedule_rows: list[dict]) -> list[dict]:
     return sort_schedule_rows(rows)
 
 
+@st.cache_data(ttl=45, show_spinner=False)
+def fetch_official_lineup_ids(game_pk: int) -> dict:
+    """Return MLB's current official 1-9 hitter IDs for both teams.
+
+    This bypasses projected roster pools and is intentionally short-cached so
+    scratches and late replacements are detected before or after first pitch.
+    """
+    result = {"away": {}, "home": {}}
+    try:
+        resp = requests.get(
+            f"https://statsapi.mlb.com/api/v1/game/{int(game_pk)}/boxscore",
+            timeout=7,
+        )
+        resp.raise_for_status()
+        payload = resp.json() or {}
+    except Exception:
+        return result
+
+    for side in ("away", "home"):
+        players = (((payload.get("teams") or {}).get(side) or {}).get("players") or {})
+        by_spot = {}
+        for pdata in players.values():
+            raw = pdata.get("battingOrder")
+            person = pdata.get("person") or {}
+            pid = person.get("id")
+            if not raw or pid is None:
+                continue
+            try:
+                spot = int(str(raw)) // 100
+            except Exception:
+                continue
+            if 1 <= spot <= 9:
+                by_spot[spot] = int(pid)
+        if len(by_spot) == 9:
+            result[side] = by_spot
+    return result
+
+
+def board_has_official_lineup_mismatch(board_df: pd.DataFrame, schedule_rows: list[dict]) -> bool:
+    """True when a confirmed MLB lineup differs from players on the live board.
+
+    This catches projected players who missed the lineup and late scratches or
+    replacements even when the team remains 9/9 confirmed.
+    """
+    if board_df is None or board_df.empty:
+        return False
+    required = {"Game", "Team", "Player ID"}
+    if not required.issubset(board_df.columns):
+        return False
+
+    for game in schedule_rows or []:
+        game_pk = game.get("game_pk")
+        game_key = game.get("game_key")
+        if not game_pk or not game_key:
+            continue
+        official = fetch_official_lineup_ids(game_pk)
+        side_specs = (
+            ("away", team_abbr(game.get("away_team", ""))),
+            ("home", team_abbr(game.get("home_team", ""))),
+        )
+        for side, team in side_specs:
+            official_map = official.get(side) or {}
+            if len(official_map) != 9:
+                continue
+            official_ids = set(official_map.values())
+            team_rows = board_df[
+                (board_df["Game"].astype(str) == str(game_key))
+                & (board_df["Team"].astype(str) == str(team))
+            ].copy()
+            board_ids = set(
+                pd.to_numeric(team_rows["Player ID"], errors="coerce")
+                .dropna().astype(int).tolist()
+            )
+            lineup_sources = set(
+                team_rows.get("Lineup Source", pd.Series(dtype=str))
+                .fillna("").astype(str).str.upper().tolist()
+            )
+            # The board is a filtered candidate list, not all nine hitters.
+            # Every displayed candidate must be inside the official 1-9, and
+            # confirmed teams may not retain PROJECTED rows.
+            if not board_ids.issubset(official_ids):
+                return True
+            if not team_rows.empty and lineup_sources != {"CONFIRMED"}:
+                return True
+    return False
+
+
 @st.cache_data(ttl=15, show_spinner=False)
 def get_schedule_homer_maps(schedule_signature: tuple) -> dict:
     """Fetch active/final HR maps once per game and reuse them everywhere."""
@@ -3091,10 +3178,19 @@ def extract_boxscore_team_hitters(game_pk: int, side: str):
 def get_team_candidate_hitters(game_pk: int, team_id: int, side: str, savant_batter_map: dict, deep_bbe: bool = False):
     boxscore_hitters = extract_boxscore_team_hitters(game_pk, side)
 
-    confirmed = [h for h in boxscore_hitters if h["confirmed"]]
-    if confirmed:
-        confirmed = sorted(confirmed, key=lambda x: x["lineup_spot"] or 99)
-        return confirmed[:9], "CONFIRMED"
+    # STRICT OFFICIAL-LINEUP RULE:
+    # A team becomes CONFIRMED only when MLB supplies one unique hitter for
+    # every batting-order slot 1-9. Projected/bench players must never survive
+    # on the live board after the official lineup is available.
+    confirmed_by_spot = {}
+    for hitter in boxscore_hitters:
+        spot = safe_int(hitter.get("lineup_spot"), 0)
+        if hitter.get("confirmed") and 1 <= spot <= 9:
+            confirmed_by_spot[spot] = hitter
+
+    if len(confirmed_by_spot) == 9:
+        confirmed = [confirmed_by_spot[spot] for spot in range(1, 10)]
+        return confirmed, "CONFIRMED"
 
     candidate_pool = boxscore_hitters
     if not candidate_pool:
@@ -7134,8 +7230,18 @@ with c1:
 deep_bbe_mode = bool(st.session_state.get("deep_l10_bbe", DEFAULT_DEEP_L10_BBE))
 force_board_rebuild = bool(st.session_state.get("manual_refresh_trigger", False))
 live_df, schedule = load_or_build_daily_dataset(deep_bbe=deep_bbe_mode, force=force_board_rebuild)
-# Status-only refresh: fast and official. It does not rebuild rankings.
+# Refresh official status, then verify that the actual 1-9 MLB lineup exactly
+# matches the players currently on the board. If not, rebuild automatically
+# BEFORE any confirmed-team lock is created or displayed.
 schedule = refresh_official_lineup_status(schedule)
+if board_has_official_lineup_mismatch(live_df, schedule):
+    fetch_boxscore.clear()
+    fetch_official_lineup_counts.clear()
+    fetch_official_lineup_ids.clear()
+    build_daily_dataset.clear()
+    live_df, schedule = load_or_build_daily_dataset(deep_bbe=deep_bbe_mode, force=True)
+    schedule = refresh_official_lineup_status(schedule)
+
 locked_df_raw = ensure_daily_board_lock(live_df, schedule)
 
 lineup_mode = get_lineup_mode(schedule) if schedule else "PROJECTED"
